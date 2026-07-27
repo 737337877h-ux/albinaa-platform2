@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+
+body {
+  @apply bg-concrete-50 text-iron-900 font-body antialiased;
+}
+.dark body {
+  @apply bg-iron-900 text-concrete-100;
+}
+
+/* الأرقام المالية: جدولية دائمًا — قرار تصميمي أساسي لقراءة الكشوف */
+.tnum { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+
+/* شريط التحذير المائل — يظهر حصريًا على المتأخر والتصعيد (معنى لا زينة) */
+.hazard-strip {
+  background-image: repeating-linear-gradient(
+    -45deg, #E8A33D 0 8px, #1C2B33 8px 16px);
+}
+
+/* تركيز لوحة مفاتيح واضح دون إزعاج بصري */
+:focus-visible { outline: 2px solid #177470; outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

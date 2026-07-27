@@ -1,0 +1,49 @@
+# منصة البناء الراقي — Milestone 2: PostgreSQL + Backend
+# التشغيل الكامل بأمر واحد:  docker compose up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: albinaa-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: albinaa
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-albinaa_dev_only}
+      POSTGRES_DB: albinaa
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=ar --encoding=UTF8"
+    ports:
+      - "5433:5432"
+    volumes:
+      - albinaa_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U albinaa -d albinaa"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: albinaa-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      APP_VERSION: 0.2.0
+      DATABASE_URL: postgresql://albinaa:${DB_PASSWORD:-albinaa_dev_only}@db:5432/albinaa?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?يجب ضبط JWT_ACCESS_SECRET في .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?يجب ضبط JWT_REFRESH_SECRET في .env}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-900}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    volumes:
+      - albinaa_uploads:/data/uploads
+    ports:
+      - "3000:3000"
+
+volumes:
+  albinaa_pgdata:
+  albinaa_uploads:

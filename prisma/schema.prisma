@@ -1,0 +1,782 @@
+// ============================================================================
+// منصة البناء الراقي — Prisma Schema (Sprint 1)
+// يطابق Migration: 20260717000000_init حرفيًا (36 جدولاً)
+//
+// ملاحظات مهمة:
+// - القيود من نوع CHECK، والفهرس الجزئي uq_current_assignment،
+//   وTriggers الحماية (forbid_mutation)، وMaterialized View (operational_balances)
+//   كلها معرّفة في ملف الـ migration SQL لأن Prisma لا يمثّلها في الـ schema —
+//   وهي سارية المفعول في قاعدة البيانات بشكل كامل.
+// - لتطوير المخطط مستقبلاً: عدّل هذا الملف ثم
+//   `npx prisma migrate dev --create-only` وأضف أي SQL مخصص للملف الناتج.
+// - التطبيق: `npx prisma migrate deploy` (وليس dev) في بيئات التشغيل.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// 1) الهيكل التنظيمي
+// ---------------------------------------------------------------------------
+model Organization {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  branches          Branch[]
+  users             User[]
+  roles             Role[]
+  documentTypes     DocumentType[]
+  customers         Customer[]
+  importTemplates   ImportTemplate[]
+  importJobs        ImportJob[]
+  collectionMethods CollectionMethod[]
+  followupTypes     FollowupType[]
+  followupResults   FollowupResult[]
+  systemSettings    SystemSetting[]
+
+  @@map("organizations")
+}
+
+model Branch {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  name           String
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  users        User[]
+  collectors   Collector[]
+  customers    Customer[]
+  collections  Collection[]
+
+  @@unique([organizationId, name], map: "uq_branches_org_name")
+  @@map("branches")
+}
+
+// ---------------------------------------------------------------------------
+// 2) المستخدمون والأدوار والصلاحيات (RBAC)
+// ---------------------------------------------------------------------------
+model User {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  branchId       String?   @map("branch_id") @db.Uuid
+  username       String
+  fullName       String    @map("full_name")
+  phone          String?
+  passwordHash   String    @map("password_hash")
+  isActive       Boolean   @default(true) @map("is_active")
+  lastLoginAt    DateTime? @map("last_login_at") @db.Timestamptz()
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  branch       Branch?      @relation(fields: [branchId], references: [id])
+
+  collector            Collector?
+  userRoles            UserRole[]              @relation("UserOwnRoles")
+  rolesGranted         UserRole[]              @relation("RoleGranter")
+  assignmentsMade      CustomerAssignment[]    @relation("AssignmentMaker")
+  creditDecisions      CustomerCreditPolicy[]  @relation("CreditDecider")
+  duplicateReviews     PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
+  importTemplates      ImportTemplate[]
+  importJobs           ImportJob[]
+  ledgerEntries        OperationalLedger[]
+  reconciliationsDone  BalanceReconciliation[] @relation("ReconReviewer")
+  cashReceived         CashHandover[]
+  followups            Followup[]
+  tasksCreated         Task[]                  @relation("TaskCreator")
+  attachments          Attachment[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  authSessions         AuthSession[]
+
+  @@unique([organizationId, username], map: "uq_users_org_username")
+  @@map("users")
+}
+
+model Role {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String  @map("organization_id") @db.Uuid
+  name           String
+  isSystem       Boolean @default(false) @map("is_system")
+
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@unique([organizationId, name], map: "uq_roles_org_name")
+  @@map("roles")
+}
+
+model Permission {
+  id            String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code          String @unique
+  descriptionAr String @map("description_ar")
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  grantedBy String?  @map("granted_by") @db.Uuid
+  grantedAt DateTime @default(now()) @map("granted_at") @db.Timestamptz()
+
+  user    User  @relation("UserOwnRoles", fields: [userId], references: [id], onDelete: Cascade)
+  role    Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  granter User? @relation("RoleGranter", fields: [grantedBy], references: [id])
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model Collector {
+  id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId   String  @unique @map("user_id") @db.Uuid
+  branchId String? @map("branch_id") @db.Uuid
+  active   Boolean @default(true)
+
+  user   User    @relation(fields: [userId], references: [id])
+  branch Branch? @relation(fields: [branchId], references: [id])
+
+  assignments     CustomerAssignment[]
+  collections     Collection[]
+  paymentPromises PaymentPromise[]
+  tasks           Task[]
+
+  @@map("collectors")
+}
+
+// ---------------------------------------------------------------------------
+// 3) البيانات المرجعية: العملات وأنواع المستندات
+// ---------------------------------------------------------------------------
+model Currency {
+  code       String  @id
+  sourceCode String  @map("source_code")
+  nameAr     String  @map("name_ar")
+  decimals   Int     @default(2) @db.SmallInt
+  active     Boolean @default(true)
+
+  balances            CustomerBalance[]
+  importedTxns        ImportedTransaction[]
+  ledgerEntries       OperationalLedger[]
+  reconciliations     BalanceReconciliation[]
+  collections         Collection[]
+  cashHandovers       CashHandover[]
+  promises            PaymentPromise[]
+  reservations        Reservation[]
+  tasksExpected       Task[]
+  followupsExpected   Followup[]
+  creditLimits        CustomerCreditPolicy[]
+  balanceSnapshots    BalanceSnapshot[]
+
+  @@map("currencies")
+}
+
+model DocumentType {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String  @map("organization_id") @db.Uuid
+  name           String
+  effect         String // debit | credit | mixed — CHECK في SQL
+  active         Boolean @default(true)
+  notes          String?
+
+  organization Organization          @relation(fields: [organizationId], references: [id])
+  transactions ImportedTransaction[]
+
+  @@unique([organizationId, name], map: "uq_doctypes_org_name")
+  @@map("document_types")
+}
+
+// ---------------------------------------------------------------------------
+// 4) العملاء
+// ---------------------------------------------------------------------------
+model Customer {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId        String    @map("organization_id") @db.Uuid
+  branchId              String?   @map("branch_id") @db.Uuid
+  externalCustomerCode  String    @map("external_customer_code")
+  accountNumber         String?   @map("account_number")
+  name                  String
+  nameNormalized        String    @map("name_normalized")
+  tradeName             String?   @map("trade_name")
+  phonePrimary          String?   @map("phone_primary")
+  phoneSecondary        String?   @map("phone_secondary")
+  whatsapp              String?
+  region                String?
+  address               String?
+  geoLat                Decimal?  @map("geo_lat") @db.Decimal(9, 6)
+  geoLng                Decimal?  @map("geo_lng") @db.Decimal(9, 6)
+  customerType          String?   @map("customer_type")
+  status                String    @default("active")
+  relationshipStartDate DateTime? @map("relationship_start_date") @db.Date
+  notes                 String?
+  createdByImportJob    String?   @map("created_by_import_job") @db.Uuid
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime  @default(now()) @map("updated_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  branch       Branch?      @relation(fields: [branchId], references: [id])
+
+  balances         CustomerBalance[]
+  creditPolicy     CustomerCreditPolicy?
+  assignments      CustomerAssignment[]
+  importedTxns     ImportedTransaction[]
+  balanceSnapshots BalanceSnapshot[]
+  ledgerEntries    OperationalLedger[]
+  reconciliations  BalanceReconciliation[]
+  followups        Followup[]
+  promises         PaymentPromise[]
+  collections      Collection[]
+  reservations     Reservation[]
+  tasks            Task[]
+  scores           CustomerScore[]
+  duplicatesAsA    PotentialDuplicateCustomer[] @relation("DupCustomerA")
+  duplicatesAsB    PotentialDuplicateCustomer[] @relation("DupCustomerB")
+
+  @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
+  @@index([organizationId, nameNormalized], map: "idx_customers_name_norm")
+  @@index([phonePrimary], map: "idx_customers_phone")
+  @@map("customers")
+}
+
+model CustomerAssignment {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId    String    @map("customer_id") @db.Uuid
+  collectorId   String    @map("collector_id") @db.Uuid
+  effectiveFrom DateTime  @default(dbgenerated("CURRENT_DATE")) @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  reason        String?
+  assignedBy    String?   @map("assigned_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  customer Customer  @relation(fields: [customerId], references: [id])
+  collector Collector @relation(fields: [collectorId], references: [id])
+  assigner User?     @relation("AssignmentMaker", fields: [assignedBy], references: [id])
+
+  // ملاحظة: الفهرس الفريد الجزئي uq_current_assignment (WHERE effective_to IS NULL)
+  // معرّف في migration SQL — يضمن إسنادًا حاليًا واحدًا فقط لكل عميل.
+  @@map("customer_assignments")
+}
+
+model CustomerCreditPolicy {
+  customerId            String    @id @map("customer_id") @db.Uuid
+  allowCreditSale       Boolean   @default(false) @map("allow_credit_sale")
+  allowPurchaseWithDebt Boolean   @default(false) @map("allow_purchase_with_debt")
+  defaultPaymentDays    Int?      @map("default_payment_days")
+  creditLimitAmount     Decimal?  @map("credit_limit_amount") @db.Decimal(18, 4)
+  creditLimitCurrency   String?   @map("credit_limit_currency")
+  creditStatus          String    @default("open") @map("credit_status")
+  restrictionReason     String?   @map("restriction_reason")
+  decidedBy             String?   @map("decided_by") @db.Uuid
+  decidedAt             DateTime? @map("decided_at") @db.Timestamptz()
+
+  customer Customer  @relation(fields: [customerId], references: [id])
+  currency Currency? @relation(fields: [creditLimitCurrency], references: [code])
+  decider  User?     @relation("CreditDecider", fields: [decidedBy], references: [id])
+
+  @@map("customer_credit_policies")
+}
+
+model PotentialDuplicateCustomer {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerAId  String    @map("customer_a_id") @db.Uuid
+  customerBId  String    @map("customer_b_id") @db.Uuid
+  matchReason  String    @map("match_reason")
+  reviewStatus String    @default("pending") @map("review_status")
+  reviewedBy   String?   @map("reviewed_by") @db.Uuid
+  reviewedAt   DateTime? @map("reviewed_at") @db.Timestamptz()
+
+  customerA Customer @relation("DupCustomerA", fields: [customerAId], references: [id])
+  customerB Customer @relation("DupCustomerB", fields: [customerBId], references: [id])
+  reviewer  User?    @relation("DuplicateReviewer", fields: [reviewedBy], references: [id])
+
+  @@unique([customerAId, customerBId], map: "uq_dup_pair")
+  @@map("potential_duplicate_customers")
+}
+
+// ---------------------------------------------------------------------------
+// 5) الاستيراد والأرصدة المحاسبية
+// ---------------------------------------------------------------------------
+model ImportTemplate {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  name           String
+  columnMapping  Json     @map("column_mapping") @db.JsonB
+  createdBy      String?  @map("created_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  creator      User?        @relation(fields: [createdBy], references: [id])
+  importJobs   ImportJob[]
+
+  @@map("import_templates")
+}
+
+model ImportJob {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId       String   @map("organization_id") @db.Uuid
+  templateId           String?  @map("template_id") @db.Uuid
+  fileName             String   @map("file_name")
+  fileHash             String   @map("file_hash")
+  uploadedBy           String   @map("uploaded_by") @db.Uuid
+  importedAt           DateTime @default(now()) @map("imported_at") @db.Timestamptz()
+  status               String   @default("completed")
+  rowsTotal            Int?     @map("rows_total")
+  txnsInFile           Int?     @map("txns_in_file")
+  customersNew         Int?     @map("customers_new")
+  customersUpdated     Int?     @map("customers_updated")
+  txnsInserted         Int?     @map("txns_inserted")
+  txnsSkippedDuplicate Int?     @map("txns_skipped_duplicate")
+  errorsCount          Int?     @map("errors_count")
+  totalBalanceBefore   Json?    @map("total_balance_before") @db.JsonB
+  totalBalanceAfter    Json?    @map("total_balance_after") @db.JsonB
+  errorReport          Json?    @map("error_report") @db.JsonB
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  template     ImportTemplate? @relation(fields: [templateId], references: [id])
+  uploader     User            @relation(fields: [uploadedBy], references: [id])
+
+  transactions     ImportedTransaction[]
+  balancesUpdated  CustomerBalance[]
+  snapshots        BalanceSnapshot[]
+  reconciliations  BalanceReconciliation[]
+
+  @@index([organizationId, fileHash], map: "idx_import_jobs_hash")
+  @@map("import_jobs")
+}
+
+model ImportedTransaction {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId      String   @map("customer_id") @db.Uuid
+  currencyCode    String   @map("currency_code")
+  documentTypeId  String   @map("document_type_id") @db.Uuid
+  txDate          DateTime @map("tx_date") @db.Date
+  documentNumber  String?  @map("document_number")
+  description     String?
+  referenceNumber String?  @map("reference_number")
+  debit           Decimal  @default(0) @db.Decimal(18, 4)
+  credit          Decimal  @default(0) @db.Decimal(18, 4)
+  lineHash        String   @unique @map("line_hash")
+  sourceRowNumber Int?     @map("source_row_number")
+  importJobId     String   @map("import_job_id") @db.Uuid
+
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  currency     Currency     @relation(fields: [currencyCode], references: [code])
+  documentType DocumentType @relation(fields: [documentTypeId], references: [id])
+  importJob    ImportJob    @relation(fields: [importJobId], references: [id])
+
+  @@index([customerId, currencyCode, txDate], map: "idx_itxn_customer")
+  @@index([importJobId], map: "idx_itxn_job")
+  @@map("imported_transactions")
+}
+
+model CustomerBalance {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId        String   @map("customer_id") @db.Uuid
+  currencyCode      String   @map("currency_code")
+  openingDebit      Decimal  @default(0) @map("opening_debit") @db.Decimal(18, 4)
+  openingCredit     Decimal  @default(0) @map("opening_credit") @db.Decimal(18, 4)
+  accountingBalance Decimal  @default(0) @map("accounting_balance") @db.Decimal(18, 4)
+  declaredBalance   Decimal? @map("declared_balance") @db.Decimal(18, 4)
+  declaredLabel     String?  @map("declared_label")
+  lastImportJobId   String?  @map("last_import_job_id") @db.Uuid
+  updatedAt         DateTime @default(now()) @map("updated_at") @db.Timestamptz()
+
+  customer      Customer   @relation(fields: [customerId], references: [id])
+  currency      Currency   @relation(fields: [currencyCode], references: [code])
+  lastImportJob ImportJob? @relation(fields: [lastImportJobId], references: [id])
+
+  @@unique([customerId, currencyCode], map: "uq_balance_customer_currency")
+  @@map("customer_balances")
+}
+
+model BalanceSnapshot {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId   String   @map("customer_id") @db.Uuid
+  currencyCode String   @map("currency_code")
+  balance      Decimal  @db.Decimal(18, 4)
+  importJobId  String   @map("import_job_id") @db.Uuid
+  snapshotAt   DateTime @default(now()) @map("snapshot_at") @db.Timestamptz()
+
+  customer  Customer  @relation(fields: [customerId], references: [id])
+  currency  Currency  @relation(fields: [currencyCode], references: [code])
+  importJob ImportJob @relation(fields: [importJobId], references: [id])
+
+  @@index([customerId, currencyCode, snapshotAt], map: "idx_snapshots")
+  @@map("balance_snapshots")
+}
+
+// ---------------------------------------------------------------------------
+// 6) الدفتر التشغيلي (Append-Only — Trigger يمنع UPDATE/DELETE)
+// ---------------------------------------------------------------------------
+model OperationalLedger {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId   String   @map("customer_id") @db.Uuid
+  currencyCode String   @map("currency_code")
+  entryType    String   @map("entry_type")
+  amountSigned Decimal  @map("amount_signed") @db.Decimal(18, 4)
+  sourceTable  String   @map("source_table")
+  sourceId     String   @map("source_id") @db.Uuid
+  createdBy    String   @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  currency Currency @relation(fields: [currencyCode], references: [code])
+  creator  User     @relation(fields: [createdBy], references: [id])
+
+  @@unique([sourceTable, sourceId, entryType], map: "uq_ledger_source")
+  @@index([customerId, currencyCode, createdAt], map: "idx_ledger_customer")
+  @@map("operational_ledger")
+}
+
+// ---------------------------------------------------------------------------
+// 7) التسوية
+// ---------------------------------------------------------------------------
+model BalanceReconciliation {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId         String    @map("customer_id") @db.Uuid
+  currencyCode       String    @map("currency_code")
+  importJobId        String    @map("import_job_id") @db.Uuid
+  accountingBalance  Decimal   @map("accounting_balance") @db.Decimal(18, 4)
+  operationalBalance Decimal   @map("operational_balance") @db.Decimal(18, 4)
+  difference         Decimal   @db.Decimal(18, 4)
+  reviewStatus       String    @default("pending") @map("review_status")
+  differenceReason   String?   @map("difference_reason")
+  reviewedBy         String?   @map("reviewed_by") @db.Uuid
+  reviewedAt         DateTime? @map("reviewed_at") @db.Timestamptz()
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  customer  Customer  @relation(fields: [customerId], references: [id])
+  currency  Currency  @relation(fields: [currencyCode], references: [code])
+  importJob ImportJob @relation(fields: [importJobId], references: [id])
+  reviewer  User?     @relation("ReconReviewer", fields: [reviewedBy], references: [id])
+
+  @@unique([customerId, currencyCode, importJobId], map: "uq_recon")
+  @@map("balance_reconciliations")
+}
+
+// ---------------------------------------------------------------------------
+// 8) العمليات التشغيلية
+// ---------------------------------------------------------------------------
+model CollectionMethod {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String  @map("organization_id") @db.Uuid
+  name           String
+  active         Boolean @default(true)
+
+  organization Organization     @relation(fields: [organizationId], references: [id])
+  collections  Collection[]
+  promises     PaymentPromise[]
+
+  @@unique([organizationId, name], map: "uq_methods_org_name")
+  @@map("collection_methods")
+}
+
+model Collection {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId      String    @map("customer_id") @db.Uuid
+  collectorId     String    @map("collector_id") @db.Uuid
+  branchId        String?   @map("branch_id") @db.Uuid
+  currencyCode    String    @map("currency_code")
+  amount          Decimal   @db.Decimal(18, 4)
+  collectedAt     DateTime  @default(now()) @map("collected_at") @db.Timestamptz()
+  methodId        String    @map("method_id") @db.Uuid
+  referenceNumber String?   @map("reference_number")
+  bankName        String?   @map("bank_name")
+  chequeNumber    String?   @map("cheque_number")
+  chequeDate      DateTime? @map("cheque_date") @db.Date
+  receiptNumber   String?   @map("receipt_number")
+  notes           String?
+  status          String    @default("recorded")
+  reversedById    String?   @map("reversed_by_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  customer   Customer         @relation(fields: [customerId], references: [id])
+  collector  Collector        @relation(fields: [collectorId], references: [id])
+  currency   Currency         @relation(fields: [currencyCode], references: [code])
+  method     CollectionMethod @relation(fields: [methodId], references: [id])
+  reversedBy Collection?      @relation("CollectionReversal", fields: [reversedById], references: [id])
+  reversals  Collection[]     @relation("CollectionReversal")
+  handover   CashHandover?
+  branch     Branch?          @relation(fields: [branchId], references: [id])
+
+  @@index([customerId, currencyCode, collectedAt], map: "idx_collections_customer")
+  @@index([collectorId, collectedAt], map: "idx_collections_collector")
+  @@map("collections")
+}
+
+model CashHandover {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  collectionId  String   @unique @map("collection_id") @db.Uuid
+  currencyCode  String   @map("currency_code")
+  amount        Decimal  @db.Decimal(18, 4)
+  cashierId     String   @map("cashier_id") @db.Uuid
+  receiptNumber String?  @map("receipt_number")
+  receivedAt    DateTime @default(now()) @map("received_at") @db.Timestamptz()
+
+  collection Collection @relation(fields: [collectionId], references: [id])
+  currency   Currency   @relation(fields: [currencyCode], references: [code])
+  cashier    User       @relation(fields: [cashierId], references: [id])
+
+  @@map("cash_handover")
+}
+
+model FollowupType {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String  @map("organization_id") @db.Uuid
+  name           String
+  active         Boolean @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  followups    Followup[]
+
+  @@unique([organizationId, name], map: "uq_ftypes_org_name")
+  @@map("followup_types")
+}
+
+model FollowupResult {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String  @map("organization_id") @db.Uuid
+  name           String
+  active         Boolean @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  followups    Followup[]
+
+  @@unique([organizationId, name], map: "uq_fresults_org_name")
+  @@map("followup_results")
+}
+
+model Followup {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId       String    @map("customer_id") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  typeId           String    @map("type_id") @db.Uuid
+  resultId         String    @map("result_id") @db.Uuid
+  followupAt       DateTime  @default(now()) @map("followup_at") @db.Timestamptz()
+  notes            String?
+  nextFollowupDate DateTime? @map("next_followup_date") @db.Date
+  expectedAmount   Decimal?  @map("expected_amount") @db.Decimal(18, 4)
+  expectedCurrency String?   @map("expected_currency")
+  visitLat         Decimal?  @map("visit_lat") @db.Decimal(9, 6)
+  visitLng         Decimal?  @map("visit_lng") @db.Decimal(9, 6)
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz()
+  deletedBy        String?   @map("deleted_by") @db.Uuid
+
+  customer Customer       @relation(fields: [customerId], references: [id])
+  user     User           @relation(fields: [userId], references: [id])
+  type     FollowupType   @relation(fields: [typeId], references: [id])
+  result   FollowupResult @relation(fields: [resultId], references: [id])
+  currency Currency?      @relation(fields: [expectedCurrency], references: [code])
+
+  @@index([customerId, followupAt], map: "idx_followups_customer")
+  @@index([nextFollowupDate], map: "idx_followups_next")
+  @@map("followups")
+}
+
+model PaymentPromise {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId       String   @map("customer_id") @db.Uuid
+  collectorId      String   @map("collector_id") @db.Uuid
+  promiseDate      DateTime @map("promise_date") @db.Date
+  dueDate          DateTime @map("due_date") @db.Date
+  statusReason     String?  @map("status_reason")
+  fulfilledAmount  Decimal? @map("fulfilled_amount") @db.Decimal(18, 4)
+  expectedAmount   Decimal  @map("expected_amount") @db.Decimal(18, 4)
+  currencyCode     String   @map("currency_code")
+  expectedMethodId String?  @map("expected_method_id") @db.Uuid
+  notes            String?
+  status           String   @default("upcoming")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  customer       Customer          @relation(fields: [customerId], references: [id])
+  collector      Collector         @relation(fields: [collectorId], references: [id])
+  currency       Currency          @relation(fields: [currencyCode], references: [code])
+  expectedMethod CollectionMethod? @relation(fields: [expectedMethodId], references: [id])
+  tasks          Task[]
+
+  @@index([promiseDate, status], map: "idx_promises_date")
+  @@map("payment_promises")
+}
+
+model Task {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId       String?  @map("customer_id") @db.Uuid
+  assignedTo       String?  @map("assigned_to") @db.Uuid
+  createdBy        String?  @map("created_by") @db.Uuid
+  taskType         String   @map("task_type")
+  dueDate          DateTime @map("due_date") @db.Date
+  priorityReason   String?  @map("priority_reason")
+  expectedAmount   Decimal? @map("expected_amount") @db.Decimal(18, 4)
+  expectedCurrency String?  @map("expected_currency")
+  status           String   @default("open")
+  sourcePromiseId  String?  @map("source_promise_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  customer      Customer?       @relation(fields: [customerId], references: [id])
+  collector     Collector?      @relation(fields: [assignedTo], references: [id])
+  creator       User?           @relation("TaskCreator", fields: [createdBy], references: [id])
+  currency      Currency?       @relation(fields: [expectedCurrency], references: [code])
+  sourcePromise PaymentPromise? @relation(fields: [sourcePromiseId], references: [id])
+
+  @@index([assignedTo, dueDate, status], map: "idx_tasks_due")
+  @@map("tasks")
+}
+
+// ---------------------------------------------------------------------------
+// 9) الحجوزات
+// ---------------------------------------------------------------------------
+model Reservation {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId     String    @map("customer_id") @db.Uuid
+  currencyCode   String    @map("currency_code")
+  creditAmount   Decimal   @map("credit_amount") @db.Decimal(18, 4)
+  usedAmount     Decimal   @default(0) @map("used_amount") @db.Decimal(18, 4)
+  paymentDate    DateTime? @map("payment_date") @db.Date
+  documentNumber String?   @map("document_number")
+  warehouse      String?
+  reservedAt     DateTime  @default(dbgenerated("CURRENT_DATE")) @map("reserved_at") @db.Date
+  expiresAt      DateTime? @map("expires_at") @db.Date
+  status         String    @default("active")
+  notes          String?
+
+  customer Customer          @relation(fields: [customerId], references: [id])
+  currency Currency          @relation(fields: [currencyCode], references: [code])
+  items    ReservationItem[]
+
+  @@map("reservations")
+}
+
+model ReservationItem {
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reservationId String  @map("reservation_id") @db.Uuid
+  itemName      String  @map("item_name")
+  quantity      Decimal @db.Decimal(18, 4)
+  unit          String
+  receivedQty   Decimal @default(0) @map("received_qty") @db.Decimal(18, 4)
+
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+
+  @@map("reservation_items")
+}
+
+// ---------------------------------------------------------------------------
+// 10) التقييم، المرفقات، الإشعارات، التدقيق، الإعدادات
+// ---------------------------------------------------------------------------
+model CustomerScore {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  score      Decimal  @db.Decimal(6, 2)
+  riskLevel  String   @map("risk_level")
+  reasons    Json     @db.JsonB
+  computedAt DateTime @default(now()) @map("computed_at") @db.Timestamptz()
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId, computedAt], map: "idx_scores_customer")
+  @@map("customer_scores")
+}
+
+model Attachment {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  entityTable String   @map("entity_table")
+  entityId    String   @map("entity_id") @db.Uuid
+  fileName    String   @map("file_name")
+  storageKey  String   @map("storage_key")
+  uploadedBy  String?  @map("uploaded_by") @db.Uuid
+  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz()
+
+  uploader User? @relation(fields: [uploadedBy], references: [id])
+
+  @@index([entityTable, entityId], map: "idx_attachments_entity")
+  @@map("attachments")
+}
+
+model Notification {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  kind      String
+  payload   Json      @db.JsonB
+  readAt    DateTime? @map("read_at") @db.Timestamptz()
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, readAt], map: "idx_notifications_user")
+  @@map("notifications")
+}
+
+model AuditLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String?  @map("user_id") @db.Uuid
+  action      String
+  entityTable String   @map("entity_table")
+  entityId    String?  @map("entity_id") @db.Uuid
+  oldValue    Json?    @map("old_value") @db.JsonB
+  newValue    Json?    @map("new_value") @db.JsonB
+  reason      String?
+  ipAddress   String?  @map("ip_address") @db.Inet
+  userAgent   String?  @map("user_agent")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entityTable, entityId, createdAt], map: "idx_audit_entity")
+  @@index([userId, createdAt], map: "idx_audit_user")
+  @@map("audit_logs")
+}
+
+model SystemSetting {
+  organizationId String @map("organization_id") @db.Uuid
+  key            String
+  value          Json   @db.JsonB
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@id([organizationId, key])
+  @@map("system_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Milestone 2: جلسات المصادقة (Refresh Tokens مجزأة وقابلة للإبطال)
+// سبب الإضافة موثق في migration 20260718000000_auth_sessions
+// ---------------------------------------------------------------------------
+model AuthSession {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash")
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz()
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz()
+  replacedById String?   @map("replaced_by_id") @db.Uuid
+  ipAddress    String?   @map("ip_address") @db.Inet
+  userAgent    String?   @map("user_agent")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  user       User          @relation(fields: [userId], references: [id])
+  replacedBy AuthSession?  @relation("SessionRotation", fields: [replacedById], references: [id])
+  replaces   AuthSession[] @relation("SessionRotation")
+
+  @@index([userId, revokedAt], map: "idx_auth_sessions_user")
+  @@map("auth_sessions")
+}

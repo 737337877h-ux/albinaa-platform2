@@ -1,0 +1,23 @@
+{
+  "name": "albinaa-platform",
+  "version": "0.1.0",
+  "description": "منصة البناء الراقي لإدارة المديونية والتحصيل — Sprint 1: Data Foundation",
+  "private": true,
+  "scripts": {
+    "db:up": "docker compose up -d db",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "prisma db seed",
+    "db:verify": "docker compose exec -T db psql -U albinaa -d albinaa -f - < scripts/verify_migration.sql",
+    "db:studio": "prisma studio",
+    "setup": "npm run db:up && npm run db:migrate && npm run db:seed && npm run db:verify"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  },
+  "devDependencies": {
+    "prisma": "^6.7.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.7.0"
+  }
+}
