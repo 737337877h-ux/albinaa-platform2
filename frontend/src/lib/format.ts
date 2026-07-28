@@ -19,3 +19,10 @@ export const COLLECTION_STATUS_AR: Record<string, string> = {
   recorded: 'مسجلة', handed_to_cashier: 'مسلمة للصندوق',
   matched: 'مطابقة', approved: 'معتمدة', reversed: 'معكوسة',
 };
+
+export const TASK_STATUS_AR: Record<string, string> = {
+  open: 'مفتوحة', escalated: 'تصعيد', done: 'منجزة',
+};
+export const TASK_TYPE_AR: Record<string, string> = {
+  promise_due: 'وعد سداد مستحق', promise_escalation: 'تصعيد وعد متأخر',
+};

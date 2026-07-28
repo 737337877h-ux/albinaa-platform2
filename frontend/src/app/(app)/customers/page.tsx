@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Search, SlidersHorizontal, X } from 'lucide-react';
@@ -9,7 +9,7 @@ import { fmtMoney, CCY_AR } from '@/lib/format';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Badge, Button, Card, Empty, Input, Money, Pagination, Select } from '@/components/ui/primitives';
-import { Table, THead, TRow, TD } from '@/components/ui/table';
+import { Table, TRow, TD } from '@/components/ui/table';
 
 interface CustomerListItem {
   id: string;
@@ -36,7 +36,7 @@ type SortDir = 'asc' | 'desc';
 
 function useDebounced<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
-  useMemo(() => {
+  useEffect(() => {
     const t = setTimeout(() => setDebounced(value), delay);
     return () => clearTimeout(t);
   }, [value, delay]);
@@ -222,7 +222,15 @@ export default function CustomersPage() {
           {query.data && (
             <>
               <Table>
-                <THead cols={['العميل', 'المنطقة', 'الرصيد', 'المحصل', 'الحالة']} />
+                <thead>
+                  <tr className="border-b border-concrete-100 text-right text-xs text-concrete-500 dark:border-white/10 dark:text-concrete-400">
+                    <SortTh label="العميل" col="name" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                    <SortTh label="المنطقة" col="code" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                    <th className="px-4 py-2.5 font-medium">الرصيد</th>
+                    <th className="px-4 py-2.5 font-medium">المحصل</th>
+                    <SortTh label="الحالة" col="createdAt" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  </tr>
+                </thead>
                 <tbody>
                   {query.data.items.map((c) => (
                     <TRow key={c.id} onClick={() => window.location.href = `/customers/${c.id}`}>
@@ -273,5 +281,22 @@ export default function CustomersPage() {
         </DataState>
       </Card>
     </div>
+  );
+}
+
+function SortTh({ label, col, sortBy, sortDir, onSort }: {
+  label: string; col: SortBy; sortBy: SortBy; sortDir: SortDir;
+  onSort: (col: SortBy) => void;
+}) {
+  const active = sortBy === col;
+  return (
+    <th
+      className="cursor-pointer select-none px-4 py-2.5 font-medium hover:text-pine-700 dark:hover:text-pine-100"
+      onClick={() => onSort(col)}
+      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      {label}
+      {active && <span className="mr-1">{sortDir === 'asc' ? '▲' : '▼'}</span>}
+    </th>
   );
 }
