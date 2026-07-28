@@ -13,6 +13,14 @@ const LABELS: Record<string, string> = {
   imports: 'استيراد Excel',
   tasks: 'عمل اليوم',
   notifications: 'الإشعارات',
+  admin: 'الإدارة',
+  users: 'المستخدمين',
+  roles: 'الأدوار والصلاحيات',
+  collectors: 'المحصلين',
+  branches: 'الفروع',
+  currencies: 'العملات',
+  settings: 'الإعدادات',
+  audit: 'سجل العمليات',
 };
 
 export function Breadcrumb() {

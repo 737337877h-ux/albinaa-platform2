@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   Banknote, CalendarClock, FileSpreadsheet, HandCoins, LayoutDashboard,
-  ListTodo, PhoneCall, Users,
+  ListTodo, PhoneCall, Users, Settings, Shield, UserCog, GitBranch,
+  CircleDollarSign, ScrollText,
 } from 'lucide-react';
 import { useMe, useCan } from '@/lib/auth';
 import { ApiError, tokenStore } from '@/lib/api';
@@ -22,6 +23,16 @@ const NAV = [
   { href: '/promises', label: 'وعود السداد', icon: CalendarClock, perm: 'customers.read' },
   { href: '/collections', label: 'التحصيلات', icon: HandCoins, perm: 'customers.read' },
   { href: '/imports', label: 'استيراد Excel', icon: FileSpreadsheet, perm: 'imports.read' },
+] as const;
+
+const ADMIN_NAV = [
+  { href: '/admin/users', label: 'المستخدمين', icon: UserCog, perm: 'users.manage' },
+  { href: '/admin/roles', label: 'الأدوار والصلاحيات', icon: Shield, perm: 'users.manage' },
+  { href: '/admin/collectors', label: 'المحصلين', icon: Users, perm: 'users.manage' },
+  { href: '/admin/branches', label: 'الفروع', icon: GitBranch, perm: 'settings.manage' },
+  { href: '/admin/currencies', label: 'العملات', icon: CircleDollarSign, perm: 'settings.manage' },
+  { href: '/admin/settings', label: 'الإعدادات', icon: Settings, perm: 'settings.manage' },
+  { href: '/admin/audit', label: 'سجل العمليات', icon: ScrollText, perm: 'audit.read' },
 ] as const;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -42,6 +53,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [unauthorized, router]);
 
   const nav = NAV.filter((n) => can(n.perm));
+  const adminNav = ADMIN_NAV.filter((n) => can(n.perm));
 
   if (isLoading) {
     return (
@@ -105,6 +117,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
+          {adminNav.length > 0 && (
+            <>
+              <div className="my-2 border-t border-white/10" />
+              <p className="px-3 pb-1 pt-1 text-[11px] font-medium text-white/40">الإدارة</p>
+              {adminNav.map(({ href, label, icon: Icon }) => {
+                const active = pathname.startsWith(href);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    aria-current={active ? 'page' : undefined}
+                    className={cn(
+                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-white/75 hover:bg-white/10 hover:text-white',
+                      active && 'bg-pine-700 text-white',
+                    )}
+                  >
+                    <Icon className="h-[18px] w-[18px]" aria-hidden />
+                    {label}
+                  </Link>
+                );
+              })}
+            </>
+          )}
         </nav>
         <div className="border-t border-white/10 px-5 py-4 text-xs text-white/60">
           نسخة Alpha الداخلية

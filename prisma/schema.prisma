@@ -94,6 +94,7 @@ model User {
   followups            Followup[]
   tasksCreated         Task[]                  @relation("TaskCreator")
   attachments          Attachment[]
+  gpsLogs              GpsLog[]
   notifications        Notification[]
   auditLogs            AuditLog[]
   authSessions         AuthSession[]
@@ -719,6 +720,23 @@ model Attachment {
 
   @@index([entityTable, entityId], map: "idx_attachments_entity")
   @@map("attachments")
+}
+
+model GpsLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  entityTable String?  @map("entity_table")
+  entityId    String?  @map("entity_id") @db.Uuid
+  latitude    Float
+  longitude   Float
+  accuracy    Float?
+  timestamp   DateTime @default(now()) @map("timestamp") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([entityTable, entityId])
+  @@index([userId, timestamp])
+  @@map("gps_logs")
 }
 
 model Notification {

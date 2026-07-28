@@ -19,6 +19,10 @@ import { PromisesModule } from './promises/promises.module';
 import { CollectionsModule } from './collections/collections.module';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { TasksModule } from './tasks/tasks.module';
+import { CurrenciesModule } from './currencies/currencies.module';
+import { SettingsModule } from './settings/settings.module';
+import { CollectorsModule } from './collectors/collectors.module';
+import { MobileModule } from './mobile/mobile.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -44,6 +48,10 @@ import { RolesGuard } from './common/guards/roles.guard';
     CollectionsModule,
     AssignmentsModule,
     TasksModule,
+    CurrenciesModule,
+    SettingsModule,
+    CollectorsModule,
+    MobileModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },   // 1) Rate limiting
