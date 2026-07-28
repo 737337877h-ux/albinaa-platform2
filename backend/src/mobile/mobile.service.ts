@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import * as fs from 'fs';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { GpsPointDto } from './dto/gps-point.dto';
@@ -9,16 +10,28 @@ export class MobileService {
   constructor(private readonly prisma: PrismaService) {}
 
   async uploadReceipt(user: AuthUser, file: Express.Multer.File, dto: UploadReceiptDto) {
-    const attachment = await this.prisma.attachment.create({
-      data: {
-        entityTable: 'collections',
-        entityId: dto.collectionId,
-        fileName: file.originalname,
-        storageKey: file.path,
-        uploadedBy: user.id,
-      },
+    const collection = await this.prisma.collection.findFirst({
+      where: { id: dto.collectionId, collector: { user: { organizationId: user.organizationId } } },
     });
-    return attachment;
+    if (!collection) {
+      if (file?.path) fs.unlink(file.path, () => {});
+      throw new NotFoundException('التحصيل غير موجود أو خارج نطاق صلاحيتك');
+    }
+    try {
+      const attachment = await this.prisma.attachment.create({
+        data: {
+          entityTable: 'collections',
+          entityId: dto.collectionId,
+          fileName: file.originalname,
+          storageKey: file.path,
+          uploadedBy: user.id,
+        },
+      });
+      return attachment;
+    } catch (err) {
+      if (file?.path) fs.unlink(file.path, () => {});
+      throw new InternalServerErrorException('فشل حفظ السند');
+    }
   }
 
   async saveGps(user: AuthUser, dto: GpsPointDto) {

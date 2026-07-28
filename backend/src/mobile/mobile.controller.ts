@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Param, ParseUUIDPipe, Post, UploadedFile, UseInterceptors,
+  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Post, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -13,13 +13,28 @@ import { SyncRequestDto } from './dto/sync-request.dto';
 import { UploadReceiptDto } from './dto/upload-receipt.dto';
 import { MobileService } from './mobile.service';
 
+const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'];
+const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf'];
+
 const uploadDir = join(process.cwd(), 'uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
+
+function fileFilter(_req: any, file: Express.Multer.File, cb: (error: Error | null, accept: boolean) => void) {
+  if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+    return cb(new BadRequestException(`نوع الملف غير مسموح: ${file.mimetype}`), false);
+  }
+  const ext = extname(file.originalname).toLowerCase();
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+    return cb(new BadRequestException(`امتداد الملف غير مسموح: ${ext}`), false);
+  }
+  cb(null, true);
+}
 
 const storage = diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extname(file.originalname)}`;
+    const ext = extname(file.originalname).toLowerCase();
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
     cb(null, unique);
   },
 });
@@ -44,7 +59,7 @@ export class MobileController {
       },
     },
   })
-  @UseInterceptors(FileInterceptor('file', { storage, limits: { fileSize: 10 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', { storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024 } }))
   uploadReceipt(
     @CurrentUser() user: AuthUser,
     @UploadedFile() file: Express.Multer.File,
