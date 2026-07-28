@@ -42,6 +42,14 @@ export class CollectionsService {
     return { ...base, collectorId: collector.id };
   }
 
+  async listMethods(user: AuthUser) {
+    return this.prisma.collectionMethod.findMany({
+      where: { organizationId: user.organizationId, active: true },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async create(actor: AuthUser, dto: CreateCollectionDto, req?: Request) {
     let collectorId = dto.collectorId;
     const own = await this.collectorOf(actor);

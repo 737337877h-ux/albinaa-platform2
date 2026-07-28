@@ -125,17 +125,18 @@ export function Badge({ tone = 'neutral', children, className }: {
 
 /* ============================ Money display ============================= */
 export function Money({ value, currency, signed = false }: {
-  value: number; currency?: string; signed?: boolean;
+  value: number | string | null | undefined; currency?: string; signed?: boolean;
 }) {
+  const num = Number(value ?? 0);
   const tone = !signed
     ? ''
-    : value > 0 ? 'text-debt-600 dark:text-debt-400'
-    : value < 0 ? 'text-credit-600 dark:text-credit-400'
+    : num > 0 ? 'text-debt-600 dark:text-debt-400'
+    : num < 0 ? 'text-credit-600 dark:text-credit-400'
     : 'text-concrete-500';
   return (
     <span className={cn('tnum font-medium', tone)} dir="ltr">
-      {fmtMoney(Math.abs(value))}{currency ? ` ${currency}` : ''}
-      {signed && value !== 0 && (value > 0 ? ' مدين' : ' دائن')}
+      {fmtMoney(Math.abs(num))}{currency ? ` ${currency}` : ''}
+      {signed && num !== 0 && (num > 0 ? ' مدين' : ' دائن')}
     </span>
   );
 }

@@ -1,6 +1,6 @@
 /** تنسيقات عربية موحدة — الأرقام لاتينية (0-9) لتطابق كشوف النظام المحاسبي. */
-export const fmtMoney = (v: number) =>
-  new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(v);
+export const fmtMoney = (v: number | string | null | undefined) =>
+  new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number(v ?? 0));
 
 export const fmtDate = (v: string | Date) =>
   new Intl.DateTimeFormat('ar', { dateStyle: 'medium' }).format(new Date(v));
@@ -25,4 +25,9 @@ export const TASK_STATUS_AR: Record<string, string> = {
 };
 export const TASK_TYPE_AR: Record<string, string> = {
   promise_due: 'وعد سداد مستحق', promise_escalation: 'تصعيد وعد متأخر',
+};
+
+export const IMPORT_STATUS_AR: Record<string, string> = {
+  dry_run: 'جاهز للمراجعة', running: 'قيد التنفيذ',
+  completed: 'مكتمل', failed: 'فشل',
 };
