@@ -17,6 +17,11 @@ class EnvVars {
   @MinLength(32, { message: 'JWT_ACCESS_SECRET يجب أن يكون 32 حرفًا على الأقل' })
   JWT_ACCESS_SECRET!: string;
 
+  /**
+   * ملاحظة: JWT_REFRESH_SECRET غير مستخدم حاليًا — الـ Refresh Tokens حركات
+   * عشوائية (opaque) بدل JWTs، لكن يُحتفظ به لحماية المستقبل إذا تم التحوّل
+   * إلى JWT-based refresh tokens ( defence-in-depth ).
+   */
   @IsString()
   @MinLength(32, { message: 'JWT_REFRESH_SECRET يجب أن يكون 32 حرفًا على الأقل' })
   JWT_REFRESH_SECRET!: string;

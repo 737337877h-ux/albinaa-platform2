@@ -1,4 +1,4 @@
-# منصة البناء الراقي — Milestone 2: PostgreSQL + Backend
+# منصة البناء الراقي — Milestone 2: PostgreSQL + Backend + Frontend
 # التشغيل الكامل بأمر واحد:  docker compose up -d --build
 services:
   db:
@@ -38,11 +38,42 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?يجب ضبط JWT_REFRESH_SECRET في .env}
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-900}
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      CORS_ORIGINS: http://localhost:3001
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-ChangeMe!2026}
     volumes:
       - albinaa_uploads:/data/uploads
     ports:
       - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://backend:3000
+    container_name: albinaa-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      NEXT_PUBLIC_API_URL: http://backend:3000
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   albinaa_pgdata:

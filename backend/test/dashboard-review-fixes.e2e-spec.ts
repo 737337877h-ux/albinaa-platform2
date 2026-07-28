@@ -77,6 +77,25 @@ describe('Dashboard Review Fixes (e2e)', () => {
 
   describe('/tasks/today — حساب إداري بلا سجل محصل شخصي', () => {
     it('يعيد 200 بنتيجة فارغة مميزة (isCollector=false) لا 403 ولا 404', async () => {
+      // تنظيف أي سجل محصل سابق للـ admin (يتركه اختبارات سابقة)
+      const adminCollectors = await prisma.collector.findMany({ where: { userId: adminUserId }, select: { id: true } });
+      const adminCollectorIds = adminCollectors.map((c) => c.id);
+      if (adminCollectorIds.length) {
+        // حذف المهام المرتبطة بالوعود أولًا ( FK sourcePromiseId )
+        const adminPromises = await prisma.paymentPromise.findMany({
+          where: { collectorId: { in: adminCollectorIds } }, select: { id: true },
+        });
+        const adminPromiseIds = adminPromises.map((p) => p.id);
+        if (adminPromiseIds.length) {
+          await prisma.task.deleteMany({ where: { sourcePromiseId: { in: adminPromiseIds } } });
+        }
+        await prisma.paymentPromise.deleteMany({ where: { collectorId: { in: adminCollectorIds } } });
+        await prisma.$executeRawUnsafe(`ALTER TABLE collections DISABLE TRIGGER trg_collections_no_delete`);
+        await prisma.collection.deleteMany({ where: { collectorId: { in: adminCollectorIds } } });
+        await prisma.$executeRawUnsafe(`ALTER TABLE collections ENABLE TRIGGER trg_collections_no_delete`);
+        await prisma.customerAssignment.deleteMany({ where: { collectorId: { in: adminCollectorIds } } });
+      }
+      await prisma.collector.deleteMany({ where: { userId: adminUserId } });
       const ownCollector = await prisma.collector.findUnique({ where: { userId: adminUserId } });
       expect(ownCollector).toBeNull(); // تأكيد أن admin ليس محصلاً في هذا السياق
 
