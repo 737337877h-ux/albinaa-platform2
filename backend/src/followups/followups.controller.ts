@@ -31,6 +31,20 @@ export class FollowupsController {
     return this.followups.findAll(user, q);
   }
 
+  @Get('types')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'أنواع المتابعات النشطة للمنظمة الحالية' })
+  listTypes(@CurrentUser() user: AuthUser) {
+    return this.followups.listTypes(user);
+  }
+
+  @Get('results')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'نتائج المتابعات النشطة للمنظمة الحالية' })
+  listResults(@CurrentUser() user: AuthUser) {
+    return this.followups.listResults(user);
+  }
+
   @Get(':id')
   @RequirePermissions('customers.read')
   @ApiOperation({ summary: 'تفاصيل متابعة' })

@@ -175,4 +175,24 @@ export class FollowupsService {
     });
     return { message: 'حُذفت المتابعة (حذف ناعم — السجل محفوظ للتدقيق)' };
   }
+
+  // --------------------------------------------------------------------------
+  // أنواع ونتائج المتابعات — قائمة منسدلة
+  // --------------------------------------------------------------------------
+
+  async listTypes(user: AuthUser) {
+    return this.prisma.followupType.findMany({
+      where: { organizationId: user.organizationId, active: true },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async listResults(user: AuthUser) {
+    return this.prisma.followupResult.findMany({
+      where: { organizationId: user.organizationId, active: true },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+  }
 }
