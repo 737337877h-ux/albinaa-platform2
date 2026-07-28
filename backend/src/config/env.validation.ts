@@ -1,5 +1,5 @@
 import { plainToInstance } from 'class-transformer';
-import { IsIn, IsInt, IsString, Min, MinLength, validateSync } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, Min, MinLength, validateSync } from 'class-validator';
 
 /**
  * التحقق من متغيرات البيئة عند الإقلاع — يفشل التشغيل فورًا إذا نقص سر أساسي.
@@ -33,6 +33,17 @@ class EnvVars {
   @IsInt()
   @Min(3600)
   JWT_REFRESH_TTL!: number;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(8, { message: 'ADMIN_INITIAL_PASSWORD يجب أن يكون 8 أحرف على الأقل' })
+  ADMIN_INITIAL_PASSWORD?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  MAX_SESSIONS_PER_USER?: number;
 }
 
 export function validateEnv(config: Record<string, unknown>) {
@@ -40,6 +51,7 @@ export function validateEnv(config: Record<string, unknown>) {
     ...config,
     JWT_ACCESS_TTL: Number(config.JWT_ACCESS_TTL ?? 900),
     JWT_REFRESH_TTL: Number(config.JWT_REFRESH_TTL ?? 604800),
+    MAX_SESSIONS_PER_USER: Number(config.MAX_SESSIONS_PER_USER ?? 5),
   });
   const errors = validateSync(validated, { skipMissingProperties: false });
   if (errors.length > 0) {

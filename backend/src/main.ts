@@ -28,20 +28,22 @@ async function bootstrap() {
 
   app.useGlobalFilters(new GlobalExceptionFilter());
 
-  // ---- Swagger ------------------------------------------------------------
-  const swaggerCfg = new DocumentBuilder()
-    .setTitle('AlBinaa Credit & Collection API')
-    .setDescription('منصة البناء الراقي لإدارة المديونية والتحصيل — Milestone 2: API Foundation')
-    .setVersion(process.env.APP_VERSION ?? '0.2.0')
-    .addBearerAuth(
-      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Access Token' },
-      'access-token',
-    )
-    .build();
-  const document = SwaggerModule.createDocument(app, swaggerCfg);
-  SwaggerModule.setup('docs', app, document, {
-    swaggerOptions: { persistAuthorization: true },
-  });
+  // ---- Swagger (يُعطّل في الإنتاج لأمان التوثيق) -----------
+  if (process.env.NODE_ENV !== 'production') {
+    const swaggerCfg = new DocumentBuilder()
+      .setTitle('AlBinaa Credit & Collection API')
+      .setDescription('منصة البناء الراقي لإدارة المديونية والتحصيل — Milestone 2: API Foundation')
+      .setVersion(process.env.APP_VERSION ?? '0.2.0')
+      .addBearerAuth(
+        { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Access Token' },
+        'access-token',
+      )
+      .build();
+    const document = SwaggerModule.createDocument(app, swaggerCfg);
+    SwaggerModule.setup('docs', app, document, {
+      swaggerOptions: { persistAuthorization: true },
+    });
+  }
 
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);

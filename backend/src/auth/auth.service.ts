@@ -26,6 +26,21 @@ export class AuthService {
       { secret: process.env.JWT_ACCESS_SECRET, expiresIn: this.accessTtl() },
     );
     const refreshToken = this.passwords.generateRefreshToken();
+
+    // ── Max sessions per user: revoke oldest active sessions ──
+    const maxSessions = Number(process.env.MAX_SESSIONS_PER_USER ?? 5);
+    const activeSessions = await this.prisma.authSession.findMany({
+      where: { userId, revokedAt: null },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (activeSessions.length >= maxSessions) {
+      const toRevoke = activeSessions.slice(0, activeSessions.length - maxSessions + 1);
+      await this.prisma.authSession.updateMany({
+        where: { id: { in: toRevoke.map((s) => s.id) } },
+        data: { revokedAt: new Date(), replacedById: null },
+      });
+    }
+
     const session = await this.prisma.authSession.create({
       data: {
         userId,

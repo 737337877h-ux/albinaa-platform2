@@ -34,8 +34,55 @@ export class HealthController {
       await this.prisma.$queryRaw`SELECT 1`;
       return { status: 'ok', database: 'connected', latencyMs: Date.now() - t0 };
     } catch {
-      // لا نُسرّب رسالة الخطأ الأصلية (قد تحتوي DSN)
       throw new ServiceUnavailableException('قاعدة البيانات غير متاحة');
     }
+  }
+
+  /**
+   * Readiness Probe — هل الخدمة جاهزة لتلقي الطلبات؟
+   * يتحقق من اتصال قاعدة البيانات + وقت التشغيل (>10 ثوانٍ للتهيئة).
+   */
+  @Public()
+  @Get('ready')
+  @ApiOperation({ summary: 'جاهزة للخدمة' })
+  async ready() {
+    const uptimeMs = Date.now() - startedAt;
+    if (uptimeMs < 10_000) {
+      throw new ServiceUnavailableException('الخدمة في مرحلة التهيئة');
+    }
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+      return {
+        status: 'ready',
+        checks: {
+          database: 'ok',
+          uptimeSeconds: Math.floor(uptimeMs / 1000),
+          memoryMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        },
+      };
+    } catch {
+      throw new ServiceUnavailableException('الخدمة غير جاهزة — قاعدة البيانات غير متاحة');
+    }
+  }
+
+  /**
+   * Liveness Probe — هل الخدمة حية؟
+   * فحص خفيف لا يعتمد على أي مورد خارجي.
+   */
+  @Public()
+  @Get('live')
+  @ApiOperation({ summary: 'الخدمة حية' })
+  live() {
+    const mem = process.memoryUsage();
+    return {
+      status: 'alive',
+      uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+      memory: {
+        heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+        heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
+        rssMB: Math.round(mem.rss / 1024 / 1024),
+      },
+      timestamp: new Date().toISOString(),
+    };
   }
 }

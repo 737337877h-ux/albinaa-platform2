@@ -276,6 +276,7 @@ model CustomerAssignment {
 
   // ملاحظة: الفهرس الفريد الجزئي uq_current_assignment (WHERE effective_to IS NULL)
   // معرّف في migration SQL — يضمن إسنادًا حاليًا واحدًا فقط لكل عميل.
+  @@index([collectorId, effectiveFrom], map: "idx_assignments_collector")
   @@map("customer_assignments")
 }
 
@@ -408,6 +409,7 @@ model CustomerBalance {
   lastImportJob ImportJob? @relation(fields: [lastImportJobId], references: [id])
 
   @@unique([customerId, currencyCode], map: "uq_balance_customer_currency")
+  @@index([customerId], map: "idx_balances_customer")
   @@map("customer_balances")
 }
 
@@ -523,6 +525,7 @@ model Collection {
 
   @@index([customerId, currencyCode, collectedAt], map: "idx_collections_customer")
   @@index([collectorId, collectedAt], map: "idx_collections_collector")
+  @@index([status, collectedAt], map: "idx_collections_status")
   @@map("collections")
 }
 
@@ -592,6 +595,7 @@ model Followup {
 
   @@index([customerId, followupAt], map: "idx_followups_customer")
   @@index([nextFollowupDate], map: "idx_followups_next")
+  @@index([userId, followupAt], map: "idx_followups_user")
   @@map("followups")
 }
 
@@ -617,6 +621,8 @@ model PaymentPromise {
   tasks          Task[]
 
   @@index([promiseDate, status], map: "idx_promises_date")
+  @@index([customerId, status], map: "idx_promises_customer")
+  @@index([dueDate, status], map: "idx_promises_due")
   @@map("payment_promises")
 }
 
@@ -641,6 +647,7 @@ model Task {
   sourcePromise PaymentPromise? @relation(fields: [sourcePromiseId], references: [id])
 
   @@index([assignedTo, dueDate, status], map: "idx_tasks_due")
+  @@index([customerId], map: "idx_tasks_customer")
   @@map("tasks")
 }
 
