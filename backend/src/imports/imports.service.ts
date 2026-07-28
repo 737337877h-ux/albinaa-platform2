@@ -8,7 +8,7 @@ import * as path from 'path';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
-import { ParsedAccount, ParseResultJson, ParserService } from './parser.service';
+import { ParseResultJson, ParserService } from './parser.service';
 
 const CHUNK = 500;
 
@@ -232,7 +232,7 @@ export class ImportsService {
     actor: AuthUser,
     jobId: string,
     parsed: ParseResultJson,
-    ruleErrors: any[],
+    _ruleErrors: any[],
   ) {
     const executeErrors: { account: string; message: string }[] = [];
     const knownCurrencies = new Set(
@@ -500,8 +500,8 @@ export class ImportsService {
       include: { uploader: { select: { id: true, fullName: true } } },
     });
     if (!job) throw new NotFoundException('عملية الاستيراد غير موجودة');
-    const { errorReport, ...rest } = job as any;
-    return rest; // التفاصيل الكاملة للأخطاء عبر /errors والتقرير عبر /report
+    const { errorReport: _errorReport, ...rest } = job as any;
+    return rest;
   }
 
   async getReport(actor: AuthUser, id: string) {

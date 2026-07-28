@@ -1,5 +1,7 @@
-import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, InternalServerErrorException, StreamableFile } from '@nestjs/common';
 import * as fs from 'fs';
+import { createReadStream } from 'fs';
+import { extname } from 'path';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { GpsPointDto } from './dto/gps-point.dto';
@@ -32,6 +34,34 @@ export class MobileService {
       if (file?.path) fs.unlink(file.path, () => {});
       throw new InternalServerErrorException('فشل حفظ السند');
     }
+  }
+
+  async downloadReceipt(user: AuthUser, id: string): Promise<StreamableFile> {
+    const attachment = await this.prisma.attachment.findUnique({ where: { id } });
+    if (!attachment) throw new NotFoundException('السند غير موجود');
+
+    const collection = await this.prisma.collection.findFirst({
+      where: {
+        id: attachment.entityId,
+        collector: { user: { organizationId: user.organizationId } },
+      },
+    });
+    if (!collection) throw new NotFoundException('السند غير موجود أو خارج نطاق صلاحيتك');
+
+    const filePath = attachment.storageKey;
+    if (!fs.existsSync(filePath)) throw new NotFoundException('ملف السند غير موجود على الخادم');
+
+    const ext = extname(attachment.fileName);
+    const mimeMap: Record<string, string> = {
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.png': 'image/png', '.gif': 'image/gif',
+      '.webp': 'image/webp', '.pdf': 'application/pdf',
+    };
+
+    return new StreamableFile(createReadStream(filePath), {
+      type: mimeMap[ext] || 'application/octet-stream',
+      disposition: `inline; filename="${attachment.fileName}"`,
+    });
   }
 
   async saveGps(user: AuthUser, dto: GpsPointDto) {

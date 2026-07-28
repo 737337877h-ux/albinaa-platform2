@@ -41,7 +41,7 @@ describe('resolvePythonBin', () => {
     // In CI/Docker: python3 should exist
     let found = false;
     let lastError: unknown;
-    for (const cmd of ['python3', 'python', 'py']) {
+    for (const _cmd of ['python3', 'python', 'py']) {
       try {
         const result = resolvePythonBin();
         expect(typeof result).toBe('string');

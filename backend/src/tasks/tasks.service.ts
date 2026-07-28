@@ -114,7 +114,6 @@ export class TasksService {
       },
     });
     this.logger.debug(`[today] بعد جلب assigned — العدد=${assigned.length}`);
-    const assignedIds = assigned.map((c) => c.id);
 
     // 1) مهام الوعود المفتوحة المستحقة اليوم أو المتأخرة (تشمل التصعيدات)
     const promiseTasks = await this.prisma.task.findMany({

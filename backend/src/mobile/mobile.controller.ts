@@ -1,8 +1,9 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Post, UploadedFile, UseInterceptors,
+  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Post, StreamableFile, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { diskStorage } from 'multer';
 import * as fs from 'fs';
 import { extname, join } from 'path';
@@ -16,7 +17,7 @@ import { MobileService } from './mobile.service';
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'];
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf'];
 
-const uploadDir = join(process.cwd(), 'uploads');
+const uploadDir = process.env.UPLOAD_DIR || join(process.cwd(), 'uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
 
 function fileFilter(_req: any, file: Express.Multer.File, cb: (error: Error | null, accept: boolean) => void) {
@@ -45,8 +46,9 @@ const storage = diskStorage({
 export class MobileController {
   constructor(private readonly mobile: MobileService) {}
 
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
   @Post('upload-receipt')
-  @ApiOperation({ summary: 'رفع صورة سند تحصيل' })
+  @ApiOperation({ summary: 'رفع صورة سند تحصيل — حد 20 طلب/دقيقة' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     description: 'صورة السند مع معرّف التحصيل',
@@ -66,6 +68,15 @@ export class MobileController {
     @Body() dto: UploadReceiptDto,
   ) {
     return this.mobile.uploadReceipt(user, file, dto);
+  }
+
+  @Get('receipts/:id')
+  @ApiOperation({ summary: 'تحميل صورة سند تحصيل' })
+  downloadReceipt(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<StreamableFile> {
+    return this.mobile.downloadReceipt(user, id);
   }
 
   @Post('gps')
