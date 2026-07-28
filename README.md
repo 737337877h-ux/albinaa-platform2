@@ -30,7 +30,7 @@ cd albinaa-platform
 # 2. إعداد قاعدة البيانات
 docker compose up -d db
 cp backend/.env.example backend/.env
-# عدّل DATABASE_URL في backend/.env (المنفذ 5433)
+# عدّل DATABASE_URL في backend/.env (المنفذ 6543)
 
 # 3. تطبيق Migrations والبيانات المرجعية
 cd backend

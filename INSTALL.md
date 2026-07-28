@@ -35,7 +35,7 @@ cd backend
 cp .env.example .env
 
 # تعديل DATABASE_URL ليتوافق مع Docker
-# DATABASE_URL="postgresql://albinaa:albinaa_dev_only@localhost:5433/albinaa?schema=public"
+# DATABASE_URL="postgresql://albinaa:albinaa_dev_only@localhost:6543/albinaa?schema=public"
 
 # تثبيت التبعيات
 npm install
@@ -87,7 +87,7 @@ npm run dev
 ## حل المشاكل الشائعة
 
 ### الخطأ: `password authentication failed`
-تأكد من أن PostgreSQL يعمل على المنفذ الصحيح (5433) وأن DATABASE_URL يطابق.
+تأكد من أن PostgreSQL يعمل على المنفذ الصحيح (6543) وأن DATABASE_URL يطابق.
 
 ### الخطأ: `python3: command not found`
 مثبّت Python 3 و `openpyxl`:
