@@ -8,11 +8,11 @@ COPY backend/package*.json ./
 RUN npm ci
 
 FROM node:22-alpine AS build
-WORKDIR /app/backend
-COPY --from=deps /app/backend/node_modules ./node_modules
-COPY backend/ ./
-COPY prisma/ ../prisma/
-RUN npx prisma generate --schema=../prisma/schema.prisma && npm run build
+WORKDIR /app
+COPY --from=deps /app/backend/node_modules ./backend/node_modules
+COPY backend/ ./backend/
+COPY prisma/ ./prisma/
+RUN cd /app/backend && npx prisma generate --schema=../prisma/schema.prisma && npm run build
 
 FROM node:22-alpine AS runtime
 WORKDIR /app
