@@ -785,6 +785,18 @@ model SystemSetting {
 }
 
 // ---------------------------------------------------------------------------
+// Milestone 8: Idempotency keys (منع تكرار العمليات من تطبيق المحصل)
+// ---------------------------------------------------------------------------
+model IdempotencyKey {
+  key         String   @id
+  response    Json     @db.JsonB
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([createdAt], map: "idx_idempotency_created")
+  @@map("idempotency_keys")
+}
+
+// ---------------------------------------------------------------------------
 // Milestone 2: جلسات المصادقة (Refresh Tokens مجزأة وقابلة للإبطال)
 // سبب الإضافة موثق في migration 20260718000000_auth_sessions
 // ---------------------------------------------------------------------------

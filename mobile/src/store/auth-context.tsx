@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { AuthUser, login as apiLogin, logout as apiLogout, getMe } from '../api/auth';
-import { clearTokens } from '../api/client';
+import { clearTokens } from '../utils/secure-storage';
 
 interface AuthState {
   user: AuthUser | null;

@@ -4,6 +4,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { CreatePromiseDto } from './dto/create-promise.dto';
@@ -18,6 +19,7 @@ import { PromisesService } from './promises.service';
 export class PromisesController {
   constructor(private readonly promises: PromisesService) {}
 
+  @Idempotent()
   @Post()
   @RequirePermissions('promises.create')
   @ApiOperation({ summary: 'تسجيل وعد سداد — ينشئ مهمة تلقائية بتاريخ الاستحقاق + تذكيرًا للمحصل' })

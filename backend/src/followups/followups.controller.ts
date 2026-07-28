@@ -4,6 +4,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { CreateFollowupDto } from './dto/create-followup.dto';
@@ -17,6 +18,7 @@ import { FollowupsService } from './followups.service';
 export class FollowupsController {
   constructor(private readonly followups: FollowupsService) {}
 
+  @Idempotent()
   @Post()
   @RequirePermissions('followups.create')
   @ApiOperation({ summary: 'تسجيل متابعة — النتيجة إلزامية (قاعدة معتمدة)' })

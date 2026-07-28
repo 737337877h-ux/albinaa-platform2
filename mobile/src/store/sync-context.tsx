@@ -1,8 +1,10 @@
 import React, { createContext, useContext, useEffect, useRef, ReactNode } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
-import { fetchSync } from '../api/endpoints';
-import { getMeta, setMeta, upsert, enqueueMutation, getPendingMutations, removeMutation, incrementRetry, getUnsyncedGps, markGpsSynced } from '../db/database';
-import { uploadGps } from '../api/endpoints';
+import { fetchSync, uploadGps } from '../api/endpoints';
+import {
+  getMeta, setMeta, upsert, getPendingMutations, removeMutation, incrementRetry,
+  getUnsyncedGps, markGpsSynced,
+} from '../db/database';
 import { useAuth } from './auth-context';
 import { SYNC_INTERVAL_MS } from '../utils/constants';
 
@@ -26,11 +28,22 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     const mutations = await getPendingMutations();
     for (const m of mutations) {
       try {
-        await enqueueMutation(m.operationId, m.type, m.endpoint, JSON.parse(m.payload));
+        const { default: client } = await import('../api/client');
+        const payload = JSON.parse(m.payload);
+        await client({
+          method: m.type.toLowerCase(),
+          url: m.endpoint,
+          data: payload,
+          headers: { 'Idempotency-Key': m.operationId },
+        });
         await removeMutation(m.id);
       } catch (err: any) {
-        await incrementRetry(m.id, err.message);
-        if (m.retryCount >= 3) await removeMutation(m.id);
+        if (err?.response?.status && err.response.status < 500 && err.response.status !== 409) {
+          await removeMutation(m.id);
+        } else {
+          await incrementRetry(m.id, err.message);
+          if (m.retryCount >= 5) await removeMutation(m.id);
+        }
       }
     }
   };

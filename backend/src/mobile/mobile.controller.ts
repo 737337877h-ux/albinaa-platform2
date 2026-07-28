@@ -8,6 +8,7 @@ import { diskStorage } from 'multer';
 import * as fs from 'fs';
 import { extname, join } from 'path';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { GpsPointDto } from './dto/gps-point.dto';
 import { SyncRequestDto } from './dto/sync-request.dto';
@@ -46,6 +47,7 @@ const storage = diskStorage({
 export class MobileController {
   constructor(private readonly mobile: MobileService) {}
 
+  @Idempotent()
   @Throttle({ default: { ttl: 60_000, limit: 20 } })
   @Post('upload-receipt')
   @ApiOperation({ summary: 'رفع صورة سند تحصيل — حد 20 طلب/دقيقة' })
@@ -79,12 +81,14 @@ export class MobileController {
     return this.mobile.downloadReceipt(user, id);
   }
 
+  @Idempotent()
   @Post('gps')
   @ApiOperation({ summary: 'رفع نقطة GPS' })
   saveGps(@CurrentUser() user: AuthUser, @Body() dto: GpsPointDto) {
     return this.mobile.saveGps(user, dto);
   }
 
+  @Idempotent()
   @Post('gps/batch')
   @ApiOperation({ summary: 'رفع مجموعة نقاط GPS' })
   saveGpsBatch(@CurrentUser() user: AuthUser, @Body() dtos: GpsPointDto[]) {

@@ -4,6 +4,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { CollectionsService } from './collections.service';
@@ -17,6 +18,7 @@ import { ReverseCollectionDto } from './dto/reverse-collection.dto';
 export class CollectionsController {
   constructor(private readonly collections: CollectionsService) {}
 
+  @Idempotent()
   @Post()
   @RequirePermissions('collections.create')
   @ApiOperation({

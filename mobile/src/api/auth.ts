@@ -1,4 +1,5 @@
-import client, { setTokens } from './client';
+import client from './client';
+import { setTokens } from '../utils/secure-storage';
 
 export interface LoginResponse {
   accessToken: string;

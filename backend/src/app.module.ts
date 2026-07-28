@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { validateEnv } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
@@ -26,6 +26,7 @@ import { MobileModule } from './mobile/mobile.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 
 @Module({
   imports: [
@@ -54,10 +55,11 @@ import { RolesGuard } from './common/guards/roles.guard';
     MobileModule,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },   // 1) Rate limiting
-    { provide: APP_GUARD, useClass: JwtAuthGuard },     // 2) مصادقة JWT (مع @Public)
-    { provide: APP_GUARD, useClass: RolesGuard },       // 3) أدوار
-    { provide: APP_GUARD, useClass: PermissionsGuard }, // 4) صلاحيات دقيقة
+    { provide: APP_GUARD, useClass: ThrottlerGuard },         // 1) Rate limiting
+    { provide: APP_GUARD, useClass: JwtAuthGuard },           // 2) مصادقة JWT (مع @Public)
+    { provide: APP_GUARD, useClass: RolesGuard },             // 3) أدوار
+    { provide: APP_GUARD, useClass: PermissionsGuard },       // 4) صلاحيات دقيقة
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor }, // 5) Idempotency
   ],
 })
 export class AppModule {}
