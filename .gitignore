@@ -14,6 +14,7 @@ coverage/
 .next/
 out/
 __pycache__/
+generated/
 test-output-*.txt
 .eslintcache
 nginx/ssl/*.pem

@@ -1,6 +1,6 @@
 # ============================================================================
-# منصة البناء الراقي — Backend (Milestone 2)
-# بناء متعدد المراحل: صورة نهائية صغيرة بدون أدوات بناء
+# Albinaa Platform — Backend (Milestone 2)
+# Multi-stage build: small runtime image without build tools
 # ============================================================================
 FROM node:22-alpine AS deps
 WORKDIR /app/backend
@@ -11,8 +11,10 @@ FROM node:22-alpine AS build
 WORKDIR /app/backend
 COPY --from=deps /app/backend/node_modules ./node_modules
 COPY backend/ ./
-COPY prisma/ ../prisma/
-RUN npx prisma generate --schema=../prisma/schema.prisma && npm run build
+    COPY prisma/ ../prisma/
+    # Copy pre-generated Prisma Client (engine download unavailable in this Docker env)
+    COPY generated/prisma-client ./node_modules/.prisma/client
+    RUN npm run build
 
 FROM node:22-alpine AS runtime
 WORKDIR /app
