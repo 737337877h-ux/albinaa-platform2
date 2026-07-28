@@ -758,7 +758,7 @@ model AuditLog {
   userId      String?  @map("user_id") @db.Uuid
   action      String
   entityTable String   @map("entity_table")
-  entityId    String?  @map("entity_id") @db.Uuid
+  entityId    String?  @map("entity_id")
   oldValue    Json?    @map("old_value") @db.JsonB
   newValue    Json?    @map("new_value") @db.JsonB
   reason      String?

@@ -18,7 +18,7 @@ export function DataState({
   onRetry?: () => void;
   isFetching?: boolean;
   isEmpty: boolean;
-  emptyTitle: string;
+  emptyTitle?: string;
   emptyHint?: string;
   skeletonClassName?: string;
   children: React.ReactNode;
@@ -36,7 +36,7 @@ export function DataState({
       </div>
     );
   }
-  if (isEmpty) return <Empty title={emptyTitle} hint={emptyHint} />;
+  if (isEmpty) return <Empty title={emptyTitle ?? ''} hint={emptyHint} />;
   return <>{children}</>;
 }
 

@@ -41,8 +41,10 @@ describe('Milestone 7 — Administration + Mobile API (e2e)', () => {
   // -----------------------------------------------------------------------
   // (1) العملات — GET و PATCH مع settings.manage
   // -----------------------------------------------------------------------
-  it('GET /currencies — قائمة العملات (بدون صلاحية)', async () => {
-    const res = await request(app.getHttpServer()).get('/currencies').expect(200);
+  it('GET /currencies — قائمة العملات (مع التوكن)', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/currencies').set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThan(0);
   });
