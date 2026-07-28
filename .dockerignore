@@ -1,0 +1,9 @@
+node_modules
+frontend/.next
+backend/dist
+.git
+*.md
+.env*
+!.env.prod.example
+scripts/
+nginx/
