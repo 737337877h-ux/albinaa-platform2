@@ -105,7 +105,7 @@ export function createPromise(data: {
   notes?: string;
   collectorId?: string;
 }) {
-  return client.post('/promises', data);
+  return client.post('/payment-promises', data);
 }
 
 export function createCollection(data: {

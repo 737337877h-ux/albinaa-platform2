@@ -111,8 +111,11 @@ export class PromisesService {
       throw new ForbiddenException('لا يمكنك تسجيل وعد باسم محصل آخر');
     }
 
-    // البند ثانيًا: شرط الإسناد الحالي (لكل المستخدمين — والإشرافي نيابةً بعد نفس التحقق)
-    const customer = await this.assertCurrentAssignment(actor, dto.customerId, collectorId);
+    // البند ثانيًا: شرط الإسناد الحالي (لكل المستخدمين — والإشرافي customers.read_all يُعفى)
+    const isAdmin = actor.permissions.includes('customers.read_all');
+    const customer = isAdmin
+      ? await this.prisma.customer.findFirst({ where: { id: dto.customerId, organizationId: actor.organizationId } })
+      : await this.assertCurrentAssignment(actor, dto.customerId, collectorId);
     const currency = await this.prisma.currency.findFirst({
       where: { code: dto.currencyCode, active: true },
     });

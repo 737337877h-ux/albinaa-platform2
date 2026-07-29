@@ -95,7 +95,9 @@ export class CollectionsService {
       throw new BadRequestException('المحصل غير موجود أو غير نشط');
     }
     // البند ثانيًا (مراجعة M5): شرط الإسناد الحالي — للجميع، والإشرافي نيابةً بعد نفس التحقق
-    if (!currentAssignment) {
+    // Admins with customers.read_all bypass this check as they manage assignments
+    const isAdmin = actor.permissions.includes('customers.read_all');
+    if (!currentAssignment && !isAdmin) {
       throw new ForbiddenException('العميل غير مسند حاليًا لهذا المحصل — يلزم إسناد ساري');
     }
 
