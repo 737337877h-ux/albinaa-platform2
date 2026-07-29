@@ -1,15 +1,22 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, Platform } from 'react-native';
 import { useMutation } from '@tanstack/react-query';
 import { createPromise } from '../api/endpoints';
 import { enqueueMutation } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
 import { apiErrorMessage } from '../utils/errors';
 
+const CURRENCIES = ['YER', 'SAR', 'USD'];
+
 export default function NewPromiseScreen({ route, navigation }: any) {
   const customerId = route.params?.customerId || '';
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('YER');
+  const [dueDate, setDueDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().split('T')[0];
+  });
   const [notes, setNotes] = useState('');
 
   useEffect(() => {
@@ -25,11 +32,12 @@ export default function NewPromiseScreen({ route, navigation }: any) {
       if (!customerId) throw new Error('معرّف العميل مطلوب');
       const num = Number(amount);
       if (!Number.isFinite(num) || num <= 0) throw new Error('المبلغ يجب أن يكون أكبر من صفر');
+      if (!dueDate) throw new Error('تاريخ الاستحقاق مطلوب');
       const payload: any = {
         customerId,
         expectedAmount: num,
         currencyCode: currency,
-        dueDate: new Date(Date.now() + 7 * 86400000).toISOString(),
+        dueDate: new Date(dueDate).toISOString(),
         notes: notes || undefined,
       };
       try {
@@ -41,7 +49,7 @@ export default function NewPromiseScreen({ route, navigation }: any) {
       } catch (err: any) {
         if (!err?.response) {
           const opId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-          await enqueueMutation(opId, 'POST', '/promises', payload);
+          await enqueueMutation(opId, 'POST', '/payment-promises', payload);
           return { data: { id: opId, offline: true } };
         }
         throw err;
@@ -72,7 +80,7 @@ export default function NewPromiseScreen({ route, navigation }: any) {
 
       <Text style={styles.label}>العملة</Text>
       <View style={styles.currencyRow}>
-        {['YER', 'SAR', 'USD', 'AED'].map((c) => (
+        {CURRENCIES.map((c) => (
           <TouchableOpacity key={c} style={[styles.currencyBtn, currency === c && styles.currencyBtnActive]}
             onPress={() => setCurrency(c)}>
             <Text style={[styles.currencyText, currency === c && styles.currencyTextActive]}>{c}</Text>
@@ -80,10 +88,19 @@ export default function NewPromiseScreen({ route, navigation }: any) {
         ))}
       </View>
 
+      <Text style={styles.label}>تاريخ الاستحقاق</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="YYYY-MM-DD"
+        placeholderTextColor="#999"
+        value={dueDate}
+        onChangeText={setDueDate}
+      />
+
       <Text style={styles.label}>ملاحظات</Text>
       <TextInput style={styles.textarea} placeholder="ملاحظات..." placeholderTextColor="#999" value={notes} onChangeText={setNotes} multiline />
 
-      <TouchableOpacity style={styles.button} onPress={() => mutation.mutate()} disabled={!customerId || !amount || mutation.isPending}>
+      <TouchableOpacity style={styles.button} onPress={() => mutation.mutate()} disabled={!customerId || !amount || !dueDate || mutation.isPending}>
         <Text style={styles.buttonText}>{mutation.isPending ? 'جارٍ الحفظ...' : 'تسجيل'}</Text>
       </TouchableOpacity>
     </ScrollView>
