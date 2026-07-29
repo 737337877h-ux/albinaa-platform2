@@ -1,5 +1,6 @@
 {
   "expo": {
+    "owner": "alqalisi",
     "name": "ألبينا — محصل",
     "slug": "albinaa-collector",
     "version": "1.1.0",
@@ -27,12 +28,15 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.albinaa.collector",
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -61,6 +65,9 @@
         "development": "http://localhost:3000",
         "preview": "https://api.albinaa.com",
         "production": "https://api.albinaa.com"
+      },
+      "eas": {
+        "projectId": "1c9056d8-ce20-4d8f-8ee9-d6716ebf459b"
       }
     }
   }

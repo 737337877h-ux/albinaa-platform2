@@ -1,7 +1,7 @@
 # Milestone 8 — React Native Collector App (Final Delivery Report)
 
 **Initial Commit**: `16a5120` (feat: Milestone 8 — React Native Collector App)
-**Final Commit**: TBD (after this document)
+**Final Commit**: `3943e09` (docs: complete Milestone 8 release validation)
 **Branch**: `main`
 **Remote**: `https://github.com/737337877h-ux/albinaa-platform2.git`
 **Platform**: Expo SDK 57 (Managed Workflow) + TypeScript 6.0
@@ -347,18 +347,19 @@ Tables: `customers`, `tasks`, `followups`, `promises`, `collections`, `mutation_
 
 ### EAS Build
 
-| Field | Value |
-|---|---|
-| Expo account | TBD (requires owner credentials) |
-| Project ID | TBD |
-| Android package | `com.albinaa.collector` |
-| Version name | `1.1.0` |
-| Version code | `1` |
-| Build profile | `preview` / `production` |
-| APK/AAB size | TBD |
-| Build URL | TBD |
-| Installation result | TBD |
-| Login result | TBD |
+| Field | Preview | Production |
+|---|---|---|
+| Expo account | `alqalisi` | `alqalisi` |
+| Project ID | `1c9056d8-ce20-4d8f-8ee9-d6716ebf459b` | `1c9056d8-ce20-4d8f-8ee9-d6716ebf459b` |
+| Android package | `com.albinaa.collector` | `com.albinaa.collector` |
+| Version name | `1.1.0` | `1.1.0` |
+| Version code | `1` | `1` |
+| Build profile | `preview` | `production` |
+| Build type | APK | AAB |
+| Build URL | https://expo.dev/accounts/alqalisi/projects/albinaa-collector/builds/99c89a2c-db8c-4bb2-9374-15fcfe6e9aad | https://expo.dev/accounts/alqalisi/projects/albinaa-collector/builds/bc49d673-a532-4f65-ad90-82f5b3d2ad73 |
+| APK download | https://expo.dev/artifacts/eas/eYqCfIl0iVhFrPXtitDRaHGv2L30yj4AlxLZkOg11No.apk | N/A (AAB for store) |
+| Installation result | Pending (test on device) | Pending (Play Store) |
+| Login result | Pending | Pending |
 
 ---
 
@@ -377,17 +378,17 @@ Tables: `customers`, `tasks`, `followups`, `promises`, `collections`, `mutation_
 
 ## Pilot Release Plan
 
-### Phase 1: EAS Preview Build (Blocked)
-- [ ] `npx eas login` (requires Expo account credentials)
-- [ ] `npx eas build:configure`
-- [ ] `npx eas build --platform android --profile preview`
+### Phase 1: EAS Preview Build ✅
+- [x] `npx eas login` (Expo account: `alqalisi`)
+- [x] `npx eas build --platform android --profile preview`
+- [x] **APK ready**: https://expo.dev/artifacts/eas/eYqCfIl0iVhFrPXtitDRaHGv2L30yj4AlxLZkOg11No.apk
 - [ ] Install APK on test device
 - [ ] Run `OFFLINE_TEST_PLAN.md` scenarios
 - [ ] Run `GPS_TEST_PLAN.md` scenarios
 
-### Phase 2: Production Build
-- [ ] `npx eas build --platform android --profile production`
-- [ ] Generate AAB
+### Phase 2: Production Build ✅
+- [x] `npx eas build --platform android --profile production`
+- [x] **AAB ready**: https://expo.dev/artifacts/eas/ZAKPRY9WvL8ASh_8IPh_rsXcqEoUjIeWpO4tn6gdFZ8.aab
 - [ ] Upload to Play Store (internal testing track)
 
 ### Phase 3: Post-Release
@@ -509,6 +510,8 @@ All API calls go to the existing NestJS backend at `API_BASE_URL`:
 | Secure storage | **Centralized** — single module, refactored consumers |
 | SQLite migrations | **Version 2** — with PRAGMA-based migration engine |
 | EAS configuration | **Ready** — 3 profiles (dev/preview/production) |
+| EAS preview build | **Complete** — `alqalisi`, commit `3943e09`, APK downloadable |
+| EAS production build | **Complete** — AAB generated, ready for Play Store |
 | Expo configuration | **Complete** — Arabic name, icons, permissions |
 | Offline test plan | **Documented** — 15 scenarios + 10 failure modes |
 | GPS test plan | **Documented** — 13 scenarios + battery measurement |
