@@ -19,6 +19,15 @@
         "EXPO_PUBLIC_API_URL": "https://api.albinaa.com"
       }
     },
+    "local-test": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://192.168.83.30:3000"
+      }
+    },
     "production": {
       "android": {
         "buildType": "app-bundle"
