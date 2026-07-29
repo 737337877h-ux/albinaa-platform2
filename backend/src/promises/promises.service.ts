@@ -116,6 +116,7 @@ export class PromisesService {
     const customer = isAdmin
       ? await this.prisma.customer.findFirst({ where: { id: dto.customerId, organizationId: actor.organizationId } })
       : await this.assertCurrentAssignment(actor, dto.customerId, collectorId);
+    if (!customer) throw new NotFoundException('العميل غير موجود');
     const currency = await this.prisma.currency.findFirst({
       where: { code: dto.currencyCode, active: true },
     });
