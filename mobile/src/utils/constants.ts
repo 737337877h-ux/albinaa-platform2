@@ -1,6 +1,6 @@
-export const API_BASE_URL = __DEV__
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? (__DEV__
   ? 'http://localhost:3000'
-  : 'https://api.albinaa.com';
+  : 'https://api.albinaa.com');
 
 export const SYNC_INTERVAL_MS = 30_000;
 export const GPS_INTERVAL_MS = 10_000;
