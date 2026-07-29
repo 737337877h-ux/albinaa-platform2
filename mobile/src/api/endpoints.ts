@@ -19,6 +19,11 @@ export interface GpsPoint {
   recordedAt: string;
 }
 
+export interface NamedOption {
+  id: string;
+  name: string;
+}
+
 export function fetchSync(lastSyncToken?: string) {
   return client.post<SyncResponse>('/mobile/sync', { lastSyncToken });
 }
@@ -30,12 +35,21 @@ export function uploadGps(points: GpsPoint[]) {
   return client.post('/mobile/gps/batch', points);
 }
 
+function resolveUploadMime(fileUri: string, filename: string): string {
+  const lower = `${filename} ${fileUri}`.toLowerCase();
+  if (lower.includes('.png')) return 'image/png';
+  if (lower.includes('.webp')) return 'image/webp';
+  if (lower.includes('.gif')) return 'image/gif';
+  if (lower.includes('.pdf')) return 'application/pdf';
+  return 'image/jpeg';
+}
+
 export function uploadReceipt(fileUri: string, collectionId: string, notes?: string) {
   const form = new FormData();
-  const filename = fileUri.split('/').pop() || 'receipt.jpg';
-  const ext = filename.split('.').pop()?.toLowerCase() || 'jpg';
-  const mime = ext === 'pdf' ? 'application/pdf' : `image/${ext === 'jpeg' ? 'jpeg' : ext}`;
-  form.append('file', { uri: fileUri, name: filename, type: mime } as any);
+  const filename = fileUri.split('/').pop() || `receipt-${Date.now()}.jpg`;
+  const mime = resolveUploadMime(fileUri, filename);
+  const safeName = filename.includes('.') ? filename : `${filename}.jpg`;
+  form.append('file', { uri: fileUri, name: safeName, type: mime } as any);
   form.append('collectionId', collectionId);
   if (notes) form.append('notes', notes);
   return client.post('/mobile/upload-receipt', form, {
@@ -60,15 +74,50 @@ export function fetchCustomer360(id: string) {
   return client.get(`/mobile/customers/${id}`);
 }
 
-export function createFollowup(data: { customerId: string; typeId: string; resultId?: string; notes?: string; followupAt: string }) {
+export function fetchCollectionMethods() {
+  return client.get<NamedOption[]>('/collections/methods');
+}
+
+export function fetchFollowupTypes() {
+  return client.get<NamedOption[]>('/followups/types');
+}
+
+export function fetchFollowupResults() {
+  return client.get<NamedOption[]>('/followups/results');
+}
+
+export function createFollowup(data: {
+  customerId: string;
+  typeId: string;
+  resultId: string;
+  notes?: string;
+  followupAt?: string;
+  nextFollowupDate?: string;
+}) {
   return client.post('/followups', data);
 }
 
-export function createPromise(data: { customerId: string; expectedAmount: number; currencyCode: string; dueDate: string; notes?: string }) {
+export function createPromise(data: {
+  customerId: string;
+  expectedAmount: number;
+  currencyCode: string;
+  dueDate: string;
+  notes?: string;
+  collectorId?: string;
+}) {
   return client.post('/promises', data);
 }
 
-export function createCollection(data: { customerId: string; amount: number; currencyCode: string; methodId: string; notes?: string; collectedAt: string }) {
+export function createCollection(data: {
+  customerId: string;
+  amount: number;
+  currencyCode: string;
+  methodId: string;
+  notes?: string;
+  collectedAt?: string;
+  collectorId?: string;
+  referenceNumber?: string;
+}) {
   return client.post('/collections', data);
 }
 

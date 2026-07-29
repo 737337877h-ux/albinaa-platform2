@@ -8,7 +8,7 @@ export default function NotificationsScreen() {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['notifications'],
-    queryFn: () => fetchNotifications().then((r) => r.data),
+    queryFn: fetchNotifications,
   });
 
   const readMutation = useMutation({
@@ -23,7 +23,7 @@ export default function NotificationsScreen() {
 
   if (isLoading) return <Loading />;
 
-  const notifications = Array.isArray(data) ? data : [];
+  const notifications = data?.items ?? (Array.isArray(data) ? data : []);
 
   return (
     <View style={styles.container}>

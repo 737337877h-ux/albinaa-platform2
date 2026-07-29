@@ -99,68 +99,73 @@ export class MobileService {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const [tasks, customers, followups, promises, collections] = await Promise.all([
-      collectorId
+    const canReadAll = user.permissions.includes('customers.read_all');
+
+    const taskWhere: any = {
+      status: 'open',
+      dueDate: { gte: todayStart },
+      ...(since ? { createdAt: { gte: since } } : {}),
+    };
+    if (collectorId) taskWhere.assignedTo = collectorId;
+    else if (!canReadAll) taskWhere.assignedTo = 'no-access';
+
+    const [rawTasks, customers, rawFollowups, rawPromises, rawCollections] = await Promise.all([
+      collectorId || canReadAll
         ? this.prisma.task.findMany({
-            where: {
-              assignedTo: collectorId,
-              dueDate: { gte: todayStart },
-              ...(since ? { createdAt: { gte: since } } : {}),
-            },
+            where: taskWhere,
             include: {
               customer: { select: { id: true, name: true } },
             },
             orderBy: { dueDate: 'asc' },
+            take: 100,
           })
-        : [],
+        : Promise.resolve([]),
 
       this.findCustomers(user),
 
-      collectorId
-        ? this.prisma.followup.findMany({
-            where: {
-              userId: user.id,
-              deletedAt: null,
-              ...(since ? { followupAt: { gte: since } } : {}),
-            },
-            include: {
-              customer: { select: { id: true, name: true } },
-              type: { select: { name: true } },
-              result: { select: { name: true } },
-            },
-            orderBy: { followupAt: 'desc' },
-            take: 50,
-          })
-        : [],
+      this.prisma.followup.findMany({
+        where: {
+          deletedAt: null,
+          ...(collectorId && !canReadAll ? { userId: user.id } : { customer: { organizationId: user.organizationId } }),
+          ...(since ? { followupAt: { gte: since } } : {}),
+        },
+        include: {
+          customer: { select: { id: true, name: true } },
+          type: { select: { name: true } },
+          result: { select: { name: true } },
+        },
+        orderBy: { followupAt: 'desc' },
+        take: 50,
+      }),
 
-      collectorId
-        ? this.prisma.paymentPromise.findMany({
-            where: {
-              collectorId,
-              ...(since ? { createdAt: { gte: since } } : {}),
-            },
-            include: {
-              customer: { select: { id: true, name: true } },
-            },
-            orderBy: { createdAt: 'desc' },
-            take: 50,
-          })
-        : [],
+      this.prisma.paymentPromise.findMany({
+        where: {
+          ...(collectorId && !canReadAll
+            ? { collectorId }
+            : { customer: { organizationId: user.organizationId } }),
+          ...(since ? { createdAt: { gte: since } } : {}),
+        },
+        include: {
+          customer: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      }),
 
-      collectorId
-        ? this.prisma.collection.findMany({
-            where: {
-              collectorId,
-              ...(since ? { collectedAt: { gte: since } } : {}),
-            },
-            include: {
-              customer: { select: { id: true, name: true } },
-              method: { select: { name: true } },
-            },
-            orderBy: { collectedAt: 'desc' },
-            take: 50,
-          })
-        : [],
+      this.prisma.collection.findMany({
+        where: {
+          ...(collectorId && !canReadAll
+            ? { collectorId }
+            : { customer: { organizationId: user.organizationId } }),
+          ...(since ? { collectedAt: { gte: since } } : {}),
+        },
+        include: {
+          customer: { select: { id: true, name: true } },
+          method: { select: { name: true } },
+        },
+        orderBy: { collectedAt: 'desc' },
+        take: 50,
+      }),
     ]);
 
     const syncToken = new Date().toISOString();
@@ -168,11 +173,45 @@ export class MobileService {
     return {
       serverTime: syncToken,
       syncToken,
-      tasks,
+      tasks: rawTasks.map((t) => ({
+        id: t.id,
+        customerId: t.customerId,
+        customerName: t.customer?.name ?? null,
+        title: t.priorityReason || t.taskType,
+        dueDate: t.dueDate,
+        priority: t.taskType,
+        status: t.status,
+      })),
       customers,
-      followups,
-      promises,
-      collections,
+      followups: rawFollowups.map((f) => ({
+        id: f.id,
+        customerId: f.customerId,
+        customerName: f.customer?.name ?? null,
+        typeName: f.type?.name ?? null,
+        resultName: f.result?.name ?? null,
+        notes: f.notes,
+        followupAt: f.followupAt,
+      })),
+      promises: rawPromises.map((p) => ({
+        id: p.id,
+        customerId: p.customerId,
+        customerName: p.customer?.name ?? null,
+        expectedAmount: Number(p.expectedAmount),
+        currencyCode: p.currencyCode,
+        dueDate: p.dueDate,
+        status: p.status,
+        notes: p.notes,
+      })),
+      collections: rawCollections.map((c) => ({
+        id: c.id,
+        customerId: c.customerId,
+        customerName: c.customer?.name ?? null,
+        amount: Number(c.amount),
+        currencyCode: c.currencyCode,
+        methodName: c.method?.name ?? null,
+        notes: c.notes,
+        collectedAt: c.collectedAt,
+      })),
     };
   }
 

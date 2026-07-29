@@ -20,14 +20,42 @@ const queryClient = new QueryClient({
   },
 });
 
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: any, info: any) {
+    console.error('App Error:', error, info?.componentStack);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f4f8' }}>
+          <Text style={{ fontSize: 18, color: '#333', marginBottom: 16 }}>حدث خطأ غير متوقع</Text>
+          <Text style={{ fontSize: 14, color: '#666' }}>يرجى إعادة تشغيل التطبيق</Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+import { View, Text } from 'react-native';
+
 export default function App() {
   return (
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <SyncProvider>
-            <StatusBar style="light" />
-            <RootNavigator />
+            <ErrorBoundary>
+              <StatusBar style="light" />
+              <RootNavigator />
+            </ErrorBoundary>
           </SyncProvider>
         </AuthProvider>
       </QueryClientProvider>

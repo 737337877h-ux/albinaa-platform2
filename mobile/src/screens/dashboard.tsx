@@ -11,12 +11,23 @@ export default function DashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
   const [localTasks, setLocalTasks] = React.useState<any[]>([]);
   const [localCollections, setLocalCollections] = React.useState<any[]>([]);
+  const [localCustomers, setLocalCustomers] = React.useState<any[]>([]);
+  const [localFollowups, setLocalFollowups] = React.useState<any[]>([]);
 
   useFocusEffect(
     React.useCallback(() => {
       (async () => {
-        setLocalTasks(await getAll('tasks'));
-        setLocalCollections(await getAll('collections'));
+        const today = new Date().toISOString().split('T')[0];
+        const [tasks, collections, customers, followups] = await Promise.all([
+          getAll('tasks'),
+          getAll('collections'),
+          getAll('customers'),
+          getAll('followups'),
+        ]);
+        setLocalTasks(tasks);
+        setLocalCollections(collections.filter((c: any) => c.collectedAt?.startsWith(today)));
+        setLocalCustomers(customers);
+        setLocalFollowups(followups.filter((f: any) => f.followupAt?.startsWith(today)));
       })();
     }, []),
   );
@@ -33,7 +44,7 @@ export default function DashboardScreen({ navigation }: any) {
 
   if (isLoading && !syncData) return <Loading />;
 
-  const tasks = syncData?.tasks || localTasks || [];
+  const tasks = syncData?.tasks?.length ? syncData.tasks : localTasks;
   const todayTasks = tasks.filter((t: any) => {
     if (!t.dueDate) return false;
     const today = new Date().toISOString().split('T')[0];
@@ -54,8 +65,8 @@ export default function DashboardScreen({ navigation }: any) {
         <Card title="تحصيلات اليوم" value={localCollections.length} color="#34a853" onPress={() => navigation.navigate('NewCollection')} />
       </View>
       <View style={styles.cardsRow}>
-        <Card title="العملاء" value={syncData?.customers?.length || 0} color="#fbbc04" onPress={() => navigation.navigate('Customers')} />
-        <Card title="المتابعات" value={syncData?.followups?.length || 0} color="#ea4335" onPress={() => navigation.navigate('NewFollowup')} />
+        <Card title="العملاء" value={localCustomers.length} color="#fbbc04" onPress={() => navigation.navigate('Customers')} />
+        <Card title="المتابعات" value={localFollowups.length} color="#ea4335" onPress={() => navigation.navigate('NewFollowup')} />
       </View>
 
       <Text style={styles.sectionTitle}>مهام اليوم</Text>

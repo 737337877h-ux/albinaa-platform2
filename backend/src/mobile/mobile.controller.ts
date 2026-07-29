@@ -15,18 +15,37 @@ import { SyncRequestDto } from './dto/sync-request.dto';
 import { UploadReceiptDto } from './dto/upload-receipt.dto';
 import { MobileService } from './mobile.service';
 
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'];
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg',
+  'image/jpg',
+  'image/pjpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'application/pdf',
+];
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf'];
 
 const uploadDir = process.env.UPLOAD_DIR || join(process.cwd(), 'uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
 
+function normalizeMime(mime: string | undefined): string {
+  const m = (mime || '').toLowerCase().trim();
+  if (m === 'image/jpg' || m === 'image/pjpeg') return 'image/jpeg';
+  return m;
+}
+
 function fileFilter(_req: any, file: Express.Multer.File, cb: (error: Error | null, accept: boolean) => void) {
-  if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+  const mime = normalizeMime(file.mimetype);
+  file.mimetype = mime;
+  if (!ALLOWED_MIME_TYPES.includes(mime) && !ALLOWED_MIME_TYPES.includes(file.mimetype)) {
     return cb(new BadRequestException(`نوع الملف غير مسموح: ${file.mimetype}`), false);
   }
-  const ext = extname(file.originalname).toLowerCase();
-  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+  if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'].includes(mime)) {
+    return cb(new BadRequestException(`نوع الملف غير مسموح: ${file.mimetype}`), false);
+  }
+  const ext = extname(file.originalname || '').toLowerCase();
+  if (ext && !ALLOWED_EXTENSIONS.includes(ext)) {
     return cb(new BadRequestException(`امتداد الملف غير مسموح: ${ext}`), false);
   }
   cb(null, true);

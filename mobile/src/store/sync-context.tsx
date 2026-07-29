@@ -20,6 +20,24 @@ const SyncContext = createContext<SyncContextValue>({
   syncGps: async () => {},
 });
 
+const TABLE_COLUMNS: Record<string, string[]> = {
+  customers: ['id', 'fullName', 'phonePrimary', 'address', 'balances'],
+  tasks: ['id', 'customerId', 'customerName', 'title', 'dueDate', 'priority', 'status'],
+  followups: ['id', 'customerId', 'customerName', 'typeName', 'resultName', 'notes', 'followupAt'],
+  promises: ['id', 'customerId', 'customerName', 'expectedAmount', 'currencyCode', 'dueDate', 'status', 'notes'],
+  collections: ['id', 'customerId', 'customerName', 'amount', 'currencyCode', 'methodName', 'notes', 'collectedAt'],
+};
+
+function pickColumns(table: string, record: Record<string, any>) {
+  const allowed = TABLE_COLUMNS[table] || Object.keys(record);
+  const out: Record<string, any> = {};
+  for (const key of allowed) {
+    if (record[key] !== undefined) out[key] = record[key];
+  }
+  if (!out.id) return null;
+  return out;
+}
+
 export function SyncProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuth();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -72,11 +90,30 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       const res = await fetchSync(lastToken || undefined);
       const { syncToken, tasks, customers, followups, promises, collections } = res.data;
       await setMeta('syncToken', syncToken);
-      for (const c of customers) await upsert('customers', { ...c, balances: JSON.stringify(c.balances || []) });
-      for (const t of tasks) await upsert('tasks', t);
-      for (const f of followups) await upsert('followups', f);
-      for (const p of promises) await upsert('promises', p);
-      for (const c of collections) await upsert('collections', c);
+
+      for (const c of customers || []) {
+        const row = pickColumns('customers', {
+          ...c,
+          balances: typeof c.balances === 'string' ? c.balances : JSON.stringify(c.balances || []),
+        });
+        if (row) await upsert('customers', row);
+      }
+      for (const t of tasks || []) {
+        const row = pickColumns('tasks', t);
+        if (row) await upsert('tasks', row);
+      }
+      for (const f of followups || []) {
+        const row = pickColumns('followups', f);
+        if (row) await upsert('followups', row);
+      }
+      for (const p of promises || []) {
+        const row = pickColumns('promises', p);
+        if (row) await upsert('promises', row);
+      }
+      for (const c of collections || []) {
+        const row = pickColumns('collections', c);
+        if (row) await upsert('collections', row);
+      }
     } catch { /* will retry next cycle */ }
   };
 
