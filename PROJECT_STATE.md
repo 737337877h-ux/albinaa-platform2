@@ -2,7 +2,7 @@
 
 ## Last Commit
 ```
-f9995e7 - fix: promises endpoint /payment-promises and admin bypass assignment check
+d721c13 - fix(new-promise): add dueDate input field, remove AED, fix offline queue endpoint
 ```
 
 ## Current Status
@@ -54,11 +54,12 @@ npx eas build --platform android --profile local-test --local
 
 ## New Features (NOT in Sprint - Requires Separate Discussion)
 
-1. Remove AED currency - make dynamic from API
-2. Call/SMS/WhatsApp buttons in Customer360
-3. Customer location/map display
-4. Promise due date field
+1. ~~Remove AED currency~~ ✅ Fixed - only YER, SAR, USD now
+2. ~~Promise due date field~~ ✅ Fixed - added input field
+3. Call/SMS/WhatsApp buttons in Customer360
+4. Customer location/map display
 5. Interactive notifications with deep linking
+6. Make currencies dynamic from API (currently hardcoded but only allowed ones shown)
 
 ---
 
