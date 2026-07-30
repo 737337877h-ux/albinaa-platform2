@@ -18,9 +18,18 @@ export default function CustomersScreen({ navigation }: any) {
     }, []),
   );
 
-  const filtered = customers.filter((c) =>
-    !search || c.fullName?.includes(search) || c.phonePrimary?.includes(search),
-  );
+  const filtered = (() => {
+    const seen = new Set();
+    const unique: any[] = [];
+    for (const c of customers) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      unique.push(c);
+    }
+    return unique.filter((c) =>
+      !search || c.fullName?.includes(search) || c.phonePrimary?.includes(search),
+    );
+  })();
 
   if (loading) return <Loading />;
 

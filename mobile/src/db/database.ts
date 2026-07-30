@@ -133,6 +133,19 @@ export async function getAll(table: string): Promise<any[]> {
   return await d.getAllAsync(`SELECT * FROM ${table} ORDER BY updatedAt DESC`);
 }
 
+export async function dedupeTable(table: string): Promise<number> {
+  const d = await getDb();
+  // Keep the most recent record (by updatedAt) per id, delete older duplicates
+  const result = await d.runAsync(
+    `DELETE FROM ${table} WHERE id IN (
+      SELECT id FROM ${table} WHERE rowid NOT IN (
+        SELECT MAX(rowid) FROM ${table} GROUP BY id
+      )
+    )`,
+  );
+  return (result as any)?.changes ?? 0;
+}
+
 export async function getById(table: string, id: string): Promise<any> {
   const d = await getDb();
   return await d.getFirstAsync(`SELECT * FROM ${table} WHERE id = ?`, id);

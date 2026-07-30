@@ -97,6 +97,14 @@ export class CollectionsService {
       throw new BadRequestException('المحصل غير موجود أو غير نشط');
     }
     // Admins with customers.read_all bypass assignment check
+    console.log('[COLLECTION_DEBUG]', JSON.stringify({
+      actorId: actor.id,
+      collectorId,
+      customerId: dto.customerId,
+      hasCustomersReadAll: actor.permissions.includes('customers.read_all'),
+      isAdminBypass: isAdmin && !currentAssignment,
+      assignmentCheckExecuted: true,
+    }));
     if (!currentAssignment && !isAdmin) {
       throw new ForbiddenException('العميل غير مسند حاليًا لهذا المحصل — يلزم إسناد ساري');
     }

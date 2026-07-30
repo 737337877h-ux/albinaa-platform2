@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createCollection, fetchCollectionMethods } from '../api/endpoints';
 import { enqueueMutation } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
 import { apiErrorMessage } from '../utils/errors';
+import { useSync } from '../store/sync-context';
 
 export default function NewCollectionScreen({ route, navigation }: any) {
   const customerId = route.params?.customerId || '';
@@ -12,6 +13,8 @@ export default function NewCollectionScreen({ route, navigation }: any) {
   const [currency, setCurrency] = useState('YER');
   const [methodId, setMethodId] = useState('');
   const [notes, setNotes] = useState('');
+  const queryClient = useQueryClient();
+  const { triggerSync } = useSync();
 
   const methodsQuery = useQuery({
     queryKey: ['collection-methods'],
@@ -59,6 +62,14 @@ export default function NewCollectionScreen({ route, navigation }: any) {
     },
     onSuccess: (res: any) => {
       const collectionId = res?.data?.id || res?.id || '';
+      // Invalidate all related queries so Customer360/Dashboard/Collections refetch
+      queryClient.invalidateQueries({ queryKey: ['customer-details'] });
+      queryClient.invalidateQueries({ queryKey: ['customer-timeline'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['collections'] });
+      queryClient.invalidateQueries({ queryKey: ['sync'] });
+      // Trigger local sync refresh
+      triggerSync();
       Alert.alert('تم', res?.data?.offline ? 'تم حفظ التحصيل محليًا وسيُزامَن لاحقًا' : 'تم تسجيل التحصيل', [
         ...(collectionId && !res?.data?.offline
           ? [{ text: 'رفع سند', onPress: () => navigation.replace('UploadReceipt', { collectionId }) }]

@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, Platform } from 'react-native';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createPromise } from '../api/endpoints';
 import { enqueueMutation } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
 import { apiErrorMessage } from '../utils/errors';
+import { useSync } from '../store/sync-context';
 
 const CURRENCIES = ['YER', 'SAR', 'USD'];
 
 export default function NewPromiseScreen({ route, navigation }: any) {
   const customerId = route.params?.customerId || '';
+  const queryClient = useQueryClient();
+  const { triggerSync } = useSync();
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('YER');
   const [dueDate, setDueDate] = useState(() => {
@@ -56,6 +59,12 @@ export default function NewPromiseScreen({ route, navigation }: any) {
       }
     },
     onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ['customer-details'] });
+      queryClient.invalidateQueries({ queryKey: ['customer-timeline'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['payment-promises'] });
+      queryClient.invalidateQueries({ queryKey: ['sync'] });
+      triggerSync();
       Alert.alert('تم', res?.data?.offline ? 'تم حفظ الوعد محليًا وسيُزامَن لاحقًا' : 'تم تسجيل وعد السداد');
       navigation.goBack();
     },

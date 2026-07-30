@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFollowup, fetchFollowupResults, fetchFollowupTypes } from '../api/endpoints';
 import { enqueueMutation } from '../db/database';
 import { apiErrorMessage } from '../utils/errors';
+import { useSync } from '../store/sync-context';
 
 export default function NewFollowupScreen({ route, navigation }: any) {
   const customerId = route.params?.customerId || '';
   const [typeId, setTypeId] = useState('');
   const [resultId, setResultId] = useState('');
   const [notes, setNotes] = useState('');
+  const queryClient = useQueryClient();
+  const { triggerSync } = useSync();
 
   const typesQuery = useQuery({
     queryKey: ['followup-types'],
@@ -52,6 +55,12 @@ export default function NewFollowupScreen({ route, navigation }: any) {
       }
     },
     onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ['customer-details'] });
+      queryClient.invalidateQueries({ queryKey: ['customer-timeline'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['followups'] });
+      queryClient.invalidateQueries({ queryKey: ['sync'] });
+      triggerSync();
       Alert.alert('تم', res?.data?.offline ? 'تم حفظ المتابعة محليًا وسيُزامَن لاحقًا' : 'تم تسجيل المتابعة');
       navigation.goBack();
     },

@@ -42,6 +42,9 @@ export default function DashboardScreen({ navigation }: any) {
     refetchInterval: 30_000,
   });
 
+  // Count unique customers by id to avoid duplicates
+  const uniqueCustomerCount = new Set(localCustomers.map((c: any) => c.id)).size;
+
   if (isLoading && !syncData) return <Loading />;
 
   const tasks = syncData?.tasks?.length ? syncData.tasks : localTasks;
@@ -65,7 +68,7 @@ export default function DashboardScreen({ navigation }: any) {
         <Card title="تحصيلات اليوم" value={localCollections.length} color="#34a853" onPress={() => navigation.navigate('NewCollection')} />
       </View>
       <View style={styles.cardsRow}>
-        <Card title="العملاء" value={localCustomers.length} color="#fbbc04" onPress={() => navigation.navigate('Customers')} />
+        <Card title="العملاء" value={uniqueCustomerCount} color="#fbbc04" onPress={() => navigation.navigate('Customers')} />
         <Card title="المتابعات" value={localFollowups.length} color="#ea4335" onPress={() => navigation.navigate('NewFollowup')} />
       </View>
 

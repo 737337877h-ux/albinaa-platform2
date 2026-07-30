@@ -28,7 +28,9 @@ export default function Customer360Screen({ route, navigation }: any) {
           setLocal(null);
         }
       })();
-    }, [id]),
+      // Refetch from server on focus so latest data is shown
+      refetch();
+    }, [id, refetch]),
   );
 
   if (!id) {

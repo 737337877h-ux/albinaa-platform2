@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { AuthUser, login as apiLogin, logout as apiLogout, getMe } from '../api/auth';
-import { clearTokens } from '../utils/secure-storage';
+import { clearTokens } from '../utils/secure-store';
+import { dedupeTable } from '../db/database';
 
 interface AuthState {
   user: AuthUser | null;
@@ -26,6 +27,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
+        // Clean duplicates from previous buggy syncs (one-time per app start)
+        await dedupeTable('customers');
+        await dedupeTable('tasks');
+        await dedupeTable('followups');
+        await dedupeTable('promises');
+        await dedupeTable('collections');
         const token = await SecureStore.getItemAsync('access_token');
         if (token) {
           const me = await getMe();
