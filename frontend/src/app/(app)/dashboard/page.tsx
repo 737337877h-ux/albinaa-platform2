@@ -2,7 +2,7 @@
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { AlertTriangle } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, tokenStore } from '@/lib/api';
 import { useCan, useMe } from '@/lib/auth';
 import { todayISO } from '@/lib/errors';
 import { CCY_AR, fmtDateTime, fmtMoney, PROMISE_STATUS_AR } from '@/lib/format';
@@ -10,6 +10,12 @@ import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Badge, Card, CardHeader, Money } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
+
+/**
+ * شرط موحّد: نفّذ الاستعلام فقط عند وجود Access Token في المتصفح.
+ * يمنع 401 requests أثناء Hydration أو قبل تحميل الجلسة.
+ */
+const hasToken = () => typeof window !== 'undefined' && !!tokenStore.access;
 
 interface DashboardSummary {
   customers: { total: number; active: number; withBalances: number };
@@ -70,12 +76,12 @@ export default function DashboardPage() {
   const summary = useQuery({
     queryKey: ['dashboard-summary'],
     queryFn: () => api<DashboardSummary>('/dashboard/summary'),
-    enabled: canAdminKpis,
+    enabled: canAdminKpis && hasToken(),
   });
   const collectorSummary = useQuery({
     queryKey: ['dashboard-collector'],
     queryFn: () => api<CollectorSummary>('/dashboard/collector'),
-    enabled: canCollectorKpis && !canAdminKpis,
+    enabled: canCollectorKpis && !canAdminKpis && hasToken(),
     retry: false,
   });
 
@@ -83,26 +89,26 @@ export default function DashboardPage() {
   const dueTodayPromises = useQuery({
     queryKey: ['promises', 'due_today'],
     queryFn: () => api<{ items: PromiseItem[] }>('/payment-promises?status=due_today&limit=5'),
-    enabled: canPromisesList,
+    enabled: canPromisesList && hasToken(),
   });
   const overduePromises = useQuery({
     queryKey: ['promises', 'unfulfilled'],
     queryFn: () => api<{ items: PromiseItem[] }>('/payment-promises?status=unfulfilled&limit=5'),
-    enabled: canPromisesList,
+    enabled: canPromisesList && hasToken(),
   });
 
   // ---- التحصيلات اليومية (مقيّدة تلقائيًا حسب نطاق المستخدم في الـ API) ----
   const collectionsToday = useQuery({
     queryKey: ['collections', 'today'],
     queryFn: () => api<CollectionsResponse>(`/collections?fromDate=${today}&toDate=${today}&limit=5`),
-    enabled: canCollectionsList,
+    enabled: canCollectionsList && hasToken(),
   });
 
   // ---- المهام والمتابعات المتأخرة (شخصية لحساب المحصل الحالي) ----
   const tasksToday = useQuery({
     queryKey: ['tasks-today'],
     queryFn: () => api<TodayTasks>('/tasks/today'),
-    enabled: canTasks,
+    enabled: canTasks && hasToken(),
   });
   // تمييز صريح من الـAPI (isCollector=false) بدل تخمين رمز HTTP —
   // تصحيح مراجعة: /tasks/today لم يعد يُلقي خطأً لحساب إداري بلا محصل شخصي.
@@ -112,6 +118,7 @@ export default function DashboardPage() {
   const notifications = useQuery({
     queryKey: ['notifications-latest'],
     queryFn: () => api<NotificationsResponse>('/notifications?limit=5'),
+    enabled: hasToken(),
   });
 
   return (

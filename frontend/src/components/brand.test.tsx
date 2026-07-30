@@ -18,16 +18,16 @@ describe('BrickMark', () => {
 });
 
 describe('BrandLogo', () => {
-  it('renders an img element for logo', () => {
-    render(<BrandLogo />);
-    const img = screen.getByAltText('شعار البناء الراقي');
-    expect(img).toBeInTheDocument();
-    expect(img).toHaveAttribute('src', '/logo.svg');
+  it('renders an inline SVG (no img to avoid hydration mismatch)', () => {
+    const { container } = render(<BrandLogo />);
+    const svg = container.querySelector('svg');
+    expect(svg).toBeInTheDocument();
+    expect(container.querySelector('img')).toBeNull();
   });
 
   it('accepts custom className', () => {
-    render(<BrandLogo className="h-12 w-12" />);
-    const img = screen.getByAltText('شعار البناء الراقي');
-    expect(img.className).toContain('h-12');
+    const { container } = render(<BrandLogo className="h-12 w-12" />);
+    const svg = container.querySelector('svg');
+    expect(svg?.className.baseVal).toContain('h-12');
   });
 });

@@ -1,11 +1,12 @@
 'use client';
-import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
  * شعار "البناء الراقي".
- * عند توفر الشعار الرسمي: ضع الملف في frontend/public/logo.svg وسيُعرض تلقائيًا؛
- * حتى ذلك الحين تُعرض علامة اللبنات المؤقتة (نفس هوية الألوان).
+ * يُعرض SVG داخلي (BrickMark) لتفادي Hydration Mismatch الذي يحدث مع
+ * img + onError (السبب الجذري لـ React #418/#423 في الإنتاج).
+ * عند توفّر الشعار الرسمي، يمكن استبدال المحتوى بـ <Image src="/logo.svg" />
+ * داخل مكون معلق بـ useEffect لتفادي التبديل أثناء Render.
  */
 export function BrickMark({ className }: { className?: string }) {
   return (
@@ -18,15 +19,5 @@ export function BrickMark({ className }: { className?: string }) {
 }
 
 export function BrandLogo({ className }: { className?: string }) {
-  const [fallback, setFallback] = useState(false);
-  if (fallback) return <BrickMark className={className} />;
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src="/logo.svg"
-      alt="شعار البناء الراقي"
-      className={cn('h-7 w-7 object-contain', className)}
-      onError={() => setFallback(true)}
-    />
-  );
+  return <BrickMark className={className} />;
 }
