@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createTask } from '../api/endpoints';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { createTask, fetchCurrencies } from '../api/endpoints';
 import { enqueueMutation } from '../db/database';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
@@ -25,6 +25,10 @@ export default function NewTaskScreen({ route, navigation }: any) {
   const [expectedCurrency, setExpectedCurrency] = useState('YER');
   const queryClient = useQueryClient();
   const { triggerSync } = useSync();
+  const { data: currencies } = useQuery({
+    queryKey: ['currencies'],
+    queryFn: () => fetchCurrencies().then((r) => r.data),
+  });
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -113,13 +117,13 @@ export default function NewTaskScreen({ route, navigation }: any) {
           keyboardType="numeric"
         />
         <View style={[styles.typeRow, { flex: 1 }]}>
-          {['YER', 'SAR', 'USD'].map((c) => (
+          {(currencies ?? []).map((c) => (
             <TouchableOpacity
-              key={c}
-              style={[styles.typeBtn, expectedCurrency === c && styles.typeBtnActive, { minWidth: 0, flex: 1 }]}
-              onPress={() => setExpectedCurrency(c)}
+              key={c.code}
+              style={[styles.typeBtn, expectedCurrency === c.code && styles.typeBtnActive, { minWidth: 0, flex: 1 }]}
+              onPress={() => setExpectedCurrency(c.code)}
             >
-              <Text style={[styles.typeText, expectedCurrency === c && styles.typeTextActive]}>{c}</Text>
+              <Text style={[styles.typeText, expectedCurrency === c.code && styles.typeTextActive]}>{c.code}</Text>
             </TouchableOpacity>
           ))}
         </View>

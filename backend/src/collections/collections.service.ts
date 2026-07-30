@@ -151,6 +151,7 @@ export class CollectionsService {
     await this.notifications.notifyByPermission(
       actor.organizationId, 'cash.receive', 'collection_created', {
         collectionId: collection.id,
+        customerId: dto.customerId,
         customerName: customer.name,
         collectorName: collector.user.fullName,
         amount: dto.amount,

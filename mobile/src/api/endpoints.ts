@@ -134,6 +134,19 @@ export async function createCollection(data: {
   return client.post('/collections', data);
 }
 
+export interface Currency {
+  code: string;
+  sourceCode: string;
+  nameAr: string;
+  decimals: number;
+  active: boolean;
+}
+
+export async function fetchCurrencies() {
+  const client = await getClient();
+  return client.get<Currency[]>('/currencies');
+}
+
 export async function fetchNotifications() {
   const client = await getClient();
   return client.get('/notifications');

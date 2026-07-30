@@ -1,14 +1,12 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, Platform } from 'react-native';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createPromise } from '../api/endpoints';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { createPromise, fetchCurrencies } from '../api/endpoints';
 import { enqueueMutation } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
 import CustomerPicker from '../components/customer-picker';
-
-const CURRENCIES = ['YER', 'SAR', 'USD'];
 
 export default function NewPromiseScreen({ route, navigation }: any) {
   const presetCustomerId = route.params?.customerId || '';
@@ -25,6 +23,10 @@ export default function NewPromiseScreen({ route, navigation }: any) {
   const [customerName, setCustomerName] = useState(presetCustomerName);
   const queryClient = useQueryClient();
   const { triggerSync } = useSync();
+  const { data: currencies } = useQuery({
+    queryKey: ['currencies'],
+    queryFn: () => fetchCurrencies().then((r) => r.data),
+  });
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -89,10 +91,10 @@ export default function NewPromiseScreen({ route, navigation }: any) {
 
       <Text style={styles.label}>العملة</Text>
       <View style={styles.currencyRow}>
-        {CURRENCIES.map((c) => (
-          <TouchableOpacity key={c} style={[styles.currencyBtn, currency === c && styles.currencyBtnActive]}
-            onPress={() => setCurrency(c)}>
-            <Text style={[styles.currencyText, currency === c && styles.currencyTextActive]}>{c}</Text>
+        {(currencies ?? []).map((c) => (
+          <TouchableOpacity key={c.code} style={[styles.currencyBtn, currency === c.code && styles.currencyBtnActive]}
+            onPress={() => setCurrency(c.code)}>
+            <Text style={[styles.currencyText, currency === c.code && styles.currencyTextActive]}>{c.code}</Text>
           </TouchableOpacity>
         ))}
       </View>

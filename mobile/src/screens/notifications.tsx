@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchNotifications, markNotificationRead, markAllNotificationsRead } from '../api/endpoints';
 import Loading from '../components/loading';
@@ -63,7 +64,25 @@ function formatBody(item: NotificationItem): string {
   return parts.join('\n');
 }
 
+function getNavigationTarget(item: NotificationItem): { route: string; params: Record<string, any> } | null {
+  const p = item.payload || {};
+  switch (item.kind) {
+    case 'followup_due':
+    case 'promise_due':
+    case 'promise_overdue':
+    case 'customer_transferred':
+    case 'collection_created':
+      if (p.customerId) return { route: 'Customer360', params: { id: p.customerId } };
+      return null;
+    case 'task_new':
+      return { route: 'Tasks', params: {} };
+    default:
+      return null;
+  }
+}
+
 export default function NotificationsScreen() {
+  const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery<NotificationItem[]>({
     queryKey: ['notifications'],
@@ -81,10 +100,19 @@ export default function NotificationsScreen() {
   const readAllMutation = useMutation({
     mutationFn: markAllNotificationsRead,
     onSuccess: async () => {
-      // Force refetch (not just invalidate) so the UI updates immediately
       await queryClient.refetchQueries({ queryKey: ['notifications'] });
     },
   });
+
+  function handlePress(item: NotificationItem) {
+    if (!item.readAt) readMutation.mutate(item.id);
+    const target = getNavigationTarget(item);
+    if (target) {
+      navigation.navigate(target.route, target.params);
+    } else {
+      navigation.navigate('Dashboard');
+    }
+  }
 
   if (isLoading) return <Loading />;
 
@@ -109,7 +137,7 @@ export default function NotificationsScreen() {
         renderItem={({ item }) => (
           <TouchableOpacity
             style={[styles.item, !item.readAt && styles.unread]}
-            onPress={() => { if (!item.readAt) readMutation.mutate(item.id); }}
+            onPress={() => handlePress(item)}
           >
             <View style={styles.itemHeader}>
               <Text style={styles.kind}>{KIND_LABELS[item.kind] || item.kind}</Text>

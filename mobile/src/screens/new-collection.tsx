@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createCollection, fetchCollectionMethods } from '../api/endpoints';
+import { createCollection, fetchCollectionMethods, fetchCurrencies } from '../api/endpoints';
 import { enqueueMutation } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
 import { apiErrorMessage } from '../utils/errors';
@@ -23,6 +23,11 @@ export default function NewCollectionScreen({ route, navigation }: any) {
   const methodsQuery = useQuery({
     queryKey: ['collection-methods'],
     queryFn: () => fetchCollectionMethods().then((r) => r.data || []),
+  });
+
+  const currenciesQuery = useQuery({
+    queryKey: ['currencies'],
+    queryFn: () => fetchCurrencies().then((r) => r.data || []),
   });
 
   const mutation = useMutation({
@@ -91,9 +96,9 @@ export default function NewCollectionScreen({ route, navigation }: any) {
 
       <Text style={styles.label}>العملة</Text>
       <View style={styles.row}>
-        {['YER', 'SAR', 'USD'].map((c) => (
-          <TouchableOpacity key={c} style={[styles.btn, currency === c && styles.btnActiveGreen]} onPress={() => setCurrency(c)}>
-            <Text style={[styles.btnText, currency === c && styles.btnTextActive]}>{c}</Text>
+        {(currenciesQuery.data ?? []).map((c) => (
+          <TouchableOpacity key={c.code} style={[styles.btn, currency === c.code && styles.btnActiveGreen]} onPress={() => setCurrency(c.code)}>
+            <Text style={[styles.btnText, currency === c.code && styles.btnTextActive]}>{c.code}</Text>
           </TouchableOpacity>
         ))}
       </View>

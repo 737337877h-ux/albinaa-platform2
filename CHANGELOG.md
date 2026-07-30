@@ -5,6 +5,41 @@
 التنسيق مبني على [Keep a Changelog](https://keepachangelog.com/ar/1.0.0/)،
 وهذا المشروع يتبع [Semantic Versioning](https://semver.org/lang/ar/).
 
+## [1.1.0] - 2026-07-30 — أدوات التواصل مع العملاء
+
+### الإضافات الجديدة
+
+#### Mobile App
+- **Call/SMS/WhatsApp** — أزرار اتصال مباشر في بطاقة العميل (Customer360)، مع تنظيف رقم الهاتف تلقائياً للرمز الدولي 967
+- **Location Map** — زر "فتح في الخرائط" يعرض موقع العميل على الخريطة عبر `geo:` / `maps:` URI
+- **Interactive Notifications** — الضغط على الإشعار يفتح الشاشة المرتبطة (Customer360 للمواعيد/المتابعات/التحصيلات، Tasks للمهام الجديدة)، مع Fallback إلى Dashboard عند عدم توفر الرابط
+- **Dynamic Currencies** — قائمة العملات تُجلب من الـAPI (`GET /currencies`) بدلاً من كونها hardcoded في 3 شاشات (Promise, Collection, Task)
+
+#### Backend
+- **Collection payload** — إضافة `customerId` إلى إشعار `collection_created` لتمكين الـDeep Link
+
+### الإصلاحات (Bug Fixes) — من v1.0.0
+- Customer 360: لا تعطل عند فتح عميل
+- Login: يعمل على IP مختلف (192.168.x.x)
+- Notifications: تعرض كل الحقول (title, body, event type, read state, customer)
+- Dashboard: يستخدم SQLite المحلي بدل syncData الفارغ
+- Duplicate customers: dedup في كل sync + UI
+- Tasks: تنشأ وتظهر فوراً
+- Balance: التحصيل يُخفض operational فوراً، العكس يعيده
+- Promises endpoint: `/promises` → `/payment-promises`
+- Currency picker: لا AED (YER, SAR, USD فقط)
+- Promise due date: حقل إلزامي
+- Profile: إعادة جلب /auth/me عند التركيز
+
+### موثوقية (Reliability)
+- 33 اختبار تلقائي
+- TypeScript: 0 errors
+- ESLint: clean
+- Expo Doctor: 20/20
+- Android export: success
+
+---
+
 ## [1.0.0] - 2026-07-30 — الإصدار المستقر
 
 ### الإضافات الرئيسية
@@ -61,32 +96,12 @@
 - Server settings modal مع ping + version detection
 - كشف في-الوقت-الحقيقي لحالة الخادم
 
-### الإصلاحات (Bug Fixes)
-- Customer 360: لا تعطل عند فتح عميل
-- Login: يعمل على IP مختلف (192.168.x.x)
-- Notifications: تعرض كل الحقول (title, body, event type, read state, customer)
-- Dashboard: يستخدم SQLite المحلي بدل syncData الفارغ
-- Duplicate customers: dedup في كل sync + UI
-- Tasks: تنشأ وتظهر فوراً
-- Balance: التحصيل يُخفض operational فوراً، العكس يعيده
-- Promises endpoint: `/promises` → `/payment-promises`
-- Currency picker: لا AED (YER, SAR, USD فقط)
-- Promise due date: حقل إلزامي
-- Profile: إعادة جلب /auth/me عند التركيز
-
 ### الأمان (Security)
 - Helmet middleware
 - CORS allowlist
 - Rate limiting
 - ValidationPipe (whitelist + forbidNonWhitelisted)
 - Global exception filter (لا تسريب stack traces)
-
-### موثوقية (Reliability)
-- 39 اختبار تلقائي يمر
-- TypeScript: 0 errors
-- ESLint: clean
-- Expo Doctor: 20/20
-- Android export: success
 
 ## [0.2.0] - 2026-07-XX — Milestone 2: API Foundation
 
@@ -98,12 +113,10 @@
 
 ## الإصدارات القادمة المُخططة
 
-### [1.1.0]
+### [1.2.0]
 - إشعارات Push (FCM/APNS)
 - تحسينات UI/UX
 - تقارير مالية متقدمة
-- Call/SMS/WhatsApp buttons
-- Customer location map
 
 ### [2.0.0]
 - Microservices split
