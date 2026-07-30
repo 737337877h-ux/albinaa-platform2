@@ -60,24 +60,61 @@ export function isValidBaseUrl(url: string): boolean {
   return /^https?:\/\/.+/i.test(trimmed);
 }
 
+export interface ServerHealth {
+  ok: boolean;
+  status?: number;
+  latencyMs?: number;
+  version?: string;
+  environment?: string;
+  uptimeSeconds?: number;
+  timestamp?: string;
+  error?: string;
+}
+
 /**
- * يختبر الوصول للخادم عبر إرسال GET إلى /health أو الجذر.
- * يُعيد true عند نجاح 2xx/3xx، false عند الفشل.
+ * يفحص الخادم ويجلب حالته وإصداره مع قياس زمن الاستجابة (Ping).
  */
-export async function testConnection(url: string, timeoutMs = 5000): Promise<{ ok: boolean; status?: number; error?: string }> {
+export async function pingServer(url: string, timeoutMs = 5000): Promise<ServerHealth> {
+  const trimmed = url.trim().replace(/\/+$/, '');
+  if (!trimmed) {
+    return { ok: false, error: 'العنوان فارغ' };
+  }
+  if (!isValidBaseUrl(trimmed)) {
+    return { ok: false, error: 'العنوان غير صالح (يجب أن يبدأ بـ http:// أو https://)' };
+  }
+  const t0 = Date.now();
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(`${url.replace(/\/+$/, '')}/health`, {
+    const res = await fetch(`${trimmed}/health`, {
       method: 'GET',
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    if (res.ok || (res.status >= 200 && res.status < 400)) {
-      return { ok: true, status: res.status };
+    const latency = Date.now() - t0;
+    if (res.ok) {
+      let body: any = {};
+      try { body = await res.json(); } catch { /* ignore */ }
+      return {
+        ok: true,
+        status: res.status,
+        latencyMs: latency,
+        version: body.version,
+        environment: body.environment,
+        uptimeSeconds: body.uptimeSeconds,
+        timestamp: body.timestamp,
+      };
     }
-    return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    return {
+      ok: false,
+      status: res.status,
+      latencyMs: latency,
+      error: `HTTP ${res.status} ${res.statusText || ''}`.trim(),
+    };
   } catch (e: any) {
-    return { ok: false, error: e?.message || 'فشل الاتصال' };
+    const latency = Date.now() - t0;
+    let msg = e?.message || 'فشل الاتصال';
+    if (e?.name === 'AbortError') msg = `انتهت المهلة بعد ${timeoutMs} مللي ثانية`;
+    return { ok: false, latencyMs: latency, error: msg };
   }
 }

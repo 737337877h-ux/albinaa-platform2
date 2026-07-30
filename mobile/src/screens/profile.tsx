@@ -61,9 +61,15 @@ export default function ProfileScreen() {
         <InfoRow label="المنصة" value="React Native (Expo)" />
       </View>
 
-      <TouchableOpacity style={styles.serverBtn} onPress={() => navigation.navigate('ServerSettings')}>
-        <Text style={styles.serverBtnText}>⚙ إعدادات الخادم</Text>
-      </TouchableOpacity>
+      <View style={styles.section}>
+        <InfoRow label="إصدار التطبيق" value="1.0.0" />
+        <InfoRow label="المنصة" value="React Native (Expo)" />
+      </View>
+
+      <View style={styles.section}>
+        <InfoRow label="إصدار التطبيق" value="1.0.0" />
+        <InfoRow label="المنصة" value="React Native (Expo)" />
+      </View>
     </ScrollView>
   );
 }

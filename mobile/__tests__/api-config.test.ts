@@ -12,7 +12,7 @@ jest.mock('expo-secure-store', () => ({
 const mockFetch: any = jest.fn();
 global.fetch = mockFetch;
 
-import { isValidBaseUrl, testConnection } from '../src/config/api';
+import { isValidBaseUrl, pingServer } from '../src/config/api';
 
 describe('api config', () => {
   beforeEach(() => {
@@ -38,31 +38,59 @@ describe('api config', () => {
     });
   });
 
-  describe('testConnection', () => {
-    it('returns ok when server returns 200', async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
-      const result = await testConnection('http://localhost:3000');
-      expect(result.ok).toBe(true);
-      expect(result.status).toBe(200);
+  describe('pingServer', () => {
+    it('returns ok with version when health responds 200', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: 'ok', version: '0.2.0', environment: 'production', uptimeSeconds: 100, timestamp: '2026-01-01T00:00:00Z' }),
+      });
+      const r = await pingServer('http://localhost:3000');
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe(200);
+      expect(r.version).toBe('0.2.0');
+      expect(r.latencyMs).toBeGreaterThanOrEqual(0);
     });
 
     it('returns failure with status on 500', async () => {
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
-      const result = await testConnection('http://localhost:3000');
-      expect(result.ok).toBe(false);
-      expect(result.status).toBe(500);
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error', json: async () => ({}) });
+      const r = await pingServer('http://localhost:3000');
+      expect(r.ok).toBe(false);
+      expect(r.status).toBe(500);
+      expect(r.error).toContain('500');
     });
 
     it('returns failure on network error', async () => {
       mockFetch.mockRejectedValueOnce(new Error('Network request failed'));
-      const result = await testConnection('http://localhost:3000');
-      expect(result.ok).toBe(false);
-      expect(result.error).toBe('Network request failed');
+      const r = await pingServer('http://localhost:3000');
+      expect(r.ok).toBe(false);
+      expect(r.error).toBe('Network request failed');
+    });
+
+    it('returns failure on timeout', async () => {
+      const abortError: any = new Error('Aborted');
+      abortError.name = 'AbortError';
+      mockFetch.mockRejectedValueOnce(abortError);
+      const r = await pingServer('http://localhost:3000', 100);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain('انتهت المهلة');
+    });
+
+    it('rejects empty url', async () => {
+      const r = await pingServer('');
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain('فارغ');
+    });
+
+    it('rejects invalid url scheme', async () => {
+      const r = await pingServer('ftp://x');
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain('غير صالح');
     });
 
     it('strips trailing slash from base url', async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
-      await testConnection('http://localhost:3000/');
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) });
+      await pingServer('http://localhost:3000/');
       const callArg = mockFetch.mock.calls[0][0];
       expect(callArg).toBe('http://localhost:3000/health');
     });
