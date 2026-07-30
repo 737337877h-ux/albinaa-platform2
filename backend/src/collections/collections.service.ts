@@ -51,24 +51,26 @@ export class CollectionsService {
   }
 
   async create(actor: AuthUser, dto: CreateCollectionDto, req?: Request) {
+    const isAdmin = actor.permissions.includes('customers.read_all');
     let collectorId = dto.collectorId;
     const own = await this.collectorOf(actor);
     if (!collectorId) {
       if (own) {
         collectorId = own.id;
-      } else if (actor.permissions.includes('customers.read_all')) {
+      } else if (isAdmin) {
         const assignment = await this.prisma.customerAssignment.findFirst({
           where: { customerId: dto.customerId, effectiveTo: null },
           orderBy: { effectiveFrom: 'desc' },
         });
-        if (!assignment) {
+        if (assignment) {
+          collectorId = assignment.collectorId;
+        } else {
           throw new BadRequestException('العميل غير مسند لأي محصل — يلزم إسناد ساري أو تحديد collectorId');
         }
-        collectorId = assignment.collectorId;
       } else {
         throw new BadRequestException('حدد المحصل (collectorId) — حسابك ليس محصلاً');
       }
-    } else if (own && collectorId !== own.id && !actor.permissions.includes('customers.read_all')) {
+    } else if (own && collectorId !== own.id && !isAdmin) {
       throw new ForbiddenException('لا يمكنك تسجيل تحصيل باسم محصل آخر');
     }
 
@@ -94,9 +96,7 @@ export class CollectionsService {
     if (!collector || !collector.active || collector.user.organizationId !== actor.organizationId) {
       throw new BadRequestException('المحصل غير موجود أو غير نشط');
     }
-    // البند ثانيًا (مراجعة M5): شرط الإسناد الحالي — للجميع، والإشرافي نيابةً بعد نفس التحقق
-    // Admins with customers.read_all bypass this check as they manage assignments
-    const isAdmin = actor.permissions.includes('customers.read_all');
+    // Admins with customers.read_all bypass assignment check
     if (!currentAssignment && !isAdmin) {
       throw new ForbiddenException('العميل غير مسند حاليًا لهذا المحصل — يلزم إسناد ساري');
     }

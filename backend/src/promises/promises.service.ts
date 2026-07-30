@@ -89,30 +89,29 @@ export class PromisesService {
   }
 
   async create(actor: AuthUser, dto: CreatePromiseDto, req?: Request) {
-    // المحصل يسجل وعدًا لنفسه؛ الإداري يمكنه تحديد collectorId أو استخدام إسناد العميل
+    const isAdmin = actor.permissions.includes('customers.read_all');
     let collectorId = dto.collectorId;
     const own = await this.collectorOf(actor);
     if (!collectorId) {
       if (own) {
         collectorId = own.id;
-      } else if (actor.permissions.includes('customers.read_all')) {
+      } else if (isAdmin) {
         const assignment = await this.prisma.customerAssignment.findFirst({
           where: { customerId: dto.customerId, effectiveTo: null },
           orderBy: { effectiveFrom: 'desc' },
         });
-        if (!assignment) {
+        if (assignment) {
+          collectorId = assignment.collectorId;
+        } else {
           throw new BadRequestException('العميل غير مسند لأي محصل — يلزم إسناد ساري أو تحديد collectorId');
         }
-        collectorId = assignment.collectorId;
       } else {
         throw new BadRequestException('حدد المحصل (collectorId) — حسابك ليس محصلاً');
       }
-    } else if (own && collectorId !== own.id && !actor.permissions.includes('customers.read_all')) {
+    } else if (own && collectorId !== own.id && !isAdmin) {
       throw new ForbiddenException('لا يمكنك تسجيل وعد باسم محصل آخر');
     }
 
-    // البند ثانيًا: شرط الإسناد الحالي (لكل المستخدمين — والإشرافي customers.read_all يُعفى)
-    const isAdmin = actor.permissions.includes('customers.read_all');
     const customer = isAdmin
       ? await this.prisma.customer.findFirst({ where: { id: dto.customerId, organizationId: actor.organizationId } })
       : await this.assertCurrentAssignment(actor, dto.customerId, collectorId);
