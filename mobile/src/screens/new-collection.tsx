@@ -82,7 +82,7 @@ export default function NewCollectionScreen({ route, navigation }: any) {
 
       <Text style={styles.label}>العملة</Text>
       <View style={styles.row}>
-        {['YER', 'SAR', 'USD', 'AED'].map((c) => (
+        {['YER', 'SAR', 'USD'].map((c) => (
           <TouchableOpacity key={c} style={[styles.btn, currency === c && styles.btnActiveGreen]} onPress={() => setCurrency(c)}>
             <Text style={[styles.btnText, currency === c && styles.btnTextActive]}>{c}</Text>
           </TouchableOpacity>
