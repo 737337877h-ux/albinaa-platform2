@@ -1,11 +1,26 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCustomer360 } from '../api/endpoints';
 import { getById } from '../db/database';
 import { useFocusEffect } from '@react-navigation/native';
 import Loading from '../components/loading';
 import { apiErrorMessage, parseJsonField } from '../utils/errors';
+
+function cleanPhone(raw: string): string {
+  let digits = raw.replace(/\D/g, '');
+  if (digits.length === 9 && !digits.startsWith('967')) digits = '967' + digits;
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  return digits;
+}
+
+async function openLink(url: string, fallbackMsg: string) {
+  try {
+    const supported = await Linking.canOpenURL(url);
+    if (supported) { await Linking.openURL(url); }
+    else { Alert.alert('تنبيه', fallbackMsg); }
+  } catch { Alert.alert('خطأ', 'تعذر فتح التطبيق'); }
+}
 
 export default function Customer360Screen({ route, navigation }: any) {
   const id = route?.params?.id;
@@ -71,6 +86,17 @@ export default function Customer360Screen({ route, navigation }: any) {
         {!!address && <Text style={styles.address}>{address}</Text>}
       </View>
 
+      {!!phone && (
+        <View style={styles.contactRow}>
+          <ContactBtn label="اتصال" color="#1a73e8" onPress={() => openLink(`tel:${phone}`, 'لا يوجد تطبيق اتصال')} />
+          <ContactBtn label="رسالة" color="#34a853" onPress={() => openLink(`sms:${phone}`, 'لا يوجد تطبيق رسائل')} />
+          <ContactBtn label="واتساب" color="#25D366" onPress={() => {
+            const cleaned = cleanPhone(phone);
+            openLink(`https://wa.me/${cleaned}`, 'لا يوجد واتساب');
+          }} />
+        </View>
+      )}
+
       <Text style={styles.sectionTitle}>الأرصدة</Text>
       {balances.length === 0 ? (
         <Text style={styles.emptyText}>لا توجد أرصدة</Text>
@@ -125,6 +151,14 @@ export default function Customer360Screen({ route, navigation }: any) {
   );
 }
 
+function ContactBtn({ label, color, onPress }: { label: string; color: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={[styles.contactBtn, { backgroundColor: color }]} onPress={onPress}>
+      <Text style={styles.contactBtnText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 function ActionBtn({ title, color, onPress }: { title: string; color: string; onPress: () => void }) {
   return (
     <TouchableOpacity
@@ -161,6 +195,9 @@ const styles = StyleSheet.create({
   balanceSubValue: { fontSize: 12, color: '#666' },
   balanceCurrency: { fontSize: 16, color: '#333', fontWeight: '500' },
   balanceValue: { fontSize: 18, color: '#1a73e8', fontWeight: 'bold' },
+  contactRow: { flexDirection: 'row', padding: 12, gap: 8 },
+  contactBtn: { flex: 1, padding: 10, borderRadius: 10, alignItems: 'center' },
+  contactBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
   actions: { flexDirection: 'row', padding: 16, gap: 8 },
   actionBtn: { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center' },
   actionText: { color: '#fff', fontSize: 14, fontWeight: '600' },
