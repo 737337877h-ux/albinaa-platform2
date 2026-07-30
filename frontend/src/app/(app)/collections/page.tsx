@@ -180,8 +180,8 @@ export default function CollectionsPage() {
     ? items.filter((c) => {
         const s = debouncedSearch.toLowerCase();
         return (
-          c.customer.name.toLowerCase().includes(s) ||
-          c.customer.externalCustomerCode?.toLowerCase().includes(s) ||
+          (c.customer?.name ?? '').toLowerCase().includes(s) ||
+          c.customer?.externalCustomerCode?.toLowerCase().includes(s) ||
           c.referenceNumber?.toLowerCase().includes(s) ||
           c.receiptNumber?.toLowerCase().includes(s) ||
           c.notes?.toLowerCase().includes(s)
@@ -363,13 +363,17 @@ export default function CollectionsPage() {
                   <TRow key={c.id}>
                     <TD className="text-xs whitespace-nowrap">{fmtDateTime(c.collectedAt)}</TD>
                     <TD>
-                      <Link
-                        href={`/customers/${c.customer.id}`}
-                        className="font-medium text-pine-700 hover:underline dark:text-pine-100"
-                      >
-                        {c.customer.name}
-                      </Link>
-                      {c.customer.externalCustomerCode && (
+                      {c.customer?.id ? (
+                        <Link
+                          href={`/customers/${c.customer.id}`}
+                          className="font-medium text-pine-700 hover:underline dark:text-pine-100"
+                        >
+                          {c.customer.name ?? '—'}
+                        </Link>
+                      ) : (
+                        <span>{c.customer?.name ?? '—'}</span>
+                      )}
+                      {c.customer?.externalCustomerCode && (
                         <p className="text-xs text-concrete-500" dir="ltr">{c.customer.externalCustomerCode}</p>
                       )}
                     </TD>
@@ -377,14 +381,14 @@ export default function CollectionsPage() {
                     <TD>
                       <Badge tone="pine">{CCY_AR[c.currencyCode] ?? c.currencyCode}</Badge>
                     </TD>
-                    <TD className="text-sm">{c.method.name}</TD>
-                    <TD className="text-sm">{c.branch.name}</TD>
+                    <TD className="text-sm">{c.method?.name ?? '—'}</TD>
+                    <TD className="text-sm">{c.branch?.name ?? '—'}</TD>
                     <TD>
                       <Badge tone={statusBadgeTone(c.status) as 'pine' | 'neutral' | 'credit' | 'debt'}>
                         {COLLECTION_STATUS_AR[c.status] ?? c.status}
                       </Badge>
                     </TD>
-                    <TD className="text-sm">{c.collector.user.fullName}</TD>
+                    <TD className="text-sm">{c.collector?.user?.fullName ?? '—'}</TD>
                     <TD className="text-xs">
                       {c.receiptNumber && <span dir="ltr" className="block">إيصال: {c.receiptNumber}</span>}
                       {c.referenceNumber && <span dir="ltr" className="block">مرجع: {c.referenceNumber}</span>}
@@ -648,7 +652,7 @@ function ReverseDialog({
       <form onSubmit={handleSubmit((data) => onSubmit(data.reason))} className="space-y-4">
         {item && (
           <div className="rounded-lg border border-concrete-100 bg-concrete-50 p-3 text-sm dark:border-white/10 dark:bg-iron-700">
-            <p><span className="font-medium">العميل:</span> {item.customer.name}</p>
+            <p><span className="font-medium">العميل:</span> {item.customer?.name ?? '—'}</p>
             <p><span className="font-medium">المبلغ:</span> {fmtMoney(item.amount)}</p>
             <p><span className="font-medium">التاريخ:</span> {fmtDateTime(item.collectedAt)}</p>
           </div>
@@ -699,7 +703,7 @@ function HandoverDialog({
       <div className="space-y-4">
         {item && (
           <div className="rounded-lg border border-concrete-100 bg-concrete-50 p-3 text-sm dark:border-white/10 dark:bg-iron-700">
-            <p><span className="font-medium">العميل:</span> {item.customer.name}</p>
+            <p><span className="font-medium">العميل:</span> {item.customer?.name ?? '—'}</p>
             <p><span className="font-medium">المبلغ:</span> {fmtMoney(item.amount)}</p>
             <p><span className="font-medium">التاريخ:</span> {fmtDateTime(item.collectedAt)}</p>
           </div>

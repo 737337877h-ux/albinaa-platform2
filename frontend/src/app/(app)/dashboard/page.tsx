@@ -33,13 +33,13 @@ interface CollectorSummary {
 }
 interface PromiseItem {
   id: string; expectedAmount: string | number; currencyCode: string; status: string; dueDate: string;
-  customer: { id: string; name: string };
+  customer: { id: string; name: string } | null;
 }
 interface CollectionsResponse {
   total: number;
   totalsByCurrency: Record<string, number>;
   items: { id: string; amount: string | number; currencyCode: string; collectedAt: string;
-    customer: { id: string; name: string }; method: { name: string } }[];
+    customer: { id: string; name: string } | null; method: { name: string } | null }[];
 }
 interface TaskItem {
   customerId: string; customerName: string; reason: string; priority: number;
@@ -295,17 +295,26 @@ export default function DashboardPage() {
               <Table>
                 <THead cols={['العميل', 'المبلغ', 'الطريقة']} />
                 <tbody>
-                  {(collectionsToday.data?.items ?? []).map((c) => (
-                    <TRow key={c.id}>
-                      <TD>
-                        <Link className="text-pine-700 hover:underline dark:text-pine-100" href={`/customers/${c.customer.id}`}>
-                          {c.customer.name}
-                        </Link>
-                      </TD>
-                      <TD><Money value={Number(c.amount)} currency={c.currencyCode} /></TD>
-                      <TD className="text-concrete-500">{c.method.name}</TD>
-                    </TRow>
-                  ))}
+                  {(collectionsToday.data?.items ?? []).map((c) => {
+                    const customerId = c.customer?.id;
+                    const customerName = c.customer?.name ?? '—';
+                    const methodName = c.method?.name ?? '—';
+                    return (
+                      <TRow key={c.id}>
+                        <TD>
+                          {customerId ? (
+                            <Link className="text-pine-700 hover:underline dark:text-pine-100" href={`/customers/${customerId}`}>
+                              {customerName}
+                            </Link>
+                          ) : (
+                            <span>{customerName}</span>
+                          )}
+                        </TD>
+                        <TD><Money value={Number(c.amount)} currency={c.currencyCode} /></TD>
+                        <TD className="text-concrete-500">{methodName}</TD>
+                      </TRow>
+                    );
+                  })}
                 </tbody>
               </Table>
             </DataState>
@@ -384,17 +393,25 @@ function PromisesTable({ items, tone }: { items: PromiseItem[]; tone: 'hazard' |
     <Table>
       <THead cols={['العميل', 'المبلغ', 'الحالة']} />
       <tbody>
-        {items.map((p) => (
-          <TRow key={p.id}>
-            <TD>
-              <Link className="text-pine-700 hover:underline dark:text-pine-100" href={`/customers/${p.customer.id}`}>
-                {p.customer.name}
-              </Link>
-            </TD>
-            <TD><Money value={Number(p.expectedAmount)} currency={p.currencyCode} /></TD>
-            <TD><Badge tone={tone}>{PROMISE_STATUS_AR[p.status] ?? p.status}</Badge></TD>
-          </TRow>
-        ))}
+        {items.map((p) => {
+          const customerId = p.customer?.id;
+          const customerName = p.customer?.name ?? '—';
+          return (
+            <TRow key={p.id}>
+              <TD>
+                {customerId ? (
+                  <Link className="text-pine-700 hover:underline dark:text-pine-100" href={`/customers/${customerId}`}>
+                    {customerName}
+                  </Link>
+                ) : (
+                  <span>{customerName}</span>
+                )}
+              </TD>
+              <TD><Money value={Number(p.expectedAmount)} currency={p.currencyCode} /></TD>
+              <TD><Badge tone={tone}>{PROMISE_STATUS_AR[p.status] ?? p.status}</Badge></TD>
+            </TRow>
+          );
+        })}
       </tbody>
     </Table>
   );

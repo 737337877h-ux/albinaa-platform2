@@ -341,7 +341,7 @@ export default function Customer360Page() {
             )}
             {c.branch && (
               <span className="flex items-center gap-1 text-concrete-600 dark:text-concrete-400">
-                <Building2 className="h-3.5 w-3.5" /> {c.branch.name}
+                <Building2 className="h-3.5 w-3.5" /> {c.branch?.name ?? '—'}
               </span>
             )}
             {c.currentCollector && (
@@ -603,8 +603,8 @@ export default function Customer360Page() {
                       {followups.data.items.map(f => (
                         <TRow key={f.id}>
                           <TD>{fmtDateTime(f.followupAt)}</TD>
-                          <TD>{f.type.name}</TD>
-                          <TD><Badge tone="pine">{f.result.name}</Badge></TD>
+                          <TD>{f.type?.name ?? '—'}</TD>
+                          <TD><Badge tone="pine">{f.result?.name ?? '—'}</Badge></TD>
                           <TD>{f.user.fullName}</TD>
                           <TD className="max-w-[200px] truncate text-xs">{f.notes ?? '—'}</TD>
                           <TD>{f.nextFollowupDate ? fmtDate(f.nextFollowupDate) : '—'}</TD>
@@ -648,7 +648,7 @@ export default function Customer360Page() {
                               {PROMISE_STATUS_AR[p.status] ?? p.status}
                             </Badge>
                           </TD>
-                          <TD>{p.collector.user.fullName}</TD>
+                          <TD>{p.collector?.user?.fullName ?? '—'}</TD>
                           <TD className="max-w-[200px] truncate text-xs">{p.notes ?? '—'}</TD>
                         </TRow>
                       ))}
@@ -693,13 +693,13 @@ export default function Customer360Page() {
                           <TD>{fmtDateTime(co.collectedAt)}</TD>
                           <TD className="font-semibold"><Money value={co.amount} /></TD>
                           <TD>{CCY_AR[co.currencyCode] ?? co.currencyCode}</TD>
-                          <TD>{co.method.name}</TD>
+                          <TD>{co.method?.name ?? '—'}</TD>
                           <TD>
                             <Badge tone={collectionStatusBadge(co.status) as any}>
                               {COLLECTION_STATUS_AR[co.status] ?? co.status}
                             </Badge>
                           </TD>
-                          <TD>{co.collector.user.fullName}</TD>
+                          <TD>{co.collector?.user?.fullName ?? '—'}</TD>
                           <TD className="font-mono text-xs"><span dir="ltr">{co.receiptNumber ?? co.referenceNumber ?? '—'}</span></TD>
                           <TD className="max-w-[200px] truncate text-xs">{co.notes ?? '—'}</TD>
                         </TRow>

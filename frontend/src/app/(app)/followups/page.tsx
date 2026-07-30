@@ -141,9 +141,9 @@ export default function FollowupsPage() {
     ? items.filter((f) => {
         const s = debouncedSearch.toLowerCase();
         return (
-          f.customer.name.toLowerCase().includes(s) ||
-          f.customer.externalCustomerCode?.toLowerCase().includes(s) ||
-          f.user.fullName.toLowerCase().includes(s) ||
+          (f.customer?.name ?? '').toLowerCase().includes(s) ||
+          f.customer?.externalCustomerCode?.toLowerCase().includes(s) ||
+          (f.user?.fullName ?? '').toLowerCase().includes(s) ||
           f.notes?.toLowerCase().includes(s)
         );
       })
@@ -302,24 +302,28 @@ export default function FollowupsPage() {
                 {filtered.map((f) => (
                   <TRow key={f.id}>
                     <TD>
-                      <Link
-                        href={`/customers/${f.customer.id}`}
-                        className="font-medium text-pine-700 hover:underline dark:text-pine-100"
-                      >
-                        {f.customer.name}
-                      </Link>
-                      {f.customer.externalCustomerCode && (
+                      {f.customer?.id ? (
+                        <Link
+                          href={`/customers/${f.customer.id}`}
+                          className="font-medium text-pine-700 hover:underline dark:text-pine-100"
+                        >
+                          {f.customer.name ?? '—'}
+                        </Link>
+                      ) : (
+                        <span>{f.customer?.name ?? '—'}</span>
+                      )}
+                      {f.customer?.externalCustomerCode && (
                         <p className="text-xs text-concrete-500" dir="ltr">{f.customer.externalCustomerCode}</p>
                       )}
                     </TD>
                     <TD>
-                      <Badge tone="pine">{f.type.name}</Badge>
+                      <Badge tone="pine">{f.type?.name ?? '—'}</Badge>
                     </TD>
                     <TD>
-                      <Badge tone="hazard">{f.result.name}</Badge>
+                      <Badge tone="hazard">{f.result?.name ?? '—'}</Badge>
                     </TD>
                     <TD className="text-xs whitespace-nowrap">{fmtDateTime(f.followupAt)}</TD>
-                    <TD className="text-sm">{f.user.fullName}</TD>
+                    <TD className="text-sm">{f.user?.fullName ?? '—'}</TD>
                     <TD className="max-w-[180px] truncate text-xs text-concrete-600 dark:text-concrete-400">
                       {f.notes ?? '—'}
                     </TD>
@@ -591,7 +595,7 @@ function EditDialog({
   const expectedAmount = watch('expectedAmount');
 
   return (
-    <Dialog open={!!item} onClose={onClose} title={`تعديل متابعة — ${item?.customer.name ?? ''}`}>
+    <Dialog open={!!item} onClose={onClose} title={`تعديل متابعة — ${item?.customer?.name ?? ''}`}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <Field label="نوع المتابعة" error={errors.typeId?.message}>
@@ -663,9 +667,9 @@ function DeleteDialog({
         </p>
         {item && (
           <div className="rounded-lg border border-concrete-100 bg-concrete-50 p-3 text-sm dark:border-white/10 dark:bg-iron-700">
-            <p><span className="font-medium">العميل:</span> {item.customer.name}</p>
-            <p><span className="font-medium">النوع:</span> {item.type.name}</p>
-            <p><span className="font-medium">النتيجة:</span> {item.result.name}</p>
+            <p><span className="font-medium">العميل:</span> {item.customer?.name ?? '—'}</p>
+            <p><span className="font-medium">النوع:</span> {item.type?.name ?? '—'}</p>
+            <p><span className="font-medium">النتيجة:</span> {item.result?.name ?? '—'}</p>
             <p><span className="font-medium">التاريخ:</span> {fmtDateTime(item.followupAt)}</p>
           </div>
         )}

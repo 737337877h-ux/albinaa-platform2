@@ -170,8 +170,8 @@ export default function PromisesPage() {
     ? items.filter((f) => {
         const s = debouncedSearch.toLowerCase();
         return (
-          f.customer.name.toLowerCase().includes(s) ||
-          f.customer.externalCustomerCode?.toLowerCase().includes(s) ||
+          (f.customer?.name ?? '').toLowerCase().includes(s) ||
+          f.customer?.externalCustomerCode?.toLowerCase().includes(s) ||
           f.notes?.toLowerCase().includes(s)
         );
       })
@@ -339,13 +339,17 @@ export default function PromisesPage() {
                   return (
                     <TRow key={p.id}>
                       <TD>
-                        <Link
-                          href={`/customers/${p.customer.id}`}
-                          className="font-medium text-pine-700 hover:underline dark:text-pine-100"
-                        >
-                          {p.customer.name}
-                        </Link>
-                        {p.customer.externalCustomerCode && (
+                        {p.customer?.id ? (
+                          <Link
+                            href={`/customers/${p.customer.id}`}
+                            className="font-medium text-pine-700 hover:underline dark:text-pine-100"
+                          >
+                            {p.customer.name ?? '—'}
+                          </Link>
+                        ) : (
+                          <span>{p.customer?.name ?? '—'}</span>
+                        )}
+                        {p.customer?.externalCustomerCode && (
                           <p className="text-xs text-concrete-500" dir="ltr">{p.customer.externalCustomerCode}</p>
                         )}
                       </TD>
@@ -594,7 +598,7 @@ function EditDialog({
   }, [item, reset]);
 
   return (
-    <Dialog open={!!item} onClose={onClose} title={`تعديل وعدين — ${item?.customer.name ?? ''}`}>
+    <Dialog open={!!item} onClose={onClose} title={`تعديل وعد — ${item?.customer?.name ?? ''}`}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <Field label="تاريخ الاستحقاق" error={errors.dueDate?.message}>
@@ -658,11 +662,11 @@ function StatusDialog({
   const availableTargets = TARGET_STATUSES.filter((t) => t.value !== item?.status);
 
   return (
-    <Dialog open={!!item} onClose={onClose} title={`تحديث حالة الوعد — ${item?.customer.name ?? ''}`}>
+    <Dialog open={!!item} onClose={onClose} title={`تحديث حالة الوعد — ${item?.customer?.name ?? ''}`}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {item && (
           <div className="rounded-lg border border-concrete-100 bg-concrete-50 p-3 text-sm dark:border-white/10 dark:bg-iron-700">
-            <p><span className="font-medium">العميل:</span> {item.customer.name}</p>
+            <p><span className="font-medium">العميل:</span> {item.customer?.name ?? '—'}</p>
             <p><span className="font-medium">المبلغ:</span> {fmtMoney(item.expectedAmount)} {item.currencyCode}</p>
             <p><span className="font-medium">الحالية:</span> {PROMISE_STATUS_AR[item.status] ?? item.status}</p>
             {item.fulfilledAmount != null && item.fulfilledAmount > 0 && (
