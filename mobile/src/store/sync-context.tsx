@@ -44,9 +44,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   const processQueue = async () => {
     const mutations = await getPendingMutations();
+    const { getClient } = await import('../api/client');
+    const client = await getClient();
     for (const m of mutations) {
       try {
-        const { default: client } = await import('../api/client');
         const payload = JSON.parse(m.payload);
         await client({
           method: m.type.toLowerCase(),

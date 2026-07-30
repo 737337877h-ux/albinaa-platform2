@@ -22,8 +22,8 @@ describe('constants', () => {
     expect(MUTATION_MAX_RETRIES).toBe(5);
   });
 
-  it('schema version is 2', () => {
-    expect(DB_SCHEMA_VERSION).toBe(2);
+  it('schema version is 3', () => {
+    expect(DB_SCHEMA_VERSION).toBe(3);
   });
 
   it('max image size is 10 MB', () => {

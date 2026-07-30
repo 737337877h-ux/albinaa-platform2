@@ -1,12 +1,18 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { useAuth } from '../store/auth-context';
+import { getBaseUrl } from '../config/api';
 
-export default function LoginScreen() {
+export default function LoginScreen({ navigation }: any) {
   const { login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [currentUrl, setCurrentUrl] = useState('');
+
+  React.useEffect(() => {
+    (async () => { setCurrentUrl(await getBaseUrl()); })();
+  }, []);
 
   const handleLogin = async () => {
     if (!username.trim() || !password) {
@@ -49,6 +55,10 @@ export default function LoginScreen() {
         <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
           <Text style={styles.buttonText}>{loading ? 'جارٍ تسجيل الدخول...' : 'تسجيل الدخول'}</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity style={styles.serverLink} onPress={() => navigation.navigate('ServerSettings')}>
+          <Text style={styles.serverLinkText}>⚙ {currentUrl || 'تغيير الخادم'}</Text>
+        </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
   );
@@ -62,4 +72,6 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 12, padding: 14, fontSize: 16, marginBottom: 16, color: '#333', textAlign: 'right' },
   button: { backgroundColor: '#1a73e8', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 8 },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  serverLink: { marginTop: 16, padding: 10, alignItems: 'center' },
+  serverLinkText: { color: '#1a73e8', fontSize: 13 },
 });

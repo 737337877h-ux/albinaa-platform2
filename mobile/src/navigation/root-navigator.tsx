@@ -22,6 +22,7 @@ import UploadReceiptScreen from '../screens/upload-receipt';
 import NotificationsScreen from '../screens/notifications';
 import ProfileScreen from '../screens/profile';
 import SettingsScreen from '../screens/settings';
+import ServerSettingsScreen from '../screens/server-settings';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -77,6 +78,7 @@ export default function RootNavigator() {
           <Stack.Screen name="NewTask" component={NewTaskScreen} options={{ title: 'مهمة جديدة' }} />
           <Stack.Screen name="UploadReceipt" component={UploadReceiptScreen} options={{ title: 'رفع سند' }} />
           <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'الإعدادات' }} />
+          <Stack.Screen name="ServerSettings" component={ServerSettingsScreen} options={{ title: 'إعدادات الخادم' }} />
         </Stack.Navigator>
       ) : (
         <Stack.Navigator screenOptions={{ headerShown: false }}>

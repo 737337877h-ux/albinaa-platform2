@@ -1,4 +1,4 @@
-import client from './client';
+import { getClient } from './client';
 
 export interface SyncResponse {
   syncToken: string;
@@ -24,11 +24,13 @@ export interface NamedOption {
   name: string;
 }
 
-export function fetchSync(lastSyncToken?: string) {
+export async function fetchSync(lastSyncToken?: string) {
+  const client = await getClient();
   return client.post<SyncResponse>('/mobile/sync', { lastSyncToken });
 }
 
-export function uploadGps(points: GpsPoint[]) {
+export async function uploadGps(points: GpsPoint[]) {
+  const client = await getClient();
   if (points.length === 1) {
     return client.post('/mobile/gps', points[0]);
   }
@@ -44,7 +46,8 @@ function resolveUploadMime(fileUri: string, filename: string): string {
   return 'image/jpeg';
 }
 
-export function uploadReceipt(fileUri: string, collectionId: string, notes?: string) {
+export async function uploadReceipt(fileUri: string, collectionId: string, notes?: string) {
+  const client = await getClient();
   const form = new FormData();
   const filename = fileUri.split('/').pop() || `receipt-${Date.now()}.jpg`;
   const mime = resolveUploadMime(fileUri, filename);
@@ -58,35 +61,42 @@ export function uploadReceipt(fileUri: string, collectionId: string, notes?: str
   });
 }
 
-export function fetchTodayBoard() {
+export async function fetchTodayBoard() {
+  const client = await getClient();
   return client.get('/tasks/today');
 }
 
-export function completeTask(id: string) {
+export async function completeTask(id: string) {
+  const client = await getClient();
   return client.patch(`/tasks/${id}/complete`);
 }
 
-export function fetchCustomers(query?: string) {
+export async function fetchCustomers(query?: string) {
+  const client = await getClient();
   return client.get('/mobile/customers', { params: { q: query } });
 }
 
-export function fetchCustomer360(id: string) {
+export async function fetchCustomer360(id: string) {
+  const client = await getClient();
   return client.get(`/mobile/customers/${id}`);
 }
 
-export function fetchCollectionMethods() {
+export async function fetchCollectionMethods() {
+  const client = await getClient();
   return client.get<NamedOption[]>('/collections/methods');
 }
 
-export function fetchFollowupTypes() {
+export async function fetchFollowupTypes() {
+  const client = await getClient();
   return client.get<NamedOption[]>('/followups/types');
 }
 
-export function fetchFollowupResults() {
+export async function fetchFollowupResults() {
+  const client = await getClient();
   return client.get<NamedOption[]>('/followups/results');
 }
 
-export function createFollowup(data: {
+export async function createFollowup(data: {
   customerId: string;
   typeId: string;
   resultId: string;
@@ -94,10 +104,11 @@ export function createFollowup(data: {
   followupAt?: string;
   nextFollowupDate?: string;
 }) {
+  const client = await getClient();
   return client.post('/followups', data);
 }
 
-export function createPromise(data: {
+export async function createPromise(data: {
   customerId: string;
   expectedAmount: number;
   currencyCode: string;
@@ -105,10 +116,11 @@ export function createPromise(data: {
   notes?: string;
   collectorId?: string;
 }) {
+  const client = await getClient();
   return client.post('/payment-promises', data);
 }
 
-export function createCollection(data: {
+export async function createCollection(data: {
   customerId: string;
   amount: number;
   currencyCode: string;
@@ -118,18 +130,21 @@ export function createCollection(data: {
   collectorId?: string;
   referenceNumber?: string;
 }) {
+  const client = await getClient();
   return client.post('/collections', data);
 }
 
-export function fetchNotifications() {
+export async function fetchNotifications() {
+  const client = await getClient();
   return client.get('/notifications');
 }
 
-export function fetchTasks() {
+export async function fetchTasks() {
+  const client = await getClient();
   return client.get('/tasks');
 }
 
-export function createTask(data: {
+export async function createTask(data: {
   customerId: string;
   taskType: string;
   dueDate: string;
@@ -138,13 +153,16 @@ export function createTask(data: {
   expectedAmount?: number;
   expectedCurrency?: string;
 }) {
+  const client = await getClient();
   return client.post('/tasks', data);
 }
 
-export function markNotificationRead(id: string) {
+export async function markNotificationRead(id: string) {
+  const client = await getClient();
   return client.patch(`/notifications/${id}/read`);
 }
 
-export function markAllNotificationsRead() {
+export async function markAllNotificationsRead() {
+  const client = await getClient();
   return client.patch('/notifications/read-all');
 }
