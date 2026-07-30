@@ -1,69 +1,67 @@
-# Project State - Bug Fix Sprint
-
-## Last Commit
-```
-59e8941 - fix: add debug logging, instant query invalidation, customer dedup
-```
+# Project State — AlBinaa Platform
 
 ## Current Status
-**Phase:** Bug Fix Sprint - Code Fixes Complete, Awaiting Device Retest
-**Date:** 2026-07-30
-**Backend:** http://192.168.83.30:3000
-**Test User:** admin / ChangeMe!2026
+- **Phase:** Released — v1.0.0 Stable
+- **Last Release Tag:** `v1.0.0` (pushed to origin)
+- **Last Commit (main):** `dd3809d` — release: v1.0.0 stable - code freeze, cleanup, documentation
+- **Date:** 2026-07-30
 
----
+## Branch Strategy (Git Flow)
 
-## Completed Fixes
+| Branch | Purpose | Status |
+|--------|---------|--------|
+| `main` | Stable releases only (v1.0.0, v1.0.1, v1.1.0, …) | 🔒 Locked — only hotfixes |
+| `release/v1.1` | Active development for v1.1 | ✅ Active — feature work |
+| `feature/*` | Individual features (branch from `release/v1.1`) | — |
+| `hotfix/*` | Urgent fixes for `main` (branch from `main`) | — |
 
-| Bug | Root cause | Fix |
-|-----|-----------|-----|
-| Customer360 Crash | `balances` JSON string in SQLite | `parseJsonField()` + null guards |
-| Notifications Empty | Paginated `{items:[...]}` response | `data?.items ?? (Array.isArray(data) ? data : [])` |
-| Dashboard Counters | Derived from empty syncData | Fetch from local SQLite |
-| Collection Create Fails | `methodId` text not UUID; no collectorId | Fetch methods from API; admin bypass assignment |
-| Follow-up Create Fails | `typeId` text not UUID | Fetch types/results from API |
-| Receipt Upload Reject | `image/jpg` not in ALLOWED_MIME_TYPES | Added `image/jpg` to backend |
-| Duplicate Customers | Full object upsert; no column filtering | `TABLE_COLUMNS` whitelist + JSON serialization |
-| App Crashes | No ErrorBoundary | Added ErrorBoundary in App.tsx |
-| Tasks Empty | Admin not a collector; sync fetches by collectorId | Admin auto-lookup; local SQLite |
-| Promise Create Fail | Wrong endpoint `/promises` vs `/payment-promises` | Changed to `/payment-promises` |
-| Admin Collection Fail | Customer assignment required | Admin `customers.read_all` bypasses assignment check |
+## Workflow
 
----
-
-## Open Items - Awaiting Physical Device Retest
-
-1. **Customer360** - Open 3 different customers, verify no crash ✅ Should be fixed
-2. **New Follow-up** - Create follow-up ✅ Reported working
-3. **New Collection** - Create collection ❌ Should be fixed now (admin bypass)
-4. **Upload Receipt** - Upload receipt with image/jpg
-5. **Duplicate Prevention** - Verify no duplicate customers after sync
-6. **Tasks** - Verify tasks appear for admin
-7. **Notifications** - Verify notifications display
-8. **Promise Create** - Cannot POST /promises ❌ Should be fixed now (`/payment-promises`)
-
----
-
-## Build Command
 ```bash
-cd mobile
-npx eas build --platform android --profile local-test --local
+# 1. Start a new feature (branch from release/v1.1)
+git checkout release/v1.1
+git pull origin release/v1.1
+git checkout -b feature/my-new-feature
+
+# 2. Work, commit, push, open PR → release/v1.1
+
+# 3. When v1.1 is ready → merge release/v1.1 → main, tag v1.1.0
+git checkout main
+git merge --no-ff release/v1.1
+git tag -a v1.1.0 -m "v1.1.0 — ..."
+git push origin main --tags
+
+# 4. Urgent hotfix on main
+git checkout main
+git checkout -b hotfix/critical-fix
+# fix → commit → PR → main → tag v1.0.1
 ```
 
----
+## Recommended Branch Protection Rules (GitHub)
 
-## New Features (NOT in Sprint - Requires Separate Discussion)
+- `main`: require PR + 1 review + status checks; disallow force-push
+- `release/v1.1`: require PR + status checks; allow force-push with lease
+- `feature/*`: no protection
 
-1. ~~Remove AED currency~~ ✅ Fixed - only YER, SAR, USD now
-2. ~~Promise due date field~~ ✅ Fixed - added input field
-3. Call/SMS/WhatsApp buttons in Customer360
-4. Customer location/map display
-5. Interactive notifications with deep linking
-6. Make currencies dynamic from API (currently hardcoded but only allowed ones shown)
+## v1.0.0 Snapshot
 
----
+- **Backend:** `v1.0.0` (NestJS + Prisma + PostgreSQL)
+- **Mobile:** `v1.0.0` (React Native + Expo SDK 57)
+- **Frontend:** built (Next.js 14)
+- **Tests:** 39/39 passing
+- **TypeScript:** 0 errors
+- **ESLint:** clean
+- **Expo Doctor:** 20/20
 
-## Key Files
-- **Backend:** `backend/src/collections/`, `backend/src/promises/`, `backend/src/mobile/`
-- **Mobile:** `mobile/src/screens/`, `mobile/src/api/endpoints.ts`, `mobile/src/store/sync-context.tsx`
-- **DB:** `mobile/src/db/database.ts`, `prisma/schema.prisma`
+## v1.1.0 Backlog (planned)
+
+1. Push Notifications (FCM/APNS)
+2. Call/SMS/WhatsApp buttons in Customer360
+3. Customer location map
+4. Dynamic currencies from API
+5. iOS support
+6. CI/CD pipeline
+7. Increase test coverage to 80%
+8. APM integration (Sentry)
+
+See [CHANGELOG.md](./CHANGELOG.md) and [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) for full details.
