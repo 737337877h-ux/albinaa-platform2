@@ -1,5 +1,5 @@
 'use client';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -35,36 +35,46 @@ const ADMIN_NAV = [
   { href: '/admin/audit', label: 'سجل العمليات', icon: ScrollText, perm: 'audit.read' },
 ] as const;
 
+function LoadingShell() {
+  return (
+    <div className="flex min-h-screen items-center justify-center gap-2 text-sm text-concrete-500">
+      <BrandLogo className="h-6 w-6" />
+      جارٍ التحميل…
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  // Prevent SSR/client hydration mismatch: server has no localStorage token,
+  // client may have one. First paint must match on both sides (LoadingShell).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
   const { data: me, isLoading, isError, error, refetch, isFetching } = useMe();
   const can = useCan();
 
   const unauthorized = isError && error instanceof ApiError && error.status === 401;
 
-  // حارس الجلسة: بلا توكن على الإطلاق، أو جلسة مرفوضة صراحة (401) → صفحة الدخول.
-  // أخطاء الشبكة أو الخادم (5xx وغيرها) لا تُخرج المستخدم تلقائيًا — تُعرض كخطأ قابل لإعادة المحاولة.
   useEffect(() => {
-    if (typeof window !== 'undefined' && !tokenStore.access) router.replace('/login');
-  }, [router]);
+    if (!mounted) return;
+    if (!tokenStore.access) router.replace('/login');
+  }, [mounted, router]);
+
   useEffect(() => {
+    if (!mounted) return;
     if (unauthorized) router.replace('/login');
-  }, [unauthorized, router]);
+  }, [mounted, unauthorized, router]);
+
+  // Same tree on server and first client paint — avoids React #418/#423
+  if (!mounted) return <LoadingShell />;
 
   const nav = NAV.filter((n) => can(n.perm));
   const adminNav = ADMIN_NAV.filter((n) => can(n.perm));
 
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center gap-2 text-sm text-concrete-500">
-        <BrandLogo className="h-6 w-6" />
-        جارٍ التحميل…
-      </div>
-    );
-  }
+  if (isLoading) return <LoadingShell />;
 
-  // خطأ غير 401 (انقطاع شبكة، 5xx، ...): لا نُخرج المستخدم، نعرض رسالة مع إعادة محاولة.
   if (isError && !unauthorized) {
     const message = error instanceof ApiError
       ? (error.status === 0
@@ -86,11 +96,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!me) return null; // 401 قيد التوجيه إلى /login
+  if (!me) return <LoadingShell />;
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[15rem_1fr]">
-      {/* الشريط الجانبي — يمين الشاشة تلقائيًا بحكم RTL، سطح المكتب فقط */}
       <aside className="hidden bg-iron-900 text-white lg:flex lg:flex-col">
         <div className="flex items-center gap-2.5 px-5 py-5">
           <BrandLogo className="h-7 w-7" />
@@ -142,12 +151,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </nav>
         <div className="border-t border-white/10 px-5 py-4 text-xs text-white/60">
-          نسخة Alpha الداخلية
+          v1.0.0
         </div>
       </aside>
 
       <div className="flex min-h-screen flex-col">
-        {/* الشريط العلوي: شعار (هاتف) + Breadcrumb (سطح المكتب) + إشعارات + قائمة المستخدم */}
         <header className="sticky top-0 z-40 border-b border-concrete-200 bg-white/90 backdrop-blur dark:border-white/10 dark:bg-iron-900/90">
           <div className="flex items-center justify-between px-4 py-3 lg:px-6">
             <div className="flex items-center gap-2 lg:hidden">
@@ -162,7 +170,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <UserMenu me={me} />
             </div>
           </div>
-          {/* Breadcrumb على الهاتف: سطر منفصل لضيق المساحة */}
           <div className="border-t border-concrete-100 px-4 py-1.5 dark:border-white/10 lg:hidden">
             <Breadcrumb />
           </div>
@@ -170,7 +177,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <main className="flex-1 px-4 py-5 pb-24 lg:px-6 lg:pb-8">{children}</main>
 
-        {/* شريط الهاتف السفلي بزر "تحصيل" مركزي — توقيع تصميمي ميداني */}
         <nav
           aria-label="التنقل السريع"
           className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-concrete-200 bg-white dark:border-white/10 dark:bg-iron-900 lg:hidden"
