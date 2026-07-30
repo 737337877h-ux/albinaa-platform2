@@ -32,8 +32,8 @@ async function bootstrap() {
   if (process.env.NODE_ENV !== 'production') {
     const swaggerCfg = new DocumentBuilder()
       .setTitle('AlBinaa Credit & Collection API')
-      .setDescription('منصة البناء الراقي لإدارة المديونية والتحصيل — Milestone 2: API Foundation')
-      .setVersion(process.env.APP_VERSION ?? '0.2.0')
+      .setDescription('منصة البناء الراقي لإدارة المديونية والتحصيل — v1.0 Stable')
+      .setVersion(process.env.APP_VERSION ?? '1.0.0')
       .addBearerAuth(
         { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Access Token' },
         'access-token',

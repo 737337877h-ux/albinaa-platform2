@@ -4,6 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { getMe } from '../api/auth';
 import { apiErrorMessage } from '../utils/errors';
 import Loading from '../components/loading';
+import { APP_VERSION } from '../utils/constants';
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<any>(null);
@@ -67,7 +68,7 @@ export default function ProfileScreen() {
       </View>
 
       <View style={styles.section}>
-        <InfoRow label="إصدار التطبيق" value="1.0.0" />
+        <InfoRow label="إصدار التطبيق" value={APP_VERSION} />
         <InfoRow label="المنصة" value="React Native (Expo)" />
       </View>
     </ScrollView>
@@ -98,6 +99,4 @@ const styles = StyleSheet.create({
   errorText: { color: '#ea4335', fontSize: 14, textAlign: 'center' },
   retryBtn: { marginTop: 10, padding: 8 },
   retryText: { color: '#1a73e8', fontSize: 14, fontWeight: '600' },
-  serverBtn: { backgroundColor: '#1a73e8', margin: 16, padding: 16, borderRadius: 10, alignItems: 'center' },
-  serverBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
 });

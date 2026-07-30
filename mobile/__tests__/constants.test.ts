@@ -7,7 +7,7 @@ import {
 
 describe('constants', () => {
   it('exports expected app version', () => {
-    expect(APP_VERSION).toBe('1.1.0');
+    expect(APP_VERSION).toBe('1.0.0');
   });
 
   it('sync interval is 30 seconds', () => {

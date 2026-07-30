@@ -115,14 +115,6 @@ export class PromisesService {
     const customer = isAdmin
       ? await this.prisma.customer.findFirst({ where: { id: dto.customerId, organizationId: actor.organizationId } })
       : await this.assertCurrentAssignment(actor, dto.customerId, collectorId);
-    console.log('[PROMISE_DEBUG]', JSON.stringify({
-      actorId: actor.id,
-      collectorId,
-      customerId: dto.customerId,
-      hasCustomersReadAll: actor.permissions.includes('customers.read_all'),
-      isAdminBypass: isAdmin,
-      assignmentCheckExecuted: !isAdmin,
-    }));
     if (!customer) throw new NotFoundException('العميل غير موجود');
     const currency = await this.prisma.currency.findFirst({
       where: { code: dto.currencyCode, active: true },
@@ -398,21 +390,14 @@ export class PromisesService {
     // --- تسجيل تشخيصي مؤقت: يُزال بعد تحديد السبب الحقيقي لـ 500 ---
     this.logger.debug(`[sweepOverdue] بدء — ${overdue.length} وعدًا متأخرًا للمنشأة ${orgId}`);
     for (const p of overdue) {
-      this.logger.debug(
-        `[sweepOverdue] معالجة الوعد ${p.id} `
-        + `(collectorId=${p.collectorId}, customerId=${p.customerId}, `
-        + `collector موجود=${!!p.collector}, customer موجود=${!!p.customer})`,
-      );
       // العلاقتان إلزاميتان في المخطط (FK غير قابل للإفراغ). لا نُخفي غيابهما
-      // بتخطٍّ صامت — هذا فساد بيانات حقيقي يستحق الظهور فورًا وبوضوح،
-      // لا الابتلاع (قرار صريح بعد اعتراض المراجعة على الإصلاح الدفاعي السابق).
+      // بتخطٍّ صامت — هذا فساد بيانات حقيقي يستحق الظهور فورًا وبوضوح.
       if (!p.collector || !p.customer) {
         throw new Error(
           `sweepOverdue: الوعد ${p.id} بلا علاقة محصل/عميل صالحة رغم أن العمودين `
           + `إلزاميان في المخطط (collectorId=${p.collectorId}, customerId=${p.customerId})`,
         );
       }
-      this.logger.debug(`[sweepOverdue] ${p.id} — بدء المعاملة (update+updateMany+create)`);
       await this.prisma.$transaction(async (tx) => {
         await tx.paymentPromise.update({
           where: { id: p.id },
@@ -435,14 +420,11 @@ export class PromisesService {
           },
         });
       });
-      this.logger.debug(`[sweepOverdue] ${p.id} — انتهت المعاملة، إرسال الإشعار`);
       await this.notifications.notifyUser(p.collector.userId, 'promise_overdue', {
         promiseId: p.id, customerId: p.customerId, customerName: p.customer.name,
         amount: Number(p.expectedAmount), currency: p.currencyCode,
       });
-      this.logger.debug(`[sweepOverdue] ${p.id} — اكتمل بالكامل`);
     }
-    this.logger.debug('[sweepOverdue] انتهى المسح — تحديث upcoming→due_today لوعود اليوم');
     // تحديث upcoming → due_today لوعود اليوم
     await this.prisma.paymentPromise.updateMany({
       where: {
@@ -452,7 +434,7 @@ export class PromisesService {
       },
       data: { status: 'due_today' },
     });
-    this.logger.debug(`[sweepOverdue] انتهى بالكامل — swept=${overdue.length}`);
+    this.logger.log(`[sweepOverdue] org=${orgId} — تم مسح ${overdue.length} وعدًا متأخرًا`);
     return { swept: overdue.length };
   }
 }

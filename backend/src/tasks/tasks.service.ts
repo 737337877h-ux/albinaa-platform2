@@ -89,11 +89,8 @@ export class TasksService {
     }
     const orgId = user.organizationId;
 
-    // --- تسجيل تشخيصي مؤقت: يُزال بعد تحديد السبب الحقيقي لـ 500 ---
-    this.logger.debug(`[today] قبل sweepOverdue — collector=${collector.id}, org=${orgId}`);
     // 0) مسح الوعود المتأخرة أولاً (idempotent)
     await this.promises.sweepOverdue(orgId);
-    this.logger.debug('[today] بعد sweepOverdue');
 
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const staleDays = Number(await this.setting(orgId, 'followup_stale_days', 14));
@@ -117,7 +114,6 @@ export class TasksService {
         scores: { orderBy: { computedAt: 'desc' }, take: 1 },
       },
     });
-    this.logger.debug(`[today] بعد جلب assigned — العدد=${assigned.length}`);
 
     // 1) مهام الوعود المفتوحة المستحقة اليوم أو المتأخرة (تشمل التصعيدات)
     const promiseTasks = await this.prisma.task.findMany({
@@ -129,7 +125,6 @@ export class TasksService {
       },
       include: { customer: { select: { id: true, name: true, phonePrimary: true } } },
     });
-    this.logger.debug(`[today] بعد جلب promiseTasks — العدد=${promiseTasks.length}`);
 
     const items: {
       customerId: string; customerName: string; phone: string | null;

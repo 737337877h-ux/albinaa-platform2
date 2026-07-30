@@ -1,104 +1,149 @@
-# تثبيت منصة البناء الراقي
+# دليل التثبيت — البناء الراقي v1.0
 
-## المتطلبات
+## المتطلبات الأساسية
 
-| المكوّن | الحد الأدنى | ملاحظات |
-|---------|------------|---------|
-| Node.js | 22+ | `node --version` |
-| Docker | 24+ | مع Docker Compose V2 |
-| PostgreSQL | 16 | أو عبر Docker |
-| Python | 3.10+ | مع `openpyxl` (لاستيراد Excel) |
-| Git | 2.30+ | |
+| المكوّن | الحد الأدنى | المُوصى |
+|---------|-------------|---------|
+| Node.js | 20.x | 22.x |
+| npm | 10.x | 11.x |
+| Docker | 24+ | 26+ |
+| Docker Compose | 2.20+ | أحدث |
+| PostgreSQL | 14 | 16 |
+| Expo CLI | - | latest |
 
-## تثبيت محلي (Development)
+## 1. الاستنساخ
 
-### 1. استنساخ المستودع
 ```bash
 git clone https://github.com/737337877h-ux/albinaa-platform2.git
 cd albinaa-platform
 ```
 
-### 2. إعداد قاعدة البيانات
+## 2. إعداد البيئة للتطوير
+
 ```bash
-# تشغيل PostgreSQL عبر Docker
-docker compose up -d db
-
-# التحقق من التشغيل
-docker compose ps
-```
-
-### 3. إعداد Backend
-```bash
-cd backend
-
-# نسخ ملف البيئة
+# نسخ ملفات البيئة
 cp .env.example .env
+cp .env.prod.example .env.prod
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
 
-# تعديل DATABASE_URL ليتوافق مع Docker
-# DATABASE_URL="postgresql://albinaa:albinaa_dev_only@localhost:6543/albinaa?schema=public"
+# توليد JWT secrets
+node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 
-# تثبيت التبعيات
-npm install
-
-# توليد Prisma Client
-npx prisma generate --schema=../prisma/schema.prisma
-
-# تطبيق Migrations
-npx prisma migrate deploy --schema=../prisma/schema.prisma
-
-# إدخال البيانات المرجعية
-npx prisma db seed
-# أو
-npm run prisma:seed
+# ضع القيم المولّدة في:
+#   - backend/.env (JWT_ACCESS_SECRET, JWT_REFRESH_SECRET)
+#   - .env.prod (للإنتاج)
 ```
 
-### 4. إعداد Frontend
+## 3. التشغيل عبر Docker (الأسهل)
+
 ```bash
-cd ../frontend
+# بناء وتشغيل كل الخدمات
+docker compose up -d
 
-# تثبيت التبعيات
-npm install
+# التحقق من الحالة
+docker compose ps
+docker compose logs -f backend
 
-# نسخ ملف البيئة (اختياري)
-cp .env.example .env.local
+# الدخول إلى حاوية الـbackend
+docker compose exec backend sh
+
+# تنفيذ migrations
+docker compose exec backend npx prisma migrate deploy
+
+# تهيئة admin الافتراضي (اختياري - يُنفذ تلقائياً عند أول تشغيل)
+docker compose exec backend node dist/scripts/seed.js
 ```
 
-### 5. تشغيل
+الخدمات المتاحة:
+- **Backend API**: http://localhost:3000
+- **Swagger UI**: http://localhost:3000/docs
+- **Frontend Dashboard**: http://localhost:3001
+- **PostgreSQL**: localhost:6543
+- **Nginx** (production only): http://localhost:80
+
+## 4. التشغيل اليدوي (للتطوير)
+
+### الـBackend
 ```bash
-# Terminal 1 — Backend
 cd backend
-npm run start:dev
+npm install
 
-# Terminal 2 — Frontend
+# تأكد من تشغيل PostgreSQL
+# .env: DATABASE_URL=postgresql://albinaa:albinaa@localhost:5432/albinaa
+
+npx prisma migrate deploy
+npx prisma generate
+npm run start:dev
+```
+
+### الـFrontend
+```bash
 cd frontend
+npm install
 npm run dev
 ```
 
-### 6. التحقق
-- Frontend: http://localhost:18001
-- Backend API: http://localhost:18000
-- Swagger Docs: http://localhost:18000/docs (development فقط)
-- Health Check: http://localhost:18000/health
-
-## تثبيت الإنتاج
-
-راجع [DEPLOYMENT.md](DEPLOYMENT.md) للتفاصيل.
-
-## حل المشاكل الشائعة
-
-### الخطأ: `password authentication failed`
-تأكد من أن PostgreSQL يعمل على المنفذ الصحيح (6543) وأن DATABASE_URL يطابق.
-
-### الخطأ: `python3: command not found`
-مثبّت Python 3 و `openpyxl`:
+### الـMobile
 ```bash
-pip install openpyxl
-# أو
-pip3 install openpyxl
+cd mobile
+npm install
+
+# تشغيل Metro bundler
+npx expo start
+
+# في نافذة أخرى، بناء APK للاختبار
+npx expo prebuild --platform android
+cd android
+./gradlew assembleDebug
 ```
 
-### الخطأ: `EACCES: permission denied` على المنفذ
-غيّر المنفذ في `.env`:
+## 5. المستخدم الافتراضي
+
+عند أول تشغيل، يتم إنشاء مستخدم admin تلقائياً:
+- **Username**: `admin`
+- **Password**: قيمة `ADMIN_INITIAL_PASSWORD` من البيئة (الافتراضي: `ChangeMe!2026`)
+
+⚠️ **غيّر كلمة المرور فوراً بعد أول تسجيل دخول.**
+
+## 6. التحقق من التثبيت
+
+```bash
+# اختبار صحة الـBackend
+curl http://localhost:3000/health
+
+# يجب أن يعيد:
+# {"status":"ok","version":"1.0.0","environment":"development",...}
+
+# اختبار قاعدة البيانات
+curl http://localhost:3000/health/database
+
+# اختبار تسجيل الدخول
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"ChangeMe!2026"}'
 ```
-PORT=18000
+
+## استكشاف الأخطاء
+
+| المشكلة | الحل |
+|---------|------|
+| `ECONNREFUSED 5432` | تأكد من تشغيل PostgreSQL |
+| `JWT secret invalid` | تأكد من تعيين `JWT_ACCESS_SECRET` و`JWT_REFRESH_SECRET` |
+| `Prisma Client not generated` | شغّل `npx prisma generate` |
+| `EACCES port 3000` | غيّر `PORT` في `.env` |
+| Mobile build fails | تأكد من تثبيت Android SDK وJDK 17 |
+
+## التحديث
+
+```bash
+git pull origin main
+docker compose build --no-cache
+docker compose up -d --force-recreate
+docker compose exec backend npx prisma migrate deploy
 ```
+
+## الدعم
+
+راجع [docs/](./docs/) أو افتح issue في GitHub.
