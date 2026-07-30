@@ -2,7 +2,7 @@
 
 ## Last Commit
 ```
-d721c13 - fix(new-promise): add dueDate input field, remove AED, fix offline queue endpoint
+59e8941 - fix: add debug logging, instant query invalidation, customer dedup
 ```
 
 ## Current Status
