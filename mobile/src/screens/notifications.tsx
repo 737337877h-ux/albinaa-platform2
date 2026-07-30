@@ -4,11 +4,32 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchNotifications, markNotificationRead, markAllNotificationsRead } from '../api/endpoints';
 import Loading from '../components/loading';
 
+export interface NotificationItem {
+  id: string;
+  title: string;
+  body: string;
+  createdAt: string;
+  readAt?: string | null;
+}
+
+interface NotificationsResponse {
+  items?: NotificationItem[];
+}
+
+function extractNotifications(payload: NotificationsResponse | NotificationItem[] | undefined): NotificationItem[] {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  return payload.items ?? [];
+}
+
 export default function NotificationsScreen() {
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading } = useQuery<NotificationItem[]>({
     queryKey: ['notifications'],
-    queryFn: fetchNotifications,
+    queryFn: async () => {
+      const res = await fetchNotifications();
+      return extractNotifications(res.data);
+    },
   });
 
   const readMutation = useMutation({
@@ -23,7 +44,7 @@ export default function NotificationsScreen() {
 
   if (isLoading) return <Loading />;
 
-  const notifications = data?.items ?? (Array.isArray(data) ? data : []);
+  const notifications: NotificationItem[] = data ?? [];
 
   return (
     <View style={styles.container}>
@@ -34,7 +55,7 @@ export default function NotificationsScreen() {
       )}
       <FlatList
         data={notifications}
-        keyExtractor={(item: any) => item.id}
+        keyExtractor={(item: NotificationItem) => item.id}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={[styles.item, !item.readAt && styles.unread]}
