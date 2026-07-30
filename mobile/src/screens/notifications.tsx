@@ -80,7 +80,10 @@ export default function NotificationsScreen() {
 
   const readAllMutation = useMutation({
     mutationFn: markAllNotificationsRead,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+    onSuccess: async () => {
+      // Force refetch (not just invalidate) so the UI updates immediately
+      await queryClient.refetchQueries({ queryKey: ['notifications'] });
+    },
   });
 
   if (isLoading) return <Loading />;

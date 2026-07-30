@@ -58,7 +58,7 @@ export function uploadReceipt(fileUri: string, collectionId: string, notes?: str
   });
 }
 
-export function fetchTasks() {
+export function fetchTodayBoard() {
   return client.get('/tasks/today');
 }
 
@@ -123,6 +123,22 @@ export function createCollection(data: {
 
 export function fetchNotifications() {
   return client.get('/notifications');
+}
+
+export function fetchTasks() {
+  return client.get('/tasks');
+}
+
+export function createTask(data: {
+  customerId: string;
+  taskType: string;
+  dueDate: string;
+  assignedTo?: string;
+  priorityReason?: string;
+  expectedAmount?: number;
+  expectedCurrency?: string;
+}) {
+  return client.post('/tasks', data);
 }
 
 export function markNotificationRead(id: string) {

@@ -91,26 +91,47 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       const { syncToken, tasks, customers, followups, promises, collections } = res.data;
       await setMeta('syncToken', syncToken);
 
-      for (const c of customers || []) {
+      // Dedupe by id in case backend sent duplicates (defense in depth)
+      const dedupeById = <T extends { id: string }>(arr: T[]): T[] => {
+        const seen = new Set<string>();
+        const out: T[] = [];
+        for (const item of arr) {
+          if (seen.has(item.id)) continue;
+          seen.add(item.id);
+          out.push(item);
+        }
+        return out;
+      };
+
+      // Clean SQLite of any existing duplicates BEFORE inserting fresh data
+      const { dedupeTable } = await import('../db/database');
+      await dedupeTable('customers');
+      await dedupeTable('tasks');
+      await dedupeTable('followups');
+      await dedupeTable('promises');
+      await dedupeTable('collections');
+
+      const uniqueCustomers = dedupeById(customers || []);
+      for (const c of uniqueCustomers) {
         const row = pickColumns('customers', {
           ...c,
           balances: typeof c.balances === 'string' ? c.balances : JSON.stringify(c.balances || []),
         });
         if (row) await upsert('customers', row);
       }
-      for (const t of tasks || []) {
+      for (const t of dedupeById(tasks || [])) {
         const row = pickColumns('tasks', t);
         if (row) await upsert('tasks', row);
       }
-      for (const f of followups || []) {
+      for (const f of dedupeById(followups || [])) {
         const row = pickColumns('followups', f);
         if (row) await upsert('followups', row);
       }
-      for (const p of promises || []) {
+      for (const p of dedupeById(promises || [])) {
         const row = pickColumns('promises', p);
         if (row) await upsert('promises', row);
       }
-      for (const c of collections || []) {
+      for (const c of dedupeById(collections || [])) {
         const row = pickColumns('collections', c);
         if (row) await upsert('collections', row);
       }

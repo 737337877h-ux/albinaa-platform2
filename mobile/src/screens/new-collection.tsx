@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createCollection, fetchCollectionMethods } from '../api/endpoints';
@@ -6,13 +6,17 @@ import { enqueueMutation } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
+import CustomerPicker from '../components/customer-picker';
 
 export default function NewCollectionScreen({ route, navigation }: any) {
-  const customerId = route.params?.customerId || '';
+  const presetCustomerId = route.params?.customerId || '';
+  const presetCustomerName = route.params?.customerName || '';
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('YER');
   const [methodId, setMethodId] = useState('');
   const [notes, setNotes] = useState('');
+  const [customerId, setCustomerId] = useState(presetCustomerId);
+  const [customerName, setCustomerName] = useState(presetCustomerName);
   const queryClient = useQueryClient();
   const { triggerSync } = useSync();
 
@@ -21,17 +25,9 @@ export default function NewCollectionScreen({ route, navigation }: any) {
     queryFn: () => fetchCollectionMethods().then((r) => r.data || []),
   });
 
-  useEffect(() => {
-    if (!customerId) {
-      Alert.alert('تنبيه', 'اختر عميلاً أولاً من قائمة العملاء ثم اضغط تحصيل', [
-        { text: 'حسناً', onPress: () => navigation.goBack() },
-      ]);
-    }
-  }, [customerId]);
-
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!customerId) throw new Error('معرّف العميل مطلوب');
+      if (!customerId) throw new Error('اختر عميلاً');
       if (!methodId) throw new Error('اختر طريقة الدفع');
       const num = Number(amount);
       if (!Number.isFinite(num) || num <= 0) throw new Error('المبلغ يجب أن يكون أكبر من صفر');
@@ -62,13 +58,11 @@ export default function NewCollectionScreen({ route, navigation }: any) {
     },
     onSuccess: (res: any) => {
       const collectionId = res?.data?.id || res?.id || '';
-      // Invalidate all related queries so Customer360/Dashboard/Collections refetch
       queryClient.invalidateQueries({ queryKey: ['customer-details'] });
       queryClient.invalidateQueries({ queryKey: ['customer-timeline'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['collections'] });
       queryClient.invalidateQueries({ queryKey: ['sync'] });
-      // Trigger local sync refresh
       triggerSync();
       Alert.alert('تم', res?.data?.offline ? 'تم حفظ التحصيل محليًا وسيُزامَن لاحقًا' : 'تم تسجيل التحصيل', [
         ...(collectionId && !res?.data?.offline
@@ -86,7 +80,11 @@ export default function NewCollectionScreen({ route, navigation }: any) {
 
   return (
     <ScrollView style={styles.container}>
-      {!customerId && <Text style={styles.warn}>يجب اختيار عميل قبل تسجيل التحصيل</Text>}
+      <CustomerPicker
+        selectedId={customerId}
+        selectedName={customerName}
+        onSelect={(c) => { setCustomerId(c.id); setCustomerName(c.fullName); }}
+      />
 
       <Text style={styles.label}>المبلغ المحصل</Text>
       <TextInput style={styles.input} placeholder="المبلغ" placeholderTextColor="#999" value={amount} onChangeText={setAmount} keyboardType="numeric" />
@@ -139,7 +137,7 @@ const styles = StyleSheet.create({
   btnText: { color: '#333' },
   btnTextActive: { color: '#fff' },
   textarea: { backgroundColor: '#fff', borderRadius: 10, padding: 14, fontSize: 16, color: '#333', textAlignVertical: 'top', minHeight: 80 },
-  button: { backgroundColor: '#ea4335', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 24 },
+  button: { backgroundColor: '#ea4335', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 24, marginBottom: 40 },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   warn: { color: '#b45309', backgroundColor: '#fff7ed', padding: 12, borderRadius: 8, marginBottom: 8 },
 });

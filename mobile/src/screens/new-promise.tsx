@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, Platform } from 'react-native';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createPromise } from '../api/endpoints';
@@ -6,13 +6,13 @@ import { enqueueMutation } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
+import CustomerPicker from '../components/customer-picker';
 
 const CURRENCIES = ['YER', 'SAR', 'USD'];
 
 export default function NewPromiseScreen({ route, navigation }: any) {
-  const customerId = route.params?.customerId || '';
-  const queryClient = useQueryClient();
-  const { triggerSync } = useSync();
+  const presetCustomerId = route.params?.customerId || '';
+  const presetCustomerName = route.params?.customerName || '';
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('YER');
   const [dueDate, setDueDate] = useState(() => {
@@ -21,18 +21,14 @@ export default function NewPromiseScreen({ route, navigation }: any) {
     return d.toISOString().split('T')[0];
   });
   const [notes, setNotes] = useState('');
-
-  useEffect(() => {
-    if (!customerId) {
-      Alert.alert('تنبيه', 'اختر عميلاً أولاً من قائمة العملاء ثم اضغط وعد سداد', [
-        { text: 'حسناً', onPress: () => navigation.goBack() },
-      ]);
-    }
-  }, [customerId]);
+  const [customerId, setCustomerId] = useState(presetCustomerId);
+  const [customerName, setCustomerName] = useState(presetCustomerName);
+  const queryClient = useQueryClient();
+  const { triggerSync } = useSync();
 
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!customerId) throw new Error('معرّف العميل مطلوب');
+      if (!customerId) throw new Error('اختر عميلاً');
       const num = Number(amount);
       if (!Number.isFinite(num) || num <= 0) throw new Error('المبلغ يجب أن يكون أكبر من صفر');
       if (!dueDate) throw new Error('تاريخ الاستحقاق مطلوب');
@@ -75,7 +71,11 @@ export default function NewPromiseScreen({ route, navigation }: any) {
 
   return (
     <ScrollView style={styles.container}>
-      {!customerId && <Text style={styles.warn}>يجب اختيار عميل قبل تسجيل وعد السداد</Text>}
+      <CustomerPicker
+        selectedId={customerId}
+        selectedName={customerName}
+        onSelect={(c) => { setCustomerId(c.id); setCustomerName(c.fullName); }}
+      />
 
       <Text style={styles.label}>المبلغ</Text>
       <TextInput
@@ -126,7 +126,6 @@ const styles = StyleSheet.create({
   currencyText: { color: '#333' },
   currencyTextActive: { color: '#fff' },
   textarea: { backgroundColor: '#fff', borderRadius: 10, padding: 14, fontSize: 16, color: '#333', textAlignVertical: 'top', minHeight: 80 },
-  button: { backgroundColor: '#34a853', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 24 },
+  button: { backgroundColor: '#34a853', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 24, marginBottom: 40 },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
-  warn: { color: '#b45309', backgroundColor: '#fff7ed', padding: 12, borderRadius: 8, marginBottom: 8 },
 });

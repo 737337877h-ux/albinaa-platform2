@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { PromisesService } from '../promises/promises.service';
@@ -22,6 +22,10 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly promises: PromisesService,
   ) {}
+
+  private async collectorOf(user: AuthUser) {
+    return this.prisma.collector.findUnique({ where: { userId: user.id } });
+  }
 
   private async setting<T>(orgId: string, key: string, fallback: T): Promise<T> {
     const row = await this.prisma.systemSetting.findUnique({
@@ -273,5 +277,60 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException('المهمة غير موجودة أو خارج نطاق صلاحيتك');
     return this.prisma.task.update({ where: { id: taskId }, data: { status: 'done' } });
+  }
+
+  /** إنشاء مهمة جديدة. الإدارة (customers.read_all) تحدد collectorId صراحة أو تُترك فارغة للإسناد الذاتي. */
+  async create(user: AuthUser, dto: {
+    customerId: string;
+    taskType: string;
+    dueDate: string;
+    assignedTo?: string;
+    priorityReason?: string;
+    expectedAmount?: number;
+    expectedCurrency?: string;
+  }) {
+    const isAdmin = user.permissions.includes('customers.read_all');
+    let collectorId = dto.assignedTo;
+    if (!collectorId) {
+      const own = await this.collectorOf(user);
+      if (own) {
+        collectorId = own.id;
+      } else if (isAdmin) {
+        // الإدارة بلا collector: يبحث عن إسناد العميل
+        const assignment = await this.prisma.customerAssignment.findFirst({
+          where: { customerId: dto.customerId, effectiveTo: null },
+          orderBy: { effectiveFrom: 'desc' },
+        });
+        if (!assignment) {
+          throw new BadRequestException('العميل غير مسند لأي محصل — يلزم إسناد ساري أو تحديد collectorId');
+        }
+        collectorId = assignment.collectorId;
+      } else {
+        throw new BadRequestException('حدد collectorId أو كن محصلاً');
+      }
+    }
+
+    const customer = await this.prisma.customer.findFirst({
+      where: { id: dto.customerId, organizationId: user.organizationId },
+    });
+    if (!customer) throw new NotFoundException('العميل غير موجود');
+
+    const task = await this.prisma.task.create({
+      data: {
+        customerId: dto.customerId,
+        assignedTo: collectorId,
+        createdBy: user.id,
+        taskType: dto.taskType,
+        dueDate: new Date(dto.dueDate),
+        priorityReason: dto.priorityReason,
+        expectedAmount: dto.expectedAmount,
+        expectedCurrency: dto.expectedCurrency,
+        status: 'open',
+      },
+    });
+    return this.prisma.task.findUnique({
+      where: { id: task.id },
+      include: { customer: { select: { id: true, name: true } } },
+    });
   }
 }

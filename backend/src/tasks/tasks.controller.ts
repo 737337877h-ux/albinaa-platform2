@@ -1,8 +1,9 @@
-import { Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { CreateTaskDto } from './dto/create-task.dto';
 import { TasksService } from './tasks.service';
 
 @ApiTags('Daily Tasks')
@@ -33,6 +34,13 @@ export class TasksController {
     @Query('status') status?: string,
   ) {
     return this.tasks.list(user, collectorId, status ?? 'open');
+  }
+
+  @Post()
+  @RequirePermissions('tasks.manage')
+  @ApiOperation({ summary: 'إنشاء مهمة جديدة' })
+  create(@CurrentUser() user: AuthUser, @Body() dto: CreateTaskDto) {
+    return this.tasks.create(user, dto);
   }
 
   @Patch(':id/complete')

@@ -2,13 +2,26 @@ import * as SQLite from 'expo-sqlite';
 
 let db: SQLite.SQLiteDatabase;
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => Promise<void>> = {
   2: async (d) => {
     await d.execAsync(`
       ALTER TABLE mutation_queue ADD COLUMN nextRetryAt TEXT;
       PRAGMA user_version = 2;
+    `);
+  },
+  3: async (d) => {
+    // Ensure UNIQUE indexes on every table that uses id as the conflict key.
+    // PRIMARY KEY already enforces uniqueness, but explicit UNIQUE indexes
+    // make the intent clear and protect against schema drift.
+    await d.execAsync(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_id ON customers(id);
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_id ON tasks(id);
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_followups_id ON followups(id);
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_promises_id ON promises(id);
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_collections_id ON collections(id);
+      PRAGMA user_version = 3;
     `);
   },
 };

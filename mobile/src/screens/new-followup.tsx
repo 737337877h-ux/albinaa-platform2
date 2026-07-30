@@ -1,13 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFollowup, fetchFollowupResults, fetchFollowupTypes } from '../api/endpoints';
 import { enqueueMutation } from '../db/database';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
+import CustomerPicker from '../components/customer-picker';
 
 export default function NewFollowupScreen({ route, navigation }: any) {
-  const customerId = route.params?.customerId || '';
+  const presetCustomerId = route.params?.customerId || '';
+  const presetCustomerName = route.params?.customerName || '';
+  const [customerId, setCustomerId] = useState(presetCustomerId);
+  const [customerName, setCustomerName] = useState(presetCustomerName);
   const [typeId, setTypeId] = useState('');
   const [resultId, setResultId] = useState('');
   const [notes, setNotes] = useState('');
@@ -23,17 +27,9 @@ export default function NewFollowupScreen({ route, navigation }: any) {
     queryFn: () => fetchFollowupResults().then((r) => r.data || []),
   });
 
-  useEffect(() => {
-    if (!customerId) {
-      Alert.alert('تنبيه', 'اختر عميلاً أولاً من قائمة العملاء ثم اضغط متابعة', [
-        { text: 'حسناً', onPress: () => navigation.goBack() },
-      ]);
-    }
-  }, [customerId]);
-
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!customerId) throw new Error('معرّف العميل مطلوب');
+      if (!customerId) throw new Error('اختر عميلاً');
       if (!typeId) throw new Error('اختر نوع المتابعة');
       if (!resultId) throw new Error('اختر نتيجة المتابعة');
       const payload = {
@@ -74,7 +70,11 @@ export default function NewFollowupScreen({ route, navigation }: any) {
 
   return (
     <ScrollView style={styles.container}>
-      {!customerId && <Text style={styles.warn}>يجب اختيار عميل قبل تسجيل المتابعة</Text>}
+      <CustomerPicker
+        selectedId={customerId}
+        selectedName={customerName}
+        onSelect={(c) => { setCustomerId(c.id); setCustomerName(c.fullName); }}
+      />
 
       <Text style={styles.label}>نوع المتابعة</Text>
       {typesQuery.isLoading ? (
@@ -143,5 +143,4 @@ const styles = StyleSheet.create({
   textarea: { backgroundColor: '#fff', borderRadius: 10, padding: 14, fontSize: 16, color: '#333', textAlignVertical: 'top', minHeight: 100 },
   button: { backgroundColor: '#1a73e8', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 24, marginBottom: 40 },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
-  warn: { color: '#b45309', backgroundColor: '#fff7ed', padding: 12, borderRadius: 8, marginBottom: 8 },
 });
