@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, Platform } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCustomer360 } from '../api/endpoints';
 import { getById } from '../db/database';
@@ -96,6 +96,29 @@ export default function Customer360Screen({ route, navigation }: any) {
           }} />
         </View>
       )}
+
+      <View style={styles.locationRow}>
+        <Text style={styles.locationLabel}>الموقع</Text>
+        <TouchableOpacity
+          style={styles.locationBtn}
+          onPress={() => {
+            if (address) {
+              openLink(
+                Platform.OS === 'ios'
+                  ? `maps:0,0?q=${encodeURIComponent(address)}`
+                  : `geo:0,0?q=${encodeURIComponent(address)}`,
+                'لا يوجد تطبيق خرائط',
+              );
+            } else {
+              Alert.alert('تنبيه', 'لا يوجد عنوان مسجل لهذا العميل');
+            }
+          }}
+        >
+          <Text style={styles.locationBtnText}>
+            {address ? '📍 فتح في الخريطة' : 'لا يوجد عنوان مسجل'}
+          </Text>
+        </TouchableOpacity>
+      </View>
 
       <Text style={styles.sectionTitle}>الأرصدة</Text>
       {balances.length === 0 ? (
@@ -198,6 +221,10 @@ const styles = StyleSheet.create({
   contactRow: { flexDirection: 'row', padding: 12, gap: 8 },
   contactBtn: { flex: 1, padding: 10, borderRadius: 10, alignItems: 'center' },
   contactBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  locationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10 },
+  locationLabel: { fontSize: 14, fontWeight: '600', color: '#333' },
+  locationBtn: { backgroundColor: '#f0f4f8', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: '#ddd' },
+  locationBtnText: { fontSize: 14, color: '#1a73e8', fontWeight: '600' },
   actions: { flexDirection: 'row', padding: 16, gap: 8 },
   actionBtn: { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center' },
   actionText: { color: '#fff', fontSize: 14, fontWeight: '600' },
