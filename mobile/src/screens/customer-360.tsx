@@ -78,11 +78,21 @@ export default function Customer360Screen({ route, navigation }: any) {
         balances.map((b: any, i: number) => {
           if (!b || typeof b !== 'object') return null;
           const currency = b.currency || b.currencyCode || '';
-          const value = Number(b.accountingBalance ?? b.balance ?? 0);
+          const operational = Number(b.operationalBalance ?? b.accountingBalance ?? 0);
+          const accounting = Number(b.accountingBalance ?? 0);
+          const showAccounting = Math.abs(operational - accounting) > 0.001;
           return (
-            <View key={`${currency}-${i}`} style={styles.balanceRow}>
-              <Text style={styles.balanceCurrency}>{currency}</Text>
-              <Text style={styles.balanceValue}>{Number.isFinite(value) ? value.toLocaleString('en-US') : '0'}</Text>
+            <View key={`${currency}-${i}`} style={styles.balanceCard}>
+              <View style={styles.balanceHeader}>
+                <Text style={styles.balanceCurrency}>{currency}</Text>
+                <Text style={styles.balanceValue}>{Number.isFinite(operational) ? operational.toLocaleString('en-US') : '0'}</Text>
+              </View>
+              {showAccounting && (
+                <View style={styles.balanceSubRow}>
+                  <Text style={styles.balanceSubLabel}>الرصيد المحاسبي</Text>
+                  <Text style={styles.balanceSubValue}>{Number.isFinite(accounting) ? accounting.toLocaleString('en-US') : '0'}</Text>
+                </View>
+              )}
             </View>
           );
         })
@@ -144,9 +154,13 @@ const styles = StyleSheet.create({
   address: { fontSize: 14, color: '#fff', marginTop: 4, opacity: 0.7 },
   sectionTitle: { fontSize: 18, fontWeight: '600', color: '#333', padding: 16, paddingBottom: 8 },
   emptyText: { textAlign: 'center', color: '#999', padding: 16 },
-  balanceRow: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#fff', marginHorizontal: 16, marginBottom: 4, padding: 12, borderRadius: 8 },
-  balanceCurrency: { fontSize: 16, color: '#333' },
-  balanceValue: { fontSize: 16, color: '#1a73e8', fontWeight: '600' },
+  balanceCard: { backgroundColor: '#fff', marginHorizontal: 16, marginBottom: 8, padding: 14, borderRadius: 10 },
+  balanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  balanceSubRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#f0f4f8' },
+  balanceSubLabel: { fontSize: 12, color: '#999' },
+  balanceSubValue: { fontSize: 12, color: '#666' },
+  balanceCurrency: { fontSize: 16, color: '#333', fontWeight: '500' },
+  balanceValue: { fontSize: 18, color: '#1a73e8', fontWeight: 'bold' },
   actions: { flexDirection: 'row', padding: 16, gap: 8 },
   actionBtn: { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center' },
   actionText: { color: '#fff', fontSize: 14, fontWeight: '600' },

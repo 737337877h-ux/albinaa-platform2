@@ -308,9 +308,30 @@ export class MobileService {
       fullName: customer.name,
       phonePrimary: customer.phonePrimary,
       address: customer.address,
-      balances: customer.balances.map((b: any) => ({
-        currency: b.currencyCode,
-        accountingBalance: Number(b.accountingBalance),
+      balances: await Promise.all(customer.balances.map(async (b: any) => {
+        // Compute operational balance = accounting + ledger delta since last import
+        const lastJob = await this.prisma.importJob.findFirst({
+          where: { organizationId: customer.organizationId, status: 'completed' },
+          orderBy: { importedAt: 'desc' },
+          select: { importedAt: true },
+        });
+        let ledgerDelta = 0;
+        if (lastJob) {
+          const agg = await this.prisma.operationalLedger.aggregate({
+            _sum: { amountSigned: true },
+            where: {
+              customerId: id,
+              currencyCode: b.currencyCode,
+              createdAt: { gt: lastJob.importedAt },
+            },
+          });
+          ledgerDelta = Number(agg._sum.amountSigned ?? 0);
+        }
+        return {
+          currency: b.currencyCode,
+          accountingBalance: Number(b.accountingBalance),
+          operationalBalance: Number(b.accountingBalance) + ledgerDelta,
+        };
       })),
       timeline,
       recentFollowups: followups,

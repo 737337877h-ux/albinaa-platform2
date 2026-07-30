@@ -65,11 +65,11 @@ export default function DashboardScreen({ navigation }: any) {
 
       <View style={styles.cardsRow}>
         <Card title="مهام اليوم" value={todayTasks.length} color="#1a73e8" onPress={() => navigation.navigate('Tasks')} />
-        <Card title="تحصيلات اليوم" value={localCollections.length} color="#34a853" onPress={() => navigation.navigate('NewCollection')} />
+        <Card title="تحصيلات اليوم" value={localCollections.length} color="#34a853" onPress={() => navigation.navigate('CollectionsList')} />
       </View>
       <View style={styles.cardsRow}>
         <Card title="العملاء" value={uniqueCustomerCount} color="#fbbc04" onPress={() => navigation.navigate('Customers')} />
-        <Card title="المتابعات" value={localFollowups.length} color="#ea4335" onPress={() => navigation.navigate('NewFollowup')} />
+        <Card title="المتابعات" value={localFollowups.length} color="#ea4335" onPress={() => navigation.navigate('FollowupsList')} />
       </View>
 
       <Text style={styles.sectionTitle}>مهام اليوم</Text>

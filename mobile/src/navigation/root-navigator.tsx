@@ -15,6 +15,8 @@ import Customer360Screen from '../screens/customer-360';
 import NewFollowupScreen from '../screens/new-followup';
 import NewPromiseScreen from '../screens/new-promise';
 import NewCollectionScreen from '../screens/new-collection';
+import FollowupsListScreen from '../screens/followups-list';
+import CollectionsListScreen from '../screens/collections-list';
 import UploadReceiptScreen from '../screens/upload-receipt';
 import NotificationsScreen from '../screens/notifications';
 import ProfileScreen from '../screens/profile';
@@ -69,6 +71,8 @@ export default function RootNavigator() {
           <Stack.Screen name="NewFollowup" component={NewFollowupScreen} options={{ title: 'متابعة جديدة' }} />
           <Stack.Screen name="NewPromise" component={NewPromiseScreen} options={{ title: 'وعد سداد' }} />
           <Stack.Screen name="NewCollection" component={NewCollectionScreen} options={{ title: 'تحصيل جديد' }} />
+          <Stack.Screen name="FollowupsList" component={FollowupsListScreen} options={{ title: 'المتابعات' }} />
+          <Stack.Screen name="CollectionsList" component={CollectionsListScreen} options={{ title: 'التحصيلات' }} />
           <Stack.Screen name="UploadReceipt" component={UploadReceiptScreen} options={{ title: 'رفع سند' }} />
           <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'الإعدادات' }} />
         </Stack.Navigator>
