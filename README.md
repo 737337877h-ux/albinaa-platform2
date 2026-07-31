@@ -1,6 +1,6 @@
 # البناء الراقي — AlBinaa Platform
 
-نظام إدارة المديونية والتحصيل — الإصدار 1.0 Stable
+نظام إدارة المديونية والتحصيل — الإصدار 1.1.0 Stable
 
 ## الوصف
 
@@ -82,7 +82,21 @@ npx tsc --noEmit && npx expo-doctor && npx jest
 
 جميع الحقوق محفوظة © 2026 البناء الراقي
 
+## التوثيق
+
+| المستند | الوصف |
+|---------|-------|
+| [PROJECT_STATE.md](./PROJECT_STATE.md) | حالة المشروع الحالية |
+| [CHANGELOG.md](./CHANGELOG.md) | سجل التغييرات |
+| [RELEASE_NOTES_v1.1.0.md](./RELEASE_NOTES_v1.1.0.md) | ملاحظات إصدار v1.1.0 |
+| [V11_DELIVERY_REPORT.md](./V11_DELIVERY_REPORT.md) | تقرير تسليم v1.1.0 الكامل |
+| [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) | توثيق قاعدة البيانات / Prisma Schema |
+| [ROADMAP.md](./ROADMAP.md) | خارطة الطريق |
+| [INSTALL.md](./INSTALL.md) | التثبيت |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | النشر |
+| [BACKUP.md](./BACKUP.md) / [RESTORE.md](./RESTORE.md) | النسخ الاحتياطي والاستعادة |
+
 ## الإصدار
 
+- **v1.1.0** (2026-07-30) — أدوات التواصل مع العملاء (Call/SMS/WhatsApp، خريطة، إشعارات تفاعلية، عملات ديناميكية)
 - **v1.0.0** (2026-07-30) — الإصدار المستقر الأول
-- انظر [CHANGELOG.md](./CHANGELOG.md) للتفاصيل
