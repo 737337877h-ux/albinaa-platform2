@@ -392,9 +392,9 @@ export class ImportsService {
       } else if (profile === 'CUSTOMER_BALANCE_SUMMARY') {
         result = await this.applyBalanceSummary(actor, jobId, parsed);
       } else if (profile === 'DEBT_AGING_SUMMARY') {
-        result = await this.applyAgingSummary(actor, jobId, parsed);
+        result = await this.applyAgingSummary(actor, jobId, parsed, job.fileHash);
       } else if (profile === 'DEBT_AGING_DETAILS') {
-        result = await this.applyAgingDetails(actor, jobId, parsed);
+        result = await this.applyAgingDetails(actor, jobId, parsed, job.fileHash);
       } else {
         result = await this.applyImport(actor, jobId, parsed, report.ruleErrors ?? []);
       }
@@ -876,7 +876,7 @@ export class ImportsService {
   }
 
   /** استيراد تقسيم الأعمار المجمّع (DEBT_AGING_SUMMARY) — سطر لكل عميل/عملة. */
-  private async applyAgingSummary(actor: AuthUser, jobId: string, parsed: ParseResultJson) {
+  private async applyAgingSummary(actor: AuthUser, jobId: string, parsed: ParseResultJson, fileHash: string) {
     const executeErrors: { account: string; message: string }[] = [];
     const knownCurrencies = new Set(
       (await this.prisma.currency.findMany({ where: { active: true } })).map((c) => c.code),
@@ -896,7 +896,7 @@ export class ImportsService {
           seenCustomerIds, counts,
         );
         const lineHash = this.agingLineHash(
-          'DEBT_AGING_SUMMARY', row.customerCode, row.currency, row.rowNumber,
+          'DEBT_AGING_SUMMARY', fileHash, row.customerCode, row.currency, row.rowNumber,
         );
         if (await this.prisma.debtAgingSummary.findUnique({ where: { lineHash } })) {
           skipped += 1;
@@ -944,7 +944,7 @@ export class ImportsService {
   }
 
   /** استيراد تقسيم الأعمار التفصيلي (DEBT_AGING_DETAILS) — سطر لكل مستند. */
-  private async applyAgingDetails(actor: AuthUser, jobId: string, parsed: ParseResultJson) {
+  private async applyAgingDetails(actor: AuthUser, jobId: string, parsed: ParseResultJson, fileHash: string) {
     const executeErrors: { account: string; message: string }[] = [];
     const knownCurrencies = new Set(
       (await this.prisma.currency.findMany({ where: { active: true } })).map((c) => c.code),
@@ -964,7 +964,8 @@ export class ImportsService {
           seenCustomerIds, counts,
         );
         const lineHash = this.agingLineHash(
-          'DEBT_AGING_DETAILS', row.customerCode, row.currency, row.rowNumber,
+          'DEBT_AGING_DETAILS', fileHash, row.customerCode, row.currency, row.rowNumber,
+          row.documentNumber, row.documentDate,
         );
         if (await this.prisma.debtAgingDetail.findUnique({ where: { lineHash } })) {
           skipped += 1;
@@ -1014,10 +1015,17 @@ export class ImportsService {
     };
   }
 
-  /** هاش سطر أعمار — مستقر عبر إعادة استيراد نفس الملف، وفريد داخل الملف (rowNumber). */
-  private agingLineHash(profile: ImportProfile, code: string, currency: string, rowNumber: number): string {
+  /**
+   * هاش سطر أعمار — يعتمد على هوية الملف (fileHash) حتى لا تُمنع ملفات الأشهر
+   * الجديدة بسبب نفس rowNumber، ومع ذلك يعيد نفس الملف → نفس الهاش → skipped.
+   * لملف التفاصيل يضاف documentNumber/documentDate إن وُجدا (أقل تكرارًا داخل الملف).
+   */
+  private agingLineHash(
+    profile: ImportProfile, fileHash: string, code: string, currency: string,
+    rowNumber: number, docNumber?: string | null, docDate?: string | null,
+  ): string {
     return createHash('sha256')
-      .update(`${profile}|${code}|${currency}|${rowNumber}`)
+      .update(`${profile}|${fileHash}|${code}|${currency}|${rowNumber}|${docNumber ?? ''}|${docDate ?? ''}`)
       .digest('hex');
   }
 
