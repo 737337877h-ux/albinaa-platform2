@@ -36,6 +36,9 @@ LBL_CURRENCY = 'العملة'
 LBL_COL_DATE = 'التاريخ'
 LBL_FOREIGN = 'المبلغ الأجنبي'
 LBL_OPENING = 'الرصيد الإفتتاحي'
+LBL_REF = 'رقم المرجع'
+LBL_DEBIT = 'مدين'
+LBL_CREDIT = 'دائن'
 LBL_TOTALS = 'إجمالي العمليات'
 LBL_BAL_CREDIT = 'إجمالي الرصيد لكم'    # رصيد دائن (نحن مدينون للعميل)
 LBL_BAL_DEBIT = 'إجمالي الرصيد عليكم'   # رصيد مدين (العميل مدين لنا)
@@ -52,6 +55,29 @@ def normalize_text(s):
     s = unicodedata.normalize('NFKC', s)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
+
+
+def _num(v, default=0.0):
+    """تحويل خلية إلى رقم بأمان: القيم النصية غير الرقمية تعيد default بدل انهيار.
+
+    الملفات الحقيقية تضع أحيانًا الترويسات (مدين/دائن) أو نصًا (مثل المبلغ
+    كتابةً) في أعمدة الأرقام — لا يجب أن يُسقط ذلك التحليل كليًا.
+    """
+    if v is None or v == '':
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _bad_amount(v):
+    """قيمة مبلغ غير رقمية فعلًا (نص غير فارغ لا يُحوَّل) — لا None الفارغ."""
+    if v is None:
+        return False
+    if isinstance(v, str) and v.strip() == '':
+        return False
+    return _num(v, None) is None
 
 
 def normalize_name_for_match(s):
@@ -131,11 +157,19 @@ def parse_workbook(path, sheet_name=None):
         rownum, r = rows[i]
         if r[0] == LBL_CUSTOMER:
             cust_code, cust_name = r[1], normalize_text(r[3])
+            # بعض الصادرات لا تحوي اسم العميل (يُكتب الترويسة 'العميل' فقط)
+            # — نستخدم الكود كاسم مؤقت لئلا يُعرض اسم الترويسة كاسم العميل.
+            name_fallback = False
+            if cust_name in ('العميل', 'اسم العميل') or not cust_name:
+                cust_name = str(cust_code)
+                name_fallback = True
+            # رصيد افتتاحي على سطر "رقم العميل" نفسه (تنويع تصدير حقيقي)
+            marker_od = _num(r[5], None)
+            marker_oc = _num(r[6], None)
+            has_marker_opening = marker_od is not None or marker_oc is not None
             i += 1
-            # تجاوز صفوف "0" الثلاثة غامضة المعنى (قيمتها صفر دائمًا — موثقة بالتقرير)
-            while i < n and rows[i][1][1] is not None and all(rows[i][1][k] is None for k in (0, 2, 3, 4, 5, 6)):
-                if rows[i][1][1] != 0:
-                    res.errors.append((rows[i][0], 'قيمة غير صفرية في صف القالب الغامض', rows[i][1]))
+            # تجاوز صفوف القالب (col0 فارغ وcol1 = 0) — قد تحمل بيانات هاتف/مبالغ
+            while i < n and rows[i][1][0] is None and rows[i][1][1] == 0:
                 i += 1
             # سطر العملة
             ccy_raw = ccy_name = None
@@ -145,21 +179,35 @@ def parse_workbook(path, sheet_name=None):
             else:
                 res.errors.append((rows[i][0] if i < n else rownum, 'سطر العملة مفقود — الكتلة مستبعدة', rows[i][1] if i < n else None))
                 continue
-            # سطر "المبلغ الأجنبي" الاختياري ثم سطر عناوين الأعمدة
-            if i < n and rows[i][1][5] == LBL_FOREIGN:
+            # البحث عن سطر عناوين الأعمدة (col0 = 'التاريخ') — نتيح صفوفًا فارغة/
+            # بيانات بين سطر العملة وعناوين الأعمدة (تنويع تصدير حقيقي)
+            scan = 0
+            while i < n and rows[i][1][0] is None and scan < 8:
                 i += 1
+                scan += 1
             if i < n and rows[i][1][0] == LBL_COL_DATE:
                 i += 1
             else:
                 res.errors.append((rows[i][0] if i < n else rownum, 'سطر عناوين الأعمدة مفقود', rows[i][1] if i < n else None))
-            # الرصيد الافتتاحي (يظهر فقط في أول كتلة للحساب؛ الكتل المجزأة تكرره بنفس القيمة)
+            # الرصيد الافتتاحي: من سطر "الرصيد الإفتتاحي" أو من سطر "رقم العميل"
             od = oc = 0.0
             has_opening = False
+            opening_nonnumeric = False
             if i < n and rows[i][1][3] == LBL_OPENING:
-                od = float(rows[i][1][5] or 0)
-                oc = float(rows[i][1][6] or 0)
+                if has_marker_opening:
+                    od = marker_od or 0.0
+                    oc = marker_oc or 0.0
+                else:
+                    od = _num(rows[i][1][5])
+                    oc = _num(rows[i][1][6])
+                    if _num(rows[i][1][5], None) is None or _num(rows[i][1][6], None) is None:
+                        opening_nonnumeric = True
                 has_opening = True
                 i += 1
+            elif has_marker_opening:
+                od = marker_od or 0.0
+                oc = marker_oc or 0.0
+                has_opening = True
 
             key = (cust_code, ccy_raw)
             if key not in res.accounts:
@@ -175,6 +223,13 @@ def parse_workbook(path, sheet_name=None):
                         f'({acc.opening_debit},{acc.opening_credit}) مقابل ({od},{oc})')
                 if normalize_text(cust_name) != normalize_text(acc.customer_name):
                     acc.parse_warnings.append(f'اسم مختلف لنفس الكود في الصف {rownum}: "{cust_name}"')
+            if name_fallback:
+                acc.parse_warnings.append(
+                    f'اسم العميل غير متوفر في الملف (الصف {rownum}) — استُخدم الكود كاسم مؤقت')
+            if opening_nonnumeric:
+                acc.parse_warnings.append(
+                    f'رصيد افتتاحي غير رقمي (الصف {rows[i-1][0] if i > 0 else rownum}) — اعتُبر صفرًا '
+                    '(المبلغ ربما مكتوب كتابةً أو العمود يحوي ترويسة مدين/دائن)')
             acc.fragments += 1
 
             # الحركات حتى سطر الإجمالي أو كتلة جديدة
@@ -185,12 +240,22 @@ def parse_workbook(path, sheet_name=None):
                     if i < n:
                         lbl = rows[i][1][2]
                         if lbl == LBL_BAL_DEBIT:
-                            acc.declared_balance = float(rows[i][1][5] or 0)
+                            db = _num(rows[i][1][5], None)
+                            acc.declared_balance = db
                             acc.declared_label = lbl
+                            if db is None:
+                                acc.parse_warnings.append(
+                                    f'رصيد معلن غير رقمي (الصف {rows[i][0]}) — لا يُوثَّق الرصيد '
+                                    '(المبلغ ربما مكتوب كتابةً)')
                             i += 1
                         elif lbl == LBL_BAL_CREDIT:
-                            acc.declared_balance = -float(rows[i][1][6] or 0)
+                            db = _num(rows[i][1][6], None)
+                            acc.declared_balance = -db if db is not None else None
                             acc.declared_label = lbl
+                            if db is None:
+                                acc.parse_warnings.append(
+                                    f'رصيد معلن غير رقمي (الصف {rows[i][0]}) — لا يُوثَّق الرصيد '
+                                    '(المبلغ ربما مكتوب كتابةً)')
                             i += 1
                         elif lbl == LBL_BAL_ZERO:
                             acc.declared_balance = 0.0
@@ -204,8 +269,21 @@ def parse_workbook(path, sheet_name=None):
                     i += 1
                     continue
                 else:
-                    d = float(rr[5] or 0)
-                    c = float(rr[6] or 0)
+                    # تكرير ترويسة الأعمدة في نهاية الكتلة (تنويع تصدير حقيقي) —
+                    # سطرا "المبلغ الأجنبي" ثم "رقم المرجع/مدين/دائن" لا يحويان بيانات
+                    if rr[5] == LBL_FOREIGN and rr[6] == LBL_FOREIGN:
+                        i += 1
+                        continue
+                    if rr[4] == LBL_REF and rr[5] == LBL_DEBIT and rr[6] == LBL_CREDIT:
+                        i += 1
+                        continue
+                    d_raw, c_raw = rr[5], rr[6]
+                    d = _num(d_raw)
+                    c = _num(c_raw)
+                    if _bad_amount(d_raw) or _bad_amount(c_raw):
+                        res.errors.append((rn2, 'مبلغ غير رقمي — الصف مستبعد', rr))
+                        i += 1
+                        continue
                     if d < 0 or c < 0:
                         res.errors.append((rn2, 'مبلغ سالب — الصف مستبعد', rr))
                         i += 1
