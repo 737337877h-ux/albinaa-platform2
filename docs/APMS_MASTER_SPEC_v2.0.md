@@ -65,7 +65,7 @@ The import pipeline must support the following named profiles. Profile **detecti
 |---|---|
 | **Real XLSX** | Genuine `.xlsx` workbooks (openpyxl-compatible). Already supported. |
 | **Tab-delimited `.xls` exports** | Files exported from the legacy system as `.xls` that are actually **tab-delimited text**, not OLE2 binary. Must be detected and parsed. |
-| **Arabic encoding** | Encoded in Windows Arabic codepage, **likely CP1256** (also accept/auto-detect related Arabic encodings). `Needs Owner Review`: confirm the exact encoding used by the real exporter. |
+| **Arabic encoding** | Encoded in Windows Arabic codepage, **CP1256 by default** (ratified — Part F.1). On decode failure, log a clear import error; never silently corrupt Arabic text. |
 
 ### B.3 — Explicit Exclusions
 
@@ -117,16 +117,16 @@ The import pipeline must support the following named profiles. Profile **detecti
 ## Part C — Chapter Requirements (normative intent)
 
 ### Chapter 1 — Organization & Branch Management
-- Org → branch → user hierarchy with settings at each level. `Needs Owner Review`: required org-level settings list.
+- Org → branch → user hierarchy with settings at each level. Settings list ratified (Part F.6).
 - Branch-scoped analytics. **v1.2.0:** out of scope.
 
 ### Chapter 2 — Users, Roles & Permissions (RBAC)
 - Granular permissions; guards on all protected operations; admin UI for users/roles/collectors/branches.
-- Status: Implemented. `Needs Owner Review`: verify all seeded permissions are covered by UI pickers.
+- Status: Implemented. RBAC-first ratified (Part F.7): no rebuild; verify import/risk/tasks/dashboard/customer access are permission-protected.
 
 ### Chapter 3 — Authentication & Sessions
 - Login/logout/refresh/me; opaque refresh tokens hashed at rest; Argon2id; throttling; helmet; Swagger disabled in prod.
-- Status: Implemented. `Needs Owner Review`: future MFA/SSO requirement (out of v1.2.0).
+- Status: Implemented. MFA/SSO out of scope for v1.2.0 (Part F.8); future security roadmap.
 
 ### Chapter 4 — Customers & 360° View
 - Profile, balances, statement history, contacts, call/SMS/WhatsApp, map (current).
@@ -168,11 +168,11 @@ The import pipeline must support the following named profiles. Profile **detecti
 - Not Implemented (table + read path exist; no writer). **v1.2.0:** Risk Engine per Part B.5 (PR 4).
 
 ### Chapter 15 — Audit Trail & Compliance
-- Audit module + admin/audit page. `Needs Owner Review`: retention policy requirement.
+- Audit module + admin/audit page. Retention ratified (Part F.9): retain indefinitely, no delete/mutation.
 
 ### Chapter 16 — API Security & Rate Limiting
 - ThrottlerGuard, helmet, idempotency, opaque tokens. Status: Implemented.
-- `Needs Owner Review`: upload virus scanning (future).
+- Upload validation ratified (Part F.10): extension/MIME/size/hash + error logging in v1.2.0; virus scanning at v1.6.0.
 
 ### Chapter 17 — Backup, Recovery & Restore
 - Prod cron pg_dump (02:00, 30-day retention), restore script. Off-site backup: future.
@@ -184,25 +184,118 @@ The import pipeline must support the following named profiles. Profile **detecti
 - Single ci.yml (typecheck/lint/build/unit tests + docker build). E2E-in-CI + deploy job: future.
 
 ### Chapter 20 — Performance & Scalability
-- Status: **Needs Verification**. `Needs Owner Review`: load-test targets and expected volumes.
+- Status: **Needs Verification**. Initial load-test targets ratified (Part F.11).
 
 ---
 
 ## Part D — Items Marked `Needs Owner Review`
 
-| # | Item | Chapter | Why it needs review |
-|---|---|---|---|
-| R1 | Exact Arabic encoding of the legacy `.xls` tab-delimited exports (CP1256 assumed) | 9 / B.2 | Parser behavior depends on the real encoding |
-| R2 | Whether estimated aging may remain as a labeled fallback when no real aging file is imported | 5 / B.4 | Affects dashboard/report semantics |
-| R3 | Risk score formula and risk-level thresholds (score range, level buckets) | 14 / B.5 | Normative formula must be owner-approved |
-| R4 | Daily Work Queue priority ordering between reason sources | 8 / B.6 | Business-priority semantics |
-| R5 | Dedup rule confirmation: one task per (customer, reason) per day | 8 / B.6 | Dedup scope affects queue volume |
-| R6 | Org-level settings list for Chapter 1 | 1 | Not yet enumerated |
-| R7 | Seeded-permission coverage check for UI pickers | 2 | Verify all permissions editable |
-| R8 | MFA/SSO future requirement | 3 | Confirmed future or not |
-| R9 | Audit retention policy | 15 | Compliance requirement |
-| R10 | Upload virus scanning requirement | 16 | Security posture |
-| R11 | Load-test targets / expected volumes | 20 | Basis for performance verification |
+> All items R1–R11 have been reviewed by the owner. Decisions are recorded in **Part F**. Items are now `Ratified` or `Out of Scope` per Part F.
+
+| # | Item | Chapter | Decision | Status |
+|---|---|---|---|---|
+| R1 | Exact Arabic encoding of the legacy `.xls` tab-delimited exports (CP1256 assumed) | 9 / B.2 | Ratified — CP1256 default (Part F.1) | ✅ Ratified |
+| R2 | Whether estimated aging may remain as a labeled fallback when no real aging file is imported | 5 / B.4 | Ratified — fallback only, labeled (Part F.2) | ✅ Ratified |
+| R3 | Risk score formula and risk-level thresholds (score range, level buckets) | 14 / B.5 | Ratified — initial formula + levels (Part F.3) | ✅ Ratified |
+| R4 | Daily Work Queue priority ordering between reason sources | 8 / B.6 | Ratified — 10-level priority order (Part F.4) | ✅ Ratified |
+| R5 | Dedup rule confirmation: one task per (customer, reason) per day | 8 / B.6 | Ratified — one active task per Customer+Currency+TaskType+DueDate+Source (Part F.5) | ✅ Ratified |
+| R6 | Org-level settings list for Chapter 1 | 1 | Ratified — minimal v1.2.0 settings list (Part F.6) | ✅ Ratified |
+| R7 | Seeded-permission coverage check for UI pickers | 2 | Ratified — RBAC-first, no rebuild; verify existing perms (Part F.7) | ✅ Ratified |
+| R8 | MFA/SSO future requirement | 3 | Out of scope for v1.2.0 — future security roadmap (Part F.8) | ⛔ Out of scope |
+| R9 | Audit retention policy | 15 | Ratified — retain indefinitely, no delete/mutation (Part F.9) | ✅ Ratified |
+| R10 | Upload virus scanning requirement | 16 | Out of scope for v1.2.0 — validation-only; virus scan at v1.6.0 (Part F.10) | ⛔ Out of scope (partial: validation in scope) |
+| R11 | Load-test targets / expected volumes | 20 | Ratified — initial targets (Part F.11) | ✅ Ratified |
+
+---
+
+## Part F — Ratified Owner Decisions (2026-07-31)
+
+### F.1 — R1: File formats & encoding (ratified)
+- Parser must support: **(1)** real `.xlsx` Excel files, **(2)** tab-delimited `.xls` files using **Windows-1256 / CP1256** by default.
+- If decoding fails, **log a clear import error**. Do **not** silently corrupt Arabic text.
+
+### F.2 — R2: Debt aging source (ratified with restriction)
+- Debt Aging files (`DEBT_AGING_SUMMARY` / `DEBT_AGING_DETAILS`) are the **official v1.2.0 source** for aging.
+- Estimated aging may be used **only as a fallback** when aging files are missing, and **must be clearly marked estimated**, not official.
+
+### F.3 — R3: Initial risk formula & levels (ratified, configurable later)
+| Factor | Weight |
+|---|---|
+| Debt age | 25 |
+| Balance amount | 20 |
+| Last payment age | 15 |
+| Broken promises | 15 |
+| Repeated no-answer / failed communication | 10 |
+| Days since last follow-up | 10 |
+| Repeated grace requests | 5 |
+
+| Score | Risk level |
+|---|---|
+| 0–25 | Low |
+| 26–50 | Medium |
+| 51–75 | High |
+| 76–100 | Critical |
+
+### F.4 — R4: Daily Work Queue priority order (ratified)
+1. Overdue promise
+2. Promise due today
+3. Follow-up overdue by 2+ days
+4. Critical risk customers
+5. Customers with debt in older aging buckets, especially over 120 days
+6. High balance customers without recent follow-up
+7. Repeated no-answer customers
+8. Customers needing visit
+9. Medium-risk periodic follow-up
+10. Low-priority normal follow-up
+
+### F.5 — R5: Task dedup rule (ratified)
+- Only **one active task** per: **Customer + Currency + TaskType + DueDate + Source**.
+- If multiple reasons generate the same task, **merge reasons into the same task** and keep the **highest priority**.
+- Do not create duplicate daily tasks for the same customer due to multiple import sources.
+
+### F.6 — R6: Minimal v1.2.0 org settings (ratified)
+- risk thresholds
+- queue generation time
+- no-followup days
+- escalation after days
+- aging bucket configuration
+- max daily tasks per collector
+- enabled import profiles
+- active currencies
+
+### F.7 — R7: Permissions approach (ratified — RBAC-first)
+- Do **not** rebuild the permissions system in v1.2.0.
+- Only **verify** that import, risk, tasks, dashboard KPIs, and customer access are protected by existing permissions.
+
+### F.8 — R8: MFA/SSO (out of scope)
+- Out of scope for v1.2.0. Move to future security roadmap.
+
+### F.9 — R9: Audit retention (ratified)
+- Audit Log retained **indefinitely** — no delete, no mutation.
+- Archiving policy may be added later.
+
+### F.10 — R10: Upload validation scope (ratified)
+- Out of scope for v1.2.0: virus scanning (moves to production hardening / **v1.6.0**).
+- Required in v1.2.0: file extension validation, MIME/type validation where possible, file size limit, file hash, import error logging.
+
+### F.11 — R11: Initial load-test targets (ratified)
+| Data | Target |
+|---|---|
+| Customers (customer master import) | 1,500+ |
+| Balance rows | 1,000+ |
+| Debt aging customers | 600+ |
+| Debt aging document rows | 2,500+ |
+| Customer statement transactions | 7,000+ |
+| Import preview | completes without crash |
+| Daily queue generation | completes within acceptable operational time |
+| Dashboard KPIs | load without timeout |
+
+---
+
+## Part G — Ratification Status
+
+- All v1.2.0 owner-review items are resolved (Part F). This document remains a living reference; new owner-review items may be added as future chapters mature.
+- v1.2.0 development may proceed per the approved scope and PR plan (Part B.8).
 
 ---
 
@@ -214,3 +307,4 @@ The import pipeline must support the following named profiles. Profile **detecti
 | Rev | Date | Change | Author |
 |---|---|---|---|
 | v2.0-draft | 2026-07-31 | Initial ratification draft: 20-chapter structure, v1.2.0 direction, import profiles, file formats, exclusions, risk engine, daily work queue, dashboard KPIs | AI assistant (awaiting owner review) |
+| v2.0-ratified | 2026-07-31 | Owner ratified R1–R11 for v1.2.0 (Part F); decisions recorded; v1.2.0 approved in principle | Owner + AI assistant |
