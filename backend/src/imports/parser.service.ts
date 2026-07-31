@@ -118,6 +118,10 @@ export interface ParsedAgingRow {
   currency: string;       // ISO
   buckets: Record<string, number>;
   total: number | null;
+  /** تفصيلي فقط (DEBT_AGING_DETAILS): حقول المستند من كتلة الأعمار. */
+  documentNumber?: string | null;
+  documentDate?: string | null;
+  documentType?: string | null;
 }
 export interface ParseResultJson {
   ok: boolean;

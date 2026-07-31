@@ -191,6 +191,8 @@ model Currency {
   followupsExpected   Followup[]
   creditLimits        CustomerCreditPolicy[]
   balanceSnapshots    BalanceSnapshot[]
+  agingRows           DebtAgingSummary[]
+  agingDocuments      DebtAgingDetail[]
 
   @@map("currencies")
 }
@@ -255,6 +257,8 @@ model Customer {
   scores           CustomerScore[]
   duplicatesAsA    PotentialDuplicateCustomer[] @relation("DupCustomerA")
   duplicatesAsB    PotentialDuplicateCustomer[] @relation("DupCustomerB")
+  agingRows        DebtAgingSummary[]
+  agingDocuments   DebtAgingDetail[]
 
   @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
   @@index([organizationId, nameNormalized], map: "idx_customers_name_norm")
@@ -355,6 +359,9 @@ model ImportJob {
   totalBalanceBefore   Json?    @map("total_balance_before") @db.JsonB
   totalBalanceAfter    Json?    @map("total_balance_after") @db.JsonB
   errorReport          Json?    @map("error_report") @db.JsonB
+  agingRowsWritten      Int? @map("aging_rows_written")
+  agingDocumentsWritten Int? @map("aging_documents_written")
+  agingSkippedDuplicate Int? @map("aging_skipped_duplicate")
 
   organization Organization    @relation(fields: [organizationId], references: [id])
   template     ImportTemplate? @relation(fields: [templateId], references: [id])
@@ -364,6 +371,8 @@ model ImportJob {
   balancesUpdated  CustomerBalance[]
   snapshots        BalanceSnapshot[]
   reconciliations  BalanceReconciliation[]
+  agingRows        DebtAgingSummary[]
+  agingDocuments   DebtAgingDetail[]
 
   @@index([organizationId, fileHash], map: "idx_import_jobs_hash")
   @@map("import_jobs")
@@ -429,6 +438,65 @@ model BalanceSnapshot {
 
   @@index([customerId, currencyCode, snapshotAt], map: "idx_snapshots")
   @@map("balance_snapshots")
+}
+
+// ---------------------------------------------------------------------------
+// 11) تقسيم الأعمار — تخزين ملفات DEBT_AGING (PR 3)
+//    - DebtAgingSummary:  سطر لكل عميل/عملة من ملف «اعمار الديون اجمالي»
+//    - DebtAgingDetail:   سطر لكل مستند من ملف «اعمار الديون تحليلي»
+//    - idempotent بحكم line_hash الفريد (تعاد الاستيراد لا تكرر البيانات)
+// ---------------------------------------------------------------------------
+model DebtAgingSummary {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  importJobId     String   @map("import_job_id") @db.Uuid
+  customerId      String   @map("customer_id") @db.Uuid
+  customerCode    String   @map("customer_code")
+  currencyCode    String   @map("currency_code")
+  bucket_0_30     Decimal  @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
+  bucket_31_60    Decimal  @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
+  bucket_61_90    Decimal  @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
+  bucket_91_120   Decimal  @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
+  bucket_120_plus Decimal  @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
+  totalDue        Decimal  @map("total_due") @db.Decimal(18, 4)
+  sourceRowNumber Int      @map("source_row_number")
+  lineHash        String   @unique @map("line_hash")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  customer  Customer  @relation(fields: [customerId], references: [id])
+  currency  Currency  @relation(fields: [currencyCode], references: [code])
+  importJob ImportJob @relation(fields: [importJobId], references: [id])
+
+  @@index([customerId, currencyCode], map: "idx_aging_summary_customer")
+  @@index([importJobId], map: "idx_aging_summary_job")
+  @@map("debt_aging_summary")
+}
+
+model DebtAgingDetail {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  importJobId     String    @map("import_job_id") @db.Uuid
+  customerId      String    @map("customer_id") @db.Uuid
+  customerCode    String    @map("customer_code")
+  currencyCode    String    @map("currency_code")
+  documentNumber  String?   @map("document_number")
+  documentDate    DateTime? @map("document_date") @db.Date
+  documentType    String?   @map("document_type")
+  amount          Decimal   @map("amount") @db.Decimal(18, 4)
+  bucket_0_30     Decimal   @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
+  bucket_31_60    Decimal   @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
+  bucket_61_90    Decimal   @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
+  bucket_91_120   Decimal   @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
+  bucket_120_plus Decimal   @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
+  sourceRowNumber Int       @map("source_row_number")
+  lineHash        String    @unique @map("line_hash")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  customer  Customer  @relation(fields: [customerId], references: [id])
+  currency  Currency  @relation(fields: [currencyCode], references: [code])
+  importJob ImportJob @relation(fields: [importJobId], references: [id])
+
+  @@index([customerId, currencyCode], map: "idx_aging_details_customer")
+  @@index([importJobId], map: "idx_aging_details_job")
+  @@map("debt_aging_details")
 }
 
 // ---------------------------------------------------------------------------

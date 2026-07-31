@@ -145,6 +145,10 @@ interface ReportData {
   balancesWritten?: number | null;
   duplicateNamePairsFlagged: number;
   reconciliationsOpened: number;
+  agingRowsWritten?: number | null;
+  agingDocumentsWritten?: number | null;
+  skippedDuplicates?: number | null;
+  errors?: number;
 }
 
 interface ErrorDetail {
@@ -982,6 +986,22 @@ function ReportDialog({
             <StatCard label="عملاء محدّثون" value={data.customersUpdated} />
             <StatCard label="معاملات جديدة" value={data.transactionsNew} highlight />
           </div>
+
+          {/* ── Aging counters (PR 3) ── */}
+          {data.profile === 'DEBT_AGING_SUMMARY' && data.agingRowsWritten != null && (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <StatCard label="أسطر الأعمار المكتوبة" value={data.agingRowsWritten} highlight />
+              <StatCard label="مكررة مستبعدة" value={data.skippedDuplicates ?? 0} />
+              <StatCard label="أخطاء" value={data.errors ?? data.errorsCount} />
+            </div>
+          )}
+          {data.profile === 'DEBT_AGING_DETAILS' && data.agingDocumentsWritten != null && (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <StatCard label="وثائق الأعمار المكتوبة" value={data.agingDocumentsWritten} highlight />
+              <StatCard label="مكررة مستبعدة" value={data.skippedDuplicates ?? 0} />
+              <StatCard label="أخطاء" value={data.errors ?? data.errorsCount} />
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <StatCard label="معاملات مكررة" value={data.transactionsDuplicate} />
