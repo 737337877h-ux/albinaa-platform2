@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-CLI Bridge — يربط الـ Parser المُختبر (albinaa_parser.py) بالـ Backend.
+CLI Bridge — يربط محللات الاستيراد (albinaa_parser + import_profiles) بالـ Backend.
 لا يعيد كتابة منطق التحليل: يستدعيه ويخرج JSON منظمًا على stdout.
 
-الاستخدام:  python3 parser_cli.py <path.xlsx>
-المخرجات:   JSON واحد { ok, stats, accounts[], errors[], skipped_rows }
+الاستخدام:  python3 parser_cli.py <path.xlsx|xlsm|xls>
+المخرجات:   JSON واحد
+            { ok, profile, format, stats, errors[], skippedEmptyRows,
+              accounts[], customers[], balances[], agingSummary[], agingDetails[] }
+
 كل التواريخ ISO-8601، والأرقام أرقام JSON عادية.
 """
 import json
@@ -12,6 +15,11 @@ import sys
 from datetime import datetime, date
 
 from albinaa_parser import parse_workbook
+from import_profiles import (
+    PROFILE_STATEMENT, PROFILE_MASTER, PROFILE_BALANCE,
+    PROFILE_AGING_SUMMARY, PROFILE_AGING_DETAILS,
+    detect_profile, parse_profile, read_table,
+)
 
 
 def iso(v):
@@ -20,17 +28,14 @@ def iso(v):
     return v
 
 
-def main():
-    if len(sys.argv) < 2:
-        print(json.dumps({'ok': False, 'error': 'usage: parser_cli.py <file.xlsx>'}))
-        sys.exit(2)
-    path = sys.argv[1]
-    try:
-        res = parse_workbook(path)
-    except Exception as e:  # ملف تالف/غير مقروء — خطأ مضبوط وليس Stack trace
-        print(json.dumps({'ok': False, 'error': f'{type(e).__name__}: {e}'}, ensure_ascii=False))
-        sys.exit(1)
+def _fail(message, code=1):
+    print(json.dumps({'ok': False, 'error': message}, ensure_ascii=False))
+    sys.exit(code)
 
+
+def _statement_payload(path):
+    """تحليل كشف الحساب التحليلي عبر albinaa_parser المُختبر."""
+    res = parse_workbook(path)
     accounts = []
     for (code, ccy_raw), acc in res.accounts.items():
         accounts.append({
@@ -61,9 +66,7 @@ def main():
                 for t in acc.transactions
             ],
         })
-
-    out = {
-        'ok': True,
+    return {
         'stats': res.stats,
         'accounts': accounts,
         'errors': [
@@ -72,6 +75,46 @@ def main():
         ],
         'skippedEmptyRows': len(res.skipped_rows),
     }
+
+
+def main():
+    if len(sys.argv) < 2:
+        _fail('usage: parser_cli.py <file.xlsx|xlsm|xls>', 2)
+    path = sys.argv[1]
+
+    # القراءة + كشف النوع أولًا (يشمل فحص CP1256 الصارم للملفات النصية)
+    try:
+        rows, fmt = read_table(path)
+        profile = detect_profile(rows)
+    except Exception as e:
+        _fail(f'{type(e).__name__}: {e}')
+
+    out = {
+        'ok': True,
+        'profile': profile,
+        'format': fmt,
+        'stats': None,
+        'errors': [],
+        'skippedEmptyRows': 0,
+        'accounts': [],
+        'customers': [],
+        'balances': [],
+        'agingSummary': [],
+        'agingDetails': [],
+    }
+
+    try:
+        if profile == PROFILE_STATEMENT:
+            payload = _statement_payload(path)
+        elif profile in (PROFILE_MASTER, PROFILE_BALANCE,
+                         PROFILE_AGING_SUMMARY, PROFILE_AGING_DETAILS):
+            payload = parse_profile(rows, profile)
+        else:  # لا يمكن الوصول إليه عمليًا — حماية إضافية
+            _fail(f'نوع ملف غير معروف: {profile}')
+        out.update(payload)
+    except Exception as e:
+        _fail(f'{type(e).__name__}: {e}')
+
     json.dump(out, sys.stdout, ensure_ascii=False)
 
 

@@ -245,6 +245,7 @@ def parse_workbook(path, sheet_name=None):
             t.line_hash = hashlib.sha256(f'{natural}|occ={seen[natural]}'.encode('utf-8')).hexdigest()
 
     res.stats = {
+        'rows': n,
         'accounts': len(res.accounts),
         'customers': len({k[0] for k in res.accounts}),
         'transactions': sum(len(a.transactions) for a in res.accounts.values()),

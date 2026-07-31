@@ -86,7 +86,7 @@ const GROUPS: SettingsGroup[] = [
         label: 'الصيغ المسموحة',
         description: 'امتدادات الملفات المسموح برفعها (مفصولة بفواصل)',
         type: 'string',
-        defaultValue: '.xlsx,.xlsm',
+        defaultValue: '.xlsx,.xlsm,.xls',
       },
     ],
   },

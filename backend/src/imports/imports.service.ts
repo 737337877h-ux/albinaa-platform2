@@ -8,7 +8,7 @@ import * as path from 'path';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
-import { ParseResultJson, ParserService } from './parser.service';
+import { ImportProfile, ParseResultJson, ParserService } from './parser.service';
 
 const CHUNK = 500;
 
@@ -40,8 +40,10 @@ export class ImportsService {
   async upload(actor: AuthUser, file: Express.Multer.File, req?: Request) {
     if (!file) throw new BadRequestException('لم يُرفق ملف — الحقل المطلوب: file');
     const ext = path.extname(file.originalname).toLowerCase();
-    if (!['.xlsx', '.xlsm'].includes(ext)) {
-      throw new BadRequestException('الصيغة المدعومة حاليًا: xlsx (بنية كشف الحساب المعتمدة)');
+    if (!['.xlsx', '.xlsm', '.xls'].includes(ext)) {
+      throw new BadRequestException(
+        'الصيغ المدعومة: xlsx / xlsm / xls (نصي مفصول بـ Tab بترميز Windows-1256)',
+      );
     }
 
     await fs.mkdir(this.uploadDir, { recursive: true });
@@ -57,36 +59,15 @@ export class ImportsService {
     const storedPath = path.join(this.uploadDir, storedName);
     await fs.writeFile(storedPath, file.buffer);
 
-    // تحليل فعلي عبر الـ Parser المُختبر
+    // تحليل فعلي عبر الـ Parser المُختبر — يحدد نوع الملف ويملأ حقوله
     const parsed = await this.parser.parse(storedPath);
+    const profile = parsed.profile ?? 'CUSTOMER_STATEMENT_DETAILS';
 
-    // أخطاء إضافية على مستوى القواعد (لا توقف الاستيراد — تُسجَّل ويُتابع):
-    const ruleErrors: { rowNumber: number | null; message: string; context?: string }[] = [];
+    // أخطاء إضافية على مستوى القواعد (لا توقف الاستيراد — تُسجَّل ويُتابع)
     const knownCurrencies = new Set(
       (await this.prisma.currency.findMany({ where: { active: true } })).map((c) => c.code),
     );
-    let importableAccounts = 0;
-    let importableTxns = 0;
-    for (const acc of parsed.accounts) {
-      if (!acc.customerCode || acc.customerCode === 'None') {
-        ruleErrors.push({
-          rowNumber: null,
-          message: 'كود عميل ناقص — الحساب مستبعد بالكامل',
-          context: acc.customerName,
-        });
-        continue;
-      }
-      if (!knownCurrencies.has(acc.currency)) {
-        ruleErrors.push({
-          rowNumber: null,
-          message: `عملة غير معروفة (${acc.currencyRaw}) — الحساب مستبعد. أضفها من الإعدادات ثم أعد التنفيذ`,
-          context: `${acc.customerCode} ${acc.customerName}`,
-        });
-        continue;
-      }
-      importableAccounts += 1;
-      importableTxns += acc.transactions.length;
-    }
+    const validation = this.validateProfile(profile, parsed, knownCurrencies);
 
     // حفظ ناتج التحليل بجانب الملف — التنفيذ لاحقًا لا يعيد التحليل
     const parsedPath = `${storedPath}.parsed.json`;
@@ -99,24 +80,32 @@ export class ImportsService {
         fileHash,
         uploadedBy: actor.id,
         status: 'dry_run',
-        rowsTotal: parsed.stats.transactions + parsed.stats.errors + parsed.skippedEmptyRows,
-        txnsInFile: parsed.stats.transactions,
-        errorsCount: parsed.stats.errors + ruleErrors.length,
+        rowsTotal: profile === 'CUSTOMER_STATEMENT_DETAILS'
+          ? parsed.stats.transactions + parsed.stats.errors + parsed.skippedEmptyRows
+          : parsed.stats.rows ?? 0,
+        txnsInFile: profile === 'CUSTOMER_STATEMENT_DETAILS' ? parsed.stats.transactions : null,
+        errorsCount: parsed.stats.errors + validation.ruleErrors.length,
         errorReport: {
           storedPath,
           parsedPath,
+          profile,
+          format: parsed.format ?? 'xlsx',
+          executable: validation.executable,
+          deferredReason: validation.deferredReason,
           parserErrors: parsed.errors,
-          ruleErrors,
-          accountWarnings: parsed.accounts
-            .filter((a) => a.warnings.length)
-            .map((a) => ({ account: `${a.customerCode}/${a.currency}`, warnings: a.warnings })),
+          ruleErrors: validation.ruleErrors,
+          accountWarnings: profile === 'CUSTOMER_STATEMENT_DETAILS'
+            ? parsed.accounts
+                .filter((a) => a.warnings.length)
+                .map((a) => ({ account: `${a.customerCode}/${a.currency}`, warnings: a.warnings }))
+            : [],
         } as any,
       },
     });
 
     await this.audit.log({
       userId: actor.id, action: 'import_uploaded', entityTable: 'import_jobs', entityId: job.id,
-      newValue: { fileName: file.originalname, fileHash }, req,
+      newValue: { fileName: file.originalname, fileHash, profile }, req,
     });
 
     // المعاينة — المرحلة 4 من الـ Workflow
@@ -126,15 +115,182 @@ export class ImportsService {
       previouslyImported: previousJob
         ? { jobId: previousJob.id, importedAt: previousJob.importedAt }
         : null,
-      preview: {
+      preview: this.buildPreview(profile, parsed, validation),
+      nextStep: `POST /imports/${job.id}/execute لاعتماد الاستيراد`,
+    };
+  }
+
+  /** قواعد التحقق حسب نوع الملف — تُسجَّل الأخطاء ويستمر الفحص. */
+  private validateProfile(
+    profile: ImportProfile,
+    parsed: ParseResultJson,
+    knownCurrencies: Set<string>,
+  ): {
+    ruleErrors: { rowNumber: number | null; message: string; context?: string }[];
+    importable: Record<string, number>;
+    executable: boolean;
+    deferredReason: string | null;
+  } {
+    const ruleErrors: { rowNumber: number | null; message: string; context?: string }[] = [];
+
+    if (profile === 'CUSTOMER_STATEMENT_DETAILS') {
+      let importableAccounts = 0;
+      let importableTxns = 0;
+      for (const acc of parsed.accounts) {
+        if (!acc.customerCode || acc.customerCode === 'None') {
+          ruleErrors.push({
+            rowNumber: null,
+            message: 'كود عميل ناقص — الحساب مستبعد بالكامل',
+            context: acc.customerName,
+          });
+          continue;
+        }
+        if (!knownCurrencies.has(acc.currency)) {
+          ruleErrors.push({
+            rowNumber: null,
+            message: `عملة غير معروفة (${acc.currencyRaw}) — الحساب مستبعد. أضفها من الإعدادات ثم أعد التنفيذ`,
+            context: `${acc.customerCode} ${acc.customerName}`,
+          });
+          continue;
+        }
+        importableAccounts += 1;
+        importableTxns += acc.transactions.length;
+      }
+      return {
+        ruleErrors,
+        importable: { accounts: importableAccounts, transactions: importableTxns },
+        executable: true,
+        deferredReason: null,
+      };
+    }
+
+    if (profile === 'CUSTOMER_MASTER') {
+      let valid = 0;
+      for (const row of parsed.customers) {
+        if (!row.customerCode || row.customerCode === 'None') {
+          ruleErrors.push({
+            rowNumber: row.rowNumber,
+            message: 'كود عميل ناقص — الصف مستبعد',
+            context: row.customerName,
+          });
+          continue;
+        }
+        if (!row.customerName) {
+          ruleErrors.push({
+            rowNumber: row.rowNumber,
+            message: 'اسم عميل ناقص — الصف مستبعد',
+            context: row.customerCode,
+          });
+          continue;
+        }
+        valid += 1;
+      }
+      return {
+        ruleErrors,
+        importable: { customers: valid },
+        executable: true,
+        deferredReason: null,
+      };
+    }
+
+    if (profile === 'CUSTOMER_BALANCE_SUMMARY') {
+      let valid = 0;
+      for (const row of parsed.balances) {
+        if (!row.customerCode || row.customerCode === 'None') {
+          ruleErrors.push({
+            rowNumber: row.rowNumber,
+            message: 'كود عميل ناقص — الصف مستبعد',
+            context: row.customerName,
+          });
+          continue;
+        }
+        if (!row.currency) {
+          ruleErrors.push({
+            rowNumber: row.rowNumber,
+            message: 'عملة ناقصة — الصف مستبعد',
+            context: row.customerCode,
+          });
+          continue;
+        }
+        if (!knownCurrencies.has(row.currency)) {
+          ruleErrors.push({
+            rowNumber: row.rowNumber,
+            message: `عملة غير معروفة (${row.currencyRaw}) — الصف مستبعد. أضفها من الإعدادات ثم أعد التنفيذ`,
+            context: `${row.customerCode} ${row.customerName}`,
+          });
+          continue;
+        }
+        if (row.balance == null) {
+          ruleErrors.push({
+            rowNumber: row.rowNumber,
+            message: 'رصيد غير صالح — الصف مستبعد',
+            context: `${row.customerCode} ${row.currency}`,
+          });
+          continue;
+        }
+        valid += 1;
+      }
+      return {
+        ruleErrors,
+        importable: { balances: valid },
+        executable: true,
+        deferredReason: null,
+      };
+    }
+
+    // DEBT_AGING_* — المعاينة كاملة، التنفيذ في المرحلة التالية (PR 3)
+    const rows = profile === 'DEBT_AGING_SUMMARY' ? parsed.agingSummary : parsed.agingDetails;
+    for (const row of rows) {
+      if (!row.currency) {
+        ruleErrors.push({
+          rowNumber: row.rowNumber,
+          message: 'عملة ناقصة — الصف مستبعد',
+          context: row.customerCode ?? undefined,
+        });
+        continue;
+      }
+      if (!knownCurrencies.has(row.currency)) {
+        ruleErrors.push({
+          rowNumber: row.rowNumber,
+          message: `عملة غير معروفة (${row.currencyRaw}) — الصف مستبعد`,
+          context: row.customerCode ?? row.currencyRaw,
+        });
+      }
+    }
+    return {
+      ruleErrors,
+      importable: { rows: 0 },
+      executable: false,
+      deferredReason: 'تخزين وتحديث ملفات تقسيم الأعمار (DEBT_AGING) متاح في المرحلة التالية — المعاينة تعمل الآن',
+    };
+  }
+
+  /** معاينة حسب نوع الملف — تحافظ على حقول كشف الحساب كما هي للتوافق. */
+  private buildPreview(profile: ImportProfile, parsed: ParseResultJson, validation: any) {
+    const base = {
+      profile,
+      format: parsed.format ?? 'xlsx',
+      executable: validation.executable,
+      deferredReason: validation.deferredReason ?? null,
+      parserErrors: parsed.errors.length,
+      ruleErrors: validation.ruleErrors.length,
+      parserErrorDetails: parsed.errors,
+      ruleErrorDetails: validation.ruleErrors,
+      sampleAccounts: [],
+      sampleCustomers: [],
+      sampleBalances: [],
+      sampleAgingRows: [],
+    };
+
+    if (profile === 'CUSTOMER_STATEMENT_DETAILS') {
+      return {
+        ...base,
         accountsInFile: parsed.stats.accounts,
         customersInFile: parsed.stats.customers,
         transactionsInFile: parsed.stats.transactions,
         fragmentedAccountsMerged: parsed.stats.fragmented_accounts,
-        importableAccounts,
-        importableTransactions: importableTxns,
-        parserErrors: parsed.errors.length,
-        ruleErrors: ruleErrors.length,
+        importableAccounts: validation.importable.accounts,
+        importableTransactions: validation.importable.transactions,
         sampleAccounts: parsed.accounts.slice(0, 5).map((a) => ({
           customerCode: a.customerCode,
           customerName: a.customerName,
@@ -143,8 +299,35 @@ export class ImportsService {
           declaredBalance: a.declaredBalance,
           transactions: a.transactions.length,
         })),
-      },
-      nextStep: `POST /imports/${job.id}/execute لاعتماد الاستيراد`,
+      };
+    }
+    if (profile === 'CUSTOMER_MASTER') {
+      return {
+        ...base,
+        customersInFile: parsed.customers.length,
+        importableCustomers: validation.importable.customers,
+        sampleCustomers: parsed.customers.slice(0, 10),
+      };
+    }
+    if (profile === 'CUSTOMER_BALANCE_SUMMARY') {
+      return {
+        ...base,
+        customersInFile: new Set(parsed.balances.map((b) => b.customerCode)).size,
+        balancesInFile: parsed.balances.length,
+        currenciesInFile: [...new Set(parsed.balances.map((b) => b.currency))],
+        importableBalances: validation.importable.balances,
+        sampleBalances: parsed.balances.slice(0, 10),
+      };
+    }
+    const rows = profile === 'DEBT_AGING_SUMMARY' ? parsed.agingSummary : parsed.agingDetails;
+    return {
+      ...base,
+      customersInFile: profile === 'DEBT_AGING_DETAILS'
+        ? new Set(rows.map((r) => r.customerCode)).size
+        : 0,
+      agingRowsInFile: rows.length,
+      currenciesInFile: [...new Set(rows.map((r) => r.currency))],
+      sampleAgingRows: rows.slice(0, 10),
     };
   }
 
@@ -164,6 +347,17 @@ export class ImportsService {
     }
 
     const report = job.errorReport as any;
+    const profile: ImportProfile = report?.profile ?? 'CUSTOMER_STATEMENT_DETAILS';
+
+    // PR 2 staging: تخزين ملفات الأعمار قادم في المرحلة التالية — رفض مضبوط
+    // قبل تغيير الحالة حتى تبقى العملية dry_run قابلة للتنفيذ لاحقًا.
+    if (profile === 'DEBT_AGING_SUMMARY' || profile === 'DEBT_AGING_DETAILS') {
+      throw new ConflictException(
+        'تنفيذ ملفات تقسيم الأعمار (DEBT_AGING) متاح في المرحلة التالية (تخزين الأعمار). ' +
+          'للمتابعة الآن: ارفع كشف حساب أو ملخص أرصدة أو بيانات عملاء',
+      );
+    }
+
     const previous = await this.prisma.importJob.findFirst({
       where: {
         organizationId: actor.organizationId, fileHash: job.fileHash,
@@ -181,7 +375,21 @@ export class ImportsService {
 
     try {
       const parsed: ParseResultJson = JSON.parse(await fs.readFile(report.parsedPath, 'utf-8'));
-      const result = await this.applyImport(actor, jobId, parsed, report.ruleErrors ?? []);
+      let result: {
+        customersNew: number; customersUpdated: number;
+        txnsInserted: number; txnsSkipped: number;
+        executeErrors: { account: string; message: string }[];
+        dupPairs: number; reconciliations: number;
+        totalsBefore: Record<string, number>; totalsAfter: Record<string, number>;
+        balancesWritten?: number;
+      };
+      if (profile === 'CUSTOMER_MASTER') {
+        result = await this.applyCustomerMaster(actor, jobId, parsed);
+      } else if (profile === 'CUSTOMER_BALANCE_SUMMARY') {
+        result = await this.applyBalanceSummary(actor, jobId, parsed);
+      } else {
+        result = await this.applyImport(actor, jobId, parsed, report.ruleErrors ?? []);
+      }
       const durationMs = Date.now() - started;
 
       const updated = await this.prisma.importJob.update({
@@ -201,6 +409,7 @@ export class ImportsService {
             durationMs,
             duplicateNamePairsFlagged: result.dupPairs,
             reconciliationsOpened: result.reconciliations,
+            balancesWritten: result.balancesWritten ?? null,
           } as any,
         },
       });
@@ -466,6 +675,192 @@ export class ImportsService {
     };
   }
 
+  /** استيراد بيانات العملاء الأساسية (CUSTOMER_MASTER) — upsert على (org, code). */
+  private async applyCustomerMaster(actor: AuthUser, jobId: string, parsed: ParseResultJson) {
+    const executeErrors: { account: string; message: string }[] = [];
+    let customersNew = 0;
+    let customersUpdated = 0;
+    const seenCustomerIds = new Map<string, string>(); // code -> id
+
+    for (const row of parsed.customers) {
+      try {
+        if (!row.customerCode || row.customerCode === 'None' || !row.customerName) {
+          continue; // سُجل في المعاينة
+        }
+        let customerId = seenCustomerIds.get(row.customerCode);
+        if (!customerId) {
+          const existing = await this.prisma.customer.findUnique({
+            where: {
+              organizationId_externalCustomerCode: {
+                organizationId: actor.organizationId,
+                externalCustomerCode: row.customerCode,
+              },
+            },
+          });
+          let resolvedId: string;
+          if (existing) {
+            resolvedId = existing.id;
+            customersUpdated += 1;
+            const updates: Record<string, unknown> = {};
+            if (existing.name !== row.customerName) {
+              updates.name = row.customerName;
+              updates.nameNormalized = normalizeName(row.customerName);
+            }
+            if (row.accountNumber && existing.accountNumber !== row.accountNumber) {
+              updates.accountNumber = row.accountNumber;
+            }
+            if (row.phone && existing.phonePrimary !== row.phone) {
+              updates.phonePrimary = row.phone;
+            }
+            if (row.whatsapp && existing.whatsapp !== row.whatsapp) {
+              updates.whatsapp = row.whatsapp;
+            }
+            if (row.region && existing.region !== row.region) {
+              updates.region = row.region;
+            }
+            if (row.address && existing.address !== row.address) {
+              updates.address = row.address;
+            }
+            if (row.customerType && existing.customerType !== row.customerType) {
+              updates.customerType = row.customerType;
+            }
+            if (Object.keys(updates).length) {
+              updates.updatedAt = new Date();
+              await this.prisma.customer.update({ where: { id: existing.id }, data: updates });
+            }
+          } else {
+            const created = await this.prisma.customer.create({
+              data: {
+                organizationId: actor.organizationId,
+                externalCustomerCode: row.customerCode,
+                accountNumber: row.accountNumber ?? undefined,
+                name: row.customerName,
+                nameNormalized: normalizeName(row.customerName),
+                phonePrimary: row.phone ?? undefined,
+                whatsapp: row.whatsapp ?? undefined,
+                region: row.region ?? undefined,
+                address: row.address ?? undefined,
+                customerType: row.customerType ?? undefined,
+                createdByImportJob: jobId,
+              },
+            });
+            resolvedId = created.id;
+            customersNew += 1;
+          }
+          customerId = resolvedId;
+          seenCustomerIds.set(row.customerCode, resolvedId);
+        }
+      } catch (e) {
+        executeErrors.push({
+          account: row.customerCode,
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    return {
+      customersNew, customersUpdated, txnsInserted: 0, txnsSkipped: 0,
+      executeErrors, dupPairs: 0, reconciliations: 0,
+      totalsBefore: {}, totalsAfter: {},
+    };
+  }
+
+  /** استيراد ملخص أرصدة العملاء (CUSTOMER_BALANCE_SUMMARY) — رصيد الملف هو المرجع. */
+  private async applyBalanceSummary(actor: AuthUser, jobId: string, parsed: ParseResultJson) {
+    const executeErrors: { account: string; message: string }[] = [];
+    const knownCurrencies = new Set(
+      (await this.prisma.currency.findMany({ where: { active: true } })).map((c) => c.code),
+    );
+    const totalsBefore = await this.balanceTotals(actor.organizationId);
+    let customersNew = 0;
+    let customersUpdated = 0;
+    let balancesWritten = 0;
+    const seenCustomerIds = new Map<string, string>(); // code -> id
+
+    for (const row of parsed.balances) {
+      try {
+        if (!row.customerCode || row.customerCode === 'None') continue; // سُجل في المعاينة
+        if (!knownCurrencies.has(row.currency)) continue;               // سُجل في المعاينة
+        if (row.balance == null) continue;                              // سُجل في المعاينة
+
+        // ---- العملاء: upsert على (org, code) ----
+        let customerId = seenCustomerIds.get(row.customerCode);
+        if (!customerId) {
+          const existing = await this.prisma.customer.findUnique({
+            where: {
+              organizationId_externalCustomerCode: {
+                organizationId: actor.organizationId,
+                externalCustomerCode: row.customerCode,
+              },
+            },
+          });
+          if (existing) {
+            customerId = existing.id;
+            customersUpdated += 1;
+          } else {
+            const created = await this.prisma.customer.create({
+              data: {
+                organizationId: actor.organizationId,
+                externalCustomerCode: row.customerCode,
+                name: row.customerName,
+                nameNormalized: normalizeName(row.customerName),
+                createdByImportJob: jobId,
+              },
+            });
+            customerId = created.id;
+            customersNew += 1;
+          }
+          seenCustomerIds.set(row.customerCode, customerId);
+        }
+
+        // ---- الرصيد حسب العملة: رصيد الملف هو المرجع المعتمد ----
+        const openingDebit = row.openingBalance != null && row.openingBalance >= 0
+          ? row.openingBalance : 0;
+        const openingCredit = row.openingBalance != null && row.openingBalance < 0
+          ? -row.openingBalance : 0;
+        await this.prisma.customerBalance.upsert({
+          where: { customerId_currencyCode: { customerId, currencyCode: row.currency } },
+          update: {
+            openingDebit,
+            openingCredit,
+            accountingBalance: row.balance,
+            declaredBalance: row.balance,
+            declaredLabel: 'رصيد الملف الحالي',
+            lastImportJobId: jobId,
+            updatedAt: new Date(),
+          },
+          create: {
+            customerId,
+            currencyCode: row.currency,
+            openingDebit,
+            openingCredit,
+            accountingBalance: row.balance,
+            declaredBalance: row.balance,
+            declaredLabel: 'رصيد الملف الحالي',
+            lastImportJobId: jobId,
+          },
+        });
+        await this.prisma.balanceSnapshot.create({
+          data: {
+            customerId, currencyCode: row.currency, balance: row.balance, importJobId: jobId,
+          },
+        });
+        balancesWritten += 1;
+      } catch (e) {
+        executeErrors.push({
+          account: `${row.customerCode}/${row.currency}`,
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    const totalsAfter = await this.balanceTotals(actor.organizationId);
+    return {
+      customersNew, customersUpdated, txnsInserted: 0, txnsSkipped: 0, balancesWritten,
+      executeErrors, dupPairs: 0, reconciliations: 0, totalsBefore, totalsAfter,
+    };
+  }
+
   private async balanceTotals(orgId: string): Promise<Record<string, number>> {
     const rows = await this.prisma.customerBalance.groupBy({
       by: ['currencyCode'],
@@ -488,10 +883,22 @@ export class ImportsService {
         id: true, fileName: true, status: true, importedAt: true,
         txnsInFile: true, txnsInserted: true, txnsSkippedDuplicate: true,
         customersNew: true, customersUpdated: true, errorsCount: true,
+        errorReport: true,
         uploader: { select: { id: true, fullName: true } },
       },
     });
-    return jobs;
+    return jobs.map((j: any) => {
+      const er = (j.errorReport ?? {}) as any;
+      return {
+        id: j.id, fileName: j.fileName, status: j.status, importedAt: j.importedAt,
+        txnsInFile: j.txnsInFile, txnsInserted: j.txnsInserted,
+        txnsSkippedDuplicate: j.txnsSkippedDuplicate, customersNew: j.customersNew,
+        customersUpdated: j.customersUpdated, errorsCount: j.errorsCount,
+        profile: er.profile ?? 'CUSTOMER_STATEMENT_DETAILS',
+        executable: er.executable ?? true,
+        uploader: j.uploader,
+      };
+    });
   }
 
   async findOne(actor: AuthUser, id: string) {
@@ -515,16 +922,21 @@ export class ImportsService {
   /** التقرير النهائي — كل العدادات التسعة المطلوبة في متطلبات المرحلة. */
   private buildReport(job: any) {
     const er = (job.errorReport ?? {}) as any;
+    const profile = er.profile ?? 'CUSTOMER_STATEMENT_DETAILS';
     const parserErrors = (er.parserErrors ?? []).length;
     const ruleErrors = (er.ruleErrors ?? []).length;
     const executeErrors = (er.executeErrors ?? []).length;
+    const rowsImported = profile === 'CUSTOMER_STATEMENT_DETAILS'
+      ? job.txnsInserted
+      : (job.customersNew ?? 0) + (job.customersUpdated ?? 0);
     return {
       jobId: job.id,
       fileName: job.fileName,
       status: job.status,
+      profile,
       importedAt: job.importedAt,
       rowsRead: job.rowsTotal,                                   // عدد الصفوف المقروءة
-      rowsImported: job.txnsInserted,                            // المستوردة فعلاً
+      rowsImported,                                              // المستوردة فعلاً
       rowsIgnored: (job.txnsSkippedDuplicate ?? 0) + parserErrors + ruleErrors, // المتجاهلة
       errorsCount: parserErrors + ruleErrors + executeErrors,    // الأخطاء
       customersNew: job.customersNew,                            // العملاء الجدد
@@ -534,6 +946,7 @@ export class ImportsService {
       durationMs: er.durationMs ?? null,                         // الزمن المستغرق
       balancesBefore: job.totalBalanceBefore,
       balancesAfter: job.totalBalanceAfter,
+      balancesWritten: er.balancesWritten ?? null,
       duplicateNamePairsFlagged: er.duplicateNamePairsFlagged ?? 0,
       reconciliationsOpened: er.reconciliationsOpened ?? 0,
     };
@@ -547,6 +960,9 @@ export class ImportsService {
     const er = (job.errorReport ?? {}) as any;
     return {
       jobId: job.id,
+      profile: er.profile ?? 'CUSTOMER_STATEMENT_DETAILS',
+      executable: er.executable ?? true,
+      deferredReason: er.deferredReason ?? null,
       parserErrors: er.parserErrors ?? [],     // صفوف تالفة (مدين+دائن معًا، سالب...)
       ruleErrors: er.ruleErrors ?? [],         // عملة غير معروفة، كود ناقص...
       executeErrors: er.executeErrors ?? [],   // أخطاء أثناء الكتابة (حساب-بحساب)
