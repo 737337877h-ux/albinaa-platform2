@@ -12,6 +12,9 @@ import { ImportProfile, ParseResultJson, ParserService } from './parser.service'
 
 const CHUNK = 500;
 
+/** مفاتيح فئات تقسيم الأعمار الثابتة — تطابق DETAILS_BUCKET_KEYS في الـ Parser. */
+const AGING_BUCKET_KEYS = ['0-30', '31-60', '61-90', '91-120', '120+'] as const;
+
 /** تطبيع اسم لكشف التشابه — مطابق لدالة الـ Parser (موثق في مرحلة التحقق). */
 function normalizeName(s: string): string {
   return s
@@ -238,8 +241,9 @@ export class ImportsService {
       };
     }
 
-    // DEBT_AGING_* — المعاينة كاملة، التنفيذ في المرحلة التالية (PR 3)
+    // DEBT_AGING_* — قواعد مثل الأرصدة: العملة فقط تُفحص، والتنفيذ متاح (PR 3)
     const rows = profile === 'DEBT_AGING_SUMMARY' ? parsed.agingSummary : parsed.agingDetails;
+    let valid = 0;
     for (const row of rows) {
       if (!row.currency) {
         ruleErrors.push({
@@ -255,13 +259,15 @@ export class ImportsService {
           message: `عملة غير معروفة (${row.currencyRaw}) — الصف مستبعد`,
           context: row.customerCode ?? row.currencyRaw,
         });
+        continue;
       }
+      valid += 1;
     }
     return {
       ruleErrors,
-      importable: { rows: 0 },
-      executable: false,
-      deferredReason: 'تخزين وتحديث ملفات تقسيم الأعمار (DEBT_AGING) متاح في المرحلة التالية — المعاينة تعمل الآن',
+      importable: { rows: valid },
+      executable: true,
+      deferredReason: null,
     };
   }
 
@@ -328,6 +334,10 @@ export class ImportsService {
       agingRowsInFile: rows.length,
       currenciesInFile: [...new Set(rows.map((r) => r.currency))],
       sampleAgingRows: rows.slice(0, 10),
+      agingRowsWritten: 0,
+      agingDocumentsWritten: 0,
+      skippedDuplicates: 0,
+      errors: parsed.errors.length + validation.ruleErrors.length,
     };
   }
 
@@ -348,15 +358,6 @@ export class ImportsService {
 
     const report = job.errorReport as any;
     const profile: ImportProfile = report?.profile ?? 'CUSTOMER_STATEMENT_DETAILS';
-
-    // PR 2 staging: تخزين ملفات الأعمار قادم في المرحلة التالية — رفض مضبوط
-    // قبل تغيير الحالة حتى تبقى العملية dry_run قابلة للتنفيذ لاحقًا.
-    if (profile === 'DEBT_AGING_SUMMARY' || profile === 'DEBT_AGING_DETAILS') {
-      throw new ConflictException(
-        'تنفيذ ملفات تقسيم الأعمار (DEBT_AGING) متاح في المرحلة التالية (تخزين الأعمار). ' +
-          'للمتابعة الآن: ارفع كشف حساب أو ملخص أرصدة أو بيانات عملاء',
-      );
-    }
 
     const previous = await this.prisma.importJob.findFirst({
       where: {
@@ -382,11 +383,18 @@ export class ImportsService {
         dupPairs: number; reconciliations: number;
         totalsBefore: Record<string, number>; totalsAfter: Record<string, number>;
         balancesWritten?: number;
+        agingRowsWritten?: number;
+        agingDocumentsWritten?: number;
+        agingSkippedDuplicate?: number;
       };
       if (profile === 'CUSTOMER_MASTER') {
         result = await this.applyCustomerMaster(actor, jobId, parsed);
       } else if (profile === 'CUSTOMER_BALANCE_SUMMARY') {
         result = await this.applyBalanceSummary(actor, jobId, parsed);
+      } else if (profile === 'DEBT_AGING_SUMMARY') {
+        result = await this.applyAgingSummary(actor, jobId, parsed);
+      } else if (profile === 'DEBT_AGING_DETAILS') {
+        result = await this.applyAgingDetails(actor, jobId, parsed);
       } else {
         result = await this.applyImport(actor, jobId, parsed, report.ruleErrors ?? []);
       }
@@ -401,6 +409,9 @@ export class ImportsService {
           customersUpdated: result.customersUpdated,
           txnsInserted: result.txnsInserted,
           txnsSkippedDuplicate: result.txnsSkipped,
+          agingRowsWritten: result.agingRowsWritten ?? null,
+          agingDocumentsWritten: result.agingDocumentsWritten ?? null,
+          agingSkippedDuplicate: result.agingSkippedDuplicate ?? null,
           totalBalanceBefore: result.totalsBefore as any,
           totalBalanceAfter: result.totalsAfter as any,
           errorReport: {
@@ -418,7 +429,10 @@ export class ImportsService {
         userId: actor.id, action: 'import_executed', entityTable: 'import_jobs', entityId: jobId,
         newValue: {
           customersNew: result.customersNew, customersUpdated: result.customersUpdated,
-          txnsInserted: result.txnsInserted, txnsSkipped: result.txnsSkipped, durationMs,
+          txnsInserted: result.txnsInserted, txnsSkipped: result.txnsSkipped,
+          agingRowsWritten: result.agingRowsWritten ?? 0,
+          agingDocumentsWritten: result.agingDocumentsWritten ?? 0,
+          durationMs,
         }, req,
       });
 
@@ -861,6 +875,213 @@ export class ImportsService {
     };
   }
 
+  /** استيراد تقسيم الأعمار المجمّع (DEBT_AGING_SUMMARY) — سطر لكل عميل/عملة. */
+  private async applyAgingSummary(actor: AuthUser, jobId: string, parsed: ParseResultJson) {
+    const executeErrors: { account: string; message: string }[] = [];
+    const knownCurrencies = new Set(
+      (await this.prisma.currency.findMany({ where: { active: true } })).map((c) => c.code),
+    );
+    const counts = { customersNew: 0, customersUpdated: 0 };
+    const seenCustomerIds = new Map<string, string>();
+    let agingRowsWritten = 0;
+    let skipped = 0;
+
+    for (const row of parsed.agingSummary) {
+      try {
+        if (!row.customerCode || row.customerCode === 'None') continue; // سُجل في المعاينة
+        if (!knownCurrencies.has(row.currency)) continue;               // سُجل في المعاينة
+
+        const customerId = await this.upsertAgingCustomer(
+          actor, jobId, row.customerCode, row.customerName ?? row.customerCode,
+          seenCustomerIds, counts,
+        );
+        const lineHash = this.agingLineHash(
+          'DEBT_AGING_SUMMARY', row.customerCode, row.currency, row.rowNumber,
+        );
+        if (await this.prisma.debtAgingSummary.findUnique({ where: { lineHash } })) {
+          skipped += 1;
+          continue;
+        }
+        await this.prisma.debtAgingSummary.create({
+          data: {
+            importJobId: jobId,
+            customerId,
+            customerCode: row.customerCode,
+            currencyCode: row.currency,
+            bucket_0_30: row.buckets['0-30'] ?? 0,
+            bucket_31_60: row.buckets['31-60'] ?? 0,
+            bucket_61_90: row.buckets['61-90'] ?? 0,
+            bucket_91_120: row.buckets['91-120'] ?? 0,
+            bucket_120_plus: row.buckets['120+'] ?? 0,
+            totalDue: row.total ?? this.sumAgingBuckets(row.buckets),
+            sourceRowNumber: row.rowNumber,
+            lineHash,
+          },
+        });
+        agingRowsWritten += 1;
+      } catch (e) {
+        executeErrors.push({
+          account: `${row.customerCode ?? '?'}/${row.currency}`,
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    return {
+      customersNew: counts.customersNew,
+      customersUpdated: counts.customersUpdated,
+      txnsInserted: 0,
+      txnsSkipped: skipped,
+      agingRowsWritten,
+      agingDocumentsWritten: 0,
+      agingSkippedDuplicate: skipped,
+      executeErrors,
+      dupPairs: 0,
+      reconciliations: 0,
+      totalsBefore: {},
+      totalsAfter: {},
+    };
+  }
+
+  /** استيراد تقسيم الأعمار التفصيلي (DEBT_AGING_DETAILS) — سطر لكل مستند. */
+  private async applyAgingDetails(actor: AuthUser, jobId: string, parsed: ParseResultJson) {
+    const executeErrors: { account: string; message: string }[] = [];
+    const knownCurrencies = new Set(
+      (await this.prisma.currency.findMany({ where: { active: true } })).map((c) => c.code),
+    );
+    const counts = { customersNew: 0, customersUpdated: 0 };
+    const seenCustomerIds = new Map<string, string>();
+    let agingDocumentsWritten = 0;
+    let skipped = 0;
+
+    for (const row of parsed.agingDetails) {
+      try {
+        if (!row.customerCode || row.customerCode === 'None') continue; // سُجل في المعاينة
+        if (!knownCurrencies.has(row.currency)) continue;               // سُجل في المعاينة
+
+        const customerId = await this.upsertAgingCustomer(
+          actor, jobId, row.customerCode, row.customerName ?? row.customerCode,
+          seenCustomerIds, counts,
+        );
+        const lineHash = this.agingLineHash(
+          'DEBT_AGING_DETAILS', row.customerCode, row.currency, row.rowNumber,
+        );
+        if (await this.prisma.debtAgingDetail.findUnique({ where: { lineHash } })) {
+          skipped += 1;
+          continue;
+        }
+        await this.prisma.debtAgingDetail.create({
+          data: {
+            importJobId: jobId,
+            customerId,
+            customerCode: row.customerCode,
+            currencyCode: row.currency,
+            documentNumber: row.documentNumber ?? null,
+            documentDate: this.parseAgingDate(row.documentDate),
+            documentType: row.documentType ?? null,
+            amount: row.total ?? this.sumAgingBuckets(row.buckets),
+            bucket_0_30: row.buckets['0-30'] ?? 0,
+            bucket_31_60: row.buckets['31-60'] ?? 0,
+            bucket_61_90: row.buckets['61-90'] ?? 0,
+            bucket_91_120: row.buckets['91-120'] ?? 0,
+            bucket_120_plus: row.buckets['120+'] ?? 0,
+            sourceRowNumber: row.rowNumber,
+            lineHash,
+          },
+        });
+        agingDocumentsWritten += 1;
+      } catch (e) {
+        executeErrors.push({
+          account: `${row.customerCode ?? '?'}/${row.currency}`,
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    return {
+      customersNew: counts.customersNew,
+      customersUpdated: counts.customersUpdated,
+      txnsInserted: 0,
+      txnsSkipped: skipped,
+      agingRowsWritten: 0,
+      agingDocumentsWritten,
+      agingSkippedDuplicate: skipped,
+      executeErrors,
+      dupPairs: 0,
+      reconciliations: 0,
+      totalsBefore: {},
+      totalsAfter: {},
+    };
+  }
+
+  /** هاش سطر أعمار — مستقر عبر إعادة استيراد نفس الملف، وفريد داخل الملف (rowNumber). */
+  private agingLineHash(profile: ImportProfile, code: string, currency: string, rowNumber: number): string {
+    return createHash('sha256')
+      .update(`${profile}|${code}|${currency}|${rowNumber}`)
+      .digest('hex');
+  }
+
+  /** مجموع فئات الأعمار — بديل آمن عند غياب/فشل عمود الإجمالي. */
+  private sumAgingBuckets(buckets: Record<string, number>): number {
+    return AGING_BUCKET_KEYS.reduce((sum, k) => sum + (buckets[k] ?? 0), 0);
+  }
+
+  /** تحويل تاريخ المستند (DD/MM/YYYY أو YYYY/MM/DD وبفواصل / أو - أو .) — null عند الغموض. */
+  private parseAgingDate(raw: string | null | undefined): Date | null {
+    if (!raw) return null;
+    const m = String(raw).trim().match(/^(\d{1,4})[/\-.](\d{1,2})[/\-.](\d{1,4})$/);
+    if (!m) return null;
+    const date = m[1].length === 4
+      ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]))
+      : new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  /** عميل (org, code) — نفس سياسة upsert لبقية الملفات: موجود يُحَّد اسمه، غائب يُنشأ. */
+  private async upsertAgingCustomer(
+    actor: AuthUser,
+    jobId: string,
+    code: string,
+    name: string,
+    seen: Map<string, string>,
+    counts: { customersNew: number; customersUpdated: number },
+  ): Promise<string> {
+    let customerId = seen.get(code);
+    if (customerId) return customerId;
+    const existing = await this.prisma.customer.findUnique({
+      where: {
+        organizationId_externalCustomerCode: {
+          organizationId: actor.organizationId,
+          externalCustomerCode: code,
+        },
+      },
+    });
+    if (existing) {
+      customerId = existing.id;
+      counts.customersUpdated += 1;
+      if (existing.name !== name) {
+        await this.prisma.customer.update({
+          where: { id: existing.id },
+          data: { name, nameNormalized: normalizeName(name), updatedAt: new Date() },
+        });
+      }
+    } else {
+      const created = await this.prisma.customer.create({
+        data: {
+          organizationId: actor.organizationId,
+          externalCustomerCode: code,
+          name,
+          nameNormalized: normalizeName(name),
+          createdByImportJob: jobId,
+        },
+      });
+      customerId = created.id;
+      counts.customersNew += 1;
+    }
+    seen.set(code, customerId);
+    return customerId;
+  }
+
   private async balanceTotals(orgId: string): Promise<Record<string, number>> {
     const rows = await this.prisma.customerBalance.groupBy({
       by: ['currencyCode'],
@@ -883,6 +1104,7 @@ export class ImportsService {
         id: true, fileName: true, status: true, importedAt: true,
         txnsInFile: true, txnsInserted: true, txnsSkippedDuplicate: true,
         customersNew: true, customersUpdated: true, errorsCount: true,
+        agingRowsWritten: true, agingDocumentsWritten: true,
         errorReport: true,
         uploader: { select: { id: true, fullName: true } },
       },
@@ -894,6 +1116,8 @@ export class ImportsService {
         txnsInFile: j.txnsInFile, txnsInserted: j.txnsInserted,
         txnsSkippedDuplicate: j.txnsSkippedDuplicate, customersNew: j.customersNew,
         customersUpdated: j.customersUpdated, errorsCount: j.errorsCount,
+        agingRowsWritten: j.agingRowsWritten ?? null,
+        agingDocumentsWritten: j.agingDocumentsWritten ?? null,
         profile: er.profile ?? 'CUSTOMER_STATEMENT_DETAILS',
         executable: er.executable ?? true,
         uploader: j.uploader,
@@ -919,7 +1143,7 @@ export class ImportsService {
     return this.buildReport(job);
   }
 
-  /** التقرير النهائي — كل العدادات التسعة المطلوبة في متطلبات المرحلة. */
+  /** التقرير النهائي — كل العدادات التسعة المطلوبة + عدادات الأعمار (PR 3). */
   private buildReport(job: any) {
     const er = (job.errorReport ?? {}) as any;
     const profile = er.profile ?? 'CUSTOMER_STATEMENT_DETAILS';
@@ -928,6 +1152,10 @@ export class ImportsService {
     const executeErrors = (er.executeErrors ?? []).length;
     const rowsImported = profile === 'CUSTOMER_STATEMENT_DETAILS'
       ? job.txnsInserted
+      : profile === 'DEBT_AGING_SUMMARY'
+      ? (job.agingRowsWritten ?? 0)
+      : profile === 'DEBT_AGING_DETAILS'
+      ? (job.agingDocumentsWritten ?? 0)
       : (job.customersNew ?? 0) + (job.customersUpdated ?? 0);
     return {
       jobId: job.id,
@@ -939,6 +1167,7 @@ export class ImportsService {
       rowsImported,                                              // المستوردة فعلاً
       rowsIgnored: (job.txnsSkippedDuplicate ?? 0) + parserErrors + ruleErrors, // المتجاهلة
       errorsCount: parserErrors + ruleErrors + executeErrors,    // الأخطاء
+      errors: parserErrors + ruleErrors + executeErrors,         // PR 3: اسم موحد للعدّاد
       customersNew: job.customersNew,                            // العملاء الجدد
       customersUpdated: job.customersUpdated,                    // المحدثون
       transactionsNew: job.txnsInserted,                         // الحركات الجديدة
@@ -949,6 +1178,9 @@ export class ImportsService {
       balancesWritten: er.balancesWritten ?? null,
       duplicateNamePairsFlagged: er.duplicateNamePairsFlagged ?? 0,
       reconciliationsOpened: er.reconciliationsOpened ?? 0,
+      agingRowsWritten: job.agingRowsWritten ?? null,            // PR 3: أسطر الأعمار المجمّع
+      agingDocumentsWritten: job.agingDocumentsWritten ?? null,  // PR 3: وثائق الأعمار التفصيلي
+      skippedDuplicates: job.agingSkippedDuplicate ?? job.txnsSkippedDuplicate ?? 0,
     };
   }
 
