@@ -52,7 +52,16 @@ export function resolvePythonBin(envBin?: string): string {
   );
 }
 
-/* ─────────────────────────── Types (unchanged) ───────────────────────────── */
+/* ─────────────────────────── Types (PR 2 extended) ──────────────────────── */
+
+export const IMPORT_PROFILES = [
+  'CUSTOMER_STATEMENT_DETAILS',
+  'CUSTOMER_MASTER',
+  'CUSTOMER_BALANCE_SUMMARY',
+  'DEBT_AGING_SUMMARY',
+  'DEBT_AGING_DETAILS',
+] as const;
+export type ImportProfile = (typeof IMPORT_PROFILES)[number];
 
 /** بنية مخرجات الـ Parser (JSON من parser_cli.py). */
 export interface ParsedTransaction {
@@ -81,14 +90,51 @@ export interface ParsedAccount {
   warnings: string[];
   transactions: ParsedTransaction[];
 }
+export interface ParsedMasterRow {
+  rowNumber: number;
+  customerCode: string;
+  customerName: string;
+  accountNumber: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  region: string | null;
+  address: string | null;
+  customerType: string | null;
+}
+export interface ParsedBalanceRow {
+  rowNumber: number;
+  customerCode: string;
+  customerName: string;
+  currencyRaw: string;
+  currency: string;       // ISO
+  balance: number;
+  openingBalance: number | null;
+}
+export interface ParsedAgingRow {
+  rowNumber: number;
+  customerCode?: string;
+  customerName?: string;
+  currencyRaw: string;
+  currency: string;       // ISO
+  buckets: Record<string, number>;
+  total: number | null;
+}
 export interface ParseResultJson {
   ok: boolean;
   error?: string;
+  /** نوع ملف الاستيراد — يحدده الـ Parser (قد يكون غائبًا لعمليات قديمة). */
+  profile?: ImportProfile;
+  format?: 'xlsx' | 'tsv';
   stats: {
     accounts: number; customers: number; transactions: number;
     fragmented_accounts: number; errors: number; empty_rows_skipped: number;
+    rows: number; validRows: number;
   };
   accounts: ParsedAccount[];
+  customers: ParsedMasterRow[];
+  balances: ParsedBalanceRow[];
+  agingSummary: ParsedAgingRow[];
+  agingDetails: ParsedAgingRow[];
   errors: { rowNumber: number; message: string; raw: unknown[] }[];
   skippedEmptyRows: number;
 }

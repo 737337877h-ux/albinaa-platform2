@@ -10,6 +10,7 @@ import {
   Eye,
   Play,
   History,
+  Clock,
 } from 'lucide-react';
 import { API, api, tokenStore } from '@/lib/api';
 import { useCan } from '@/lib/auth';
@@ -34,31 +35,52 @@ interface ImportRow {
   customersNew: number | null;
   customersUpdated: number | null;
   errorsCount: number;
+  profile?: string;
+  executable?: boolean;
   uploader: { id: string; fullName: string };
+}
+
+interface PreviouslyImported {
+  jobId: string;
+  importedAt: string;
 }
 
 interface UploadResponse {
   jobId: string;
   status: 'dry_run';
-  previouslyImported: boolean;
+  previouslyImported: PreviouslyImported | null;
   preview: Preview;
   nextStep: string;
 }
 
 interface Preview {
+  profile: string;
+  format: 'xlsx' | 'tsv';
+  executable: boolean;
+  deferredReason: string | null;
   accountsInFile: number;
   customersInFile: number;
   transactionsInFile: number;
   fragmentedAccountsMerged: number;
   importableAccounts: number;
   importableTransactions: number;
-  parserErrors: ParserRuleError[];
-  ruleErrors: ParserRuleError[];
+  importableCustomers?: number;
+  importableBalances?: number;
+  balancesInFile?: number;
+  agingRowsInFile?: number;
+  currenciesInFile?: string[];
+  parserErrors: number;
+  ruleErrors: number;
+  parserErrorDetails: ParserRuleError[];
+  ruleErrorDetails: ParserRuleError[];
   sampleAccounts: SampleAccount[];
+  sampleCustomers: SampleCustomer[];
+  sampleBalances: SampleBalance[];
+  sampleAgingRows: SampleAgingRow[];
 }
 
 interface ParserRuleError {
-  rowNumber: number;
+  rowNumber: number | null;
   message: string;
 }
 
@@ -77,10 +99,37 @@ interface SampleTxn {
   credit: number | null;
 }
 
+interface SampleCustomer {
+  rowNumber: number;
+  customerCode: string;
+  customerName: string;
+  phone: string | null;
+  region: string | null;
+  customerType: string | null;
+}
+
+interface SampleBalance {
+  rowNumber: number;
+  customerCode: string;
+  customerName: string;
+  currency: string;
+  balance: number;
+}
+
+interface SampleAgingRow {
+  rowNumber: number;
+  customerCode?: string;
+  customerName?: string;
+  currency: string;
+  buckets: Record<string, number>;
+  total: number | null;
+}
+
 interface ReportData {
   jobId: string;
   fileName: string;
   status: string;
+  profile?: string;
   importedAt: string;
   rowsRead: number;
   rowsImported: number;
@@ -93,12 +142,16 @@ interface ReportData {
   durationMs: number;
   balancesBefore: Record<string, number>;
   balancesAfter: Record<string, number>;
+  balancesWritten?: number | null;
   duplicateNamePairsFlagged: number;
   reconciliationsOpened: number;
 }
 
 interface ErrorDetail {
   jobId: string;
+  profile?: string;
+  executable?: boolean;
+  deferredReason?: string | null;
   parserErrors: ParserRuleError[];
   ruleErrors: ParserRuleError[];
   executeErrors: string[];
@@ -108,9 +161,17 @@ interface ErrorDetail {
 
 /* ────────────────────────────── Constants ────────────────────────────── */
 
-const ALLOWED_EXT = ['.xlsx', '.xlsm'];
+const ALLOWED_EXT = ['.xlsx', '.xlsm', '.xls'];
 const MAX_SIZE_MB = 30;
 const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
+
+const PROFILE_AR: Record<string, string> = {
+  CUSTOMER_STATEMENT_DETAILS: 'كشف الحساب',
+  CUSTOMER_MASTER: 'بيانات العملاء',
+  CUSTOMER_BALANCE_SUMMARY: 'ملخص الأرصدة',
+  DEBT_AGING_SUMMARY: 'تقسيم الأعمار (مجمّع)',
+  DEBT_AGING_DETAILS: 'تقسيم الأعمار (تفصيلي)',
+};
 
 const STATUS_BADGE: Record<ImportRow['status'], 'pine' | 'hazard' | 'neutral' | 'debt'> = {
   completed: 'pine',
@@ -128,7 +189,7 @@ function fileError(msg: string): never {
 function validateFile(file: File) {
   const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
   if (!ALLOWED_EXT.includes(ext)) {
-    fileError('الملف يجب أن يكون بصيغة .xlsx أو .xlsm');
+    fileError('الملف يجب أن يكون بصيغة .xlsx أو .xlsm أو .xls (نصي مفصول بـ Tab)');
   }
   if (file.size > MAX_SIZE_BYTES) {
     fileError(`حجم الملف يتجاوز ${MAX_SIZE_MB} ميجابايت`);
@@ -313,7 +374,16 @@ export default function ImportsPage() {
                   <TD>
                     <div className="flex items-center gap-2">
                       <FileSpreadsheet className="h-4 w-4 flex-shrink-0 text-credit-600 dark:text-credit-400" />
-                      <span className="truncate max-w-[200px] font-medium">{row.fileName}</span>
+                      <div className="min-w-0">
+                        <span className="block truncate max-w-[200px] font-medium">
+                          {row.fileName}
+                        </span>
+                        {row.profile && (
+                          <span className="text-[10px] text-concrete-400">
+                            {PROFILE_AR[row.profile] ?? row.profile}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </TD>
                   <TD>
@@ -350,10 +420,14 @@ export default function ImportsPage() {
                       {row.status === 'dry_run' && canRun && (
                         <button
                           onClick={() => executeMut.mutate(row.id)}
-                          disabled={executeMut.isPending}
-                          className="rounded p-1.5 text-concrete-400 hover:bg-pine-50 hover:text-pine-700 dark:hover:bg-white/10 dark:hover:text-pine-100 disabled:opacity-50"
+                          disabled={executeMut.isPending || row.executable === false}
+                          className="rounded p-1.5 text-concrete-400 hover:bg-pine-50 hover:text-pine-700 dark:hover:bg-white/10 dark:hover:text-pine-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-concrete-400"
                           aria-label="تنفيذ الاستيراد"
-                          title="تنفيذ الاستيراد"
+                          title={
+                            row.executable === false
+                              ? 'التنفيذ متاح في المرحلة التالية (تخزين الأعمار)'
+                              : 'تنفيذ الاستيراد'
+                          }
                         >
                           <Play className="h-3.5 w-3.5" />
                         </button>
@@ -473,7 +547,7 @@ function UploadZone({
         ref={inputRef}
         id="file-upload-input"
         type="file"
-        accept=".xlsx,.xlsm"
+        accept=".xlsx,.xlsm,.xls"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -514,7 +588,8 @@ function UploadZone({
             {uploading ? 'جارٍ رفع الملف ومراجعته…' : 'اسحب ملف Excel هنا أو انقر للاختيار'}
           </p>
           <p className="mt-1 text-xs text-concrete-500">
-            يُقبل ملفات .xlsx و .xlsm بحد أقصى {MAX_SIZE_MB} ميجابايت
+            يُقبل .xlsx و .xlsm و .xls (نصي مفصول بـ Tab — ترميز Windows-1256) بحد أقصى{' '}
+            {MAX_SIZE_MB} ميجابايت
           </p>
         </div>
       </div>
@@ -542,11 +617,24 @@ function PreviewDialog({
 }) {
   if (!data) return null;
   const { preview } = data;
-  const hasErrors = preview.parserErrors.length > 0 || preview.ruleErrors.length > 0;
+  const hasErrors = preview.parserErrors > 0 || preview.ruleErrors > 0;
+  const isStatement = preview.profile === 'CUSTOMER_STATEMENT_DETAILS';
+  const isMaster = preview.profile === 'CUSTOMER_MASTER';
+  const isBalance = preview.profile === 'CUSTOMER_BALANCE_SUMMARY';
+  const isAging =
+    preview.profile === 'DEBT_AGING_SUMMARY' || preview.profile === 'DEBT_AGING_DETAILS';
 
   return (
     <Dialog open={!!data} onClose={onClose} title="مراجعة الاستيراد">
       <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+        {/* ── Profile ── */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone="pine">{PROFILE_AR[preview.profile] ?? preview.profile}</Badge>
+          <Badge tone="neutral">
+            {preview.format === 'tsv' ? 'نصي مفصول بـ Tab' : 'Excel'}
+          </Badge>
+        </div>
+
         {/* ── Previously imported warning ── */}
         {data.previouslyImported && (
           <div className="flex items-start gap-2 rounded-lg border border-hazard-300 bg-hazard-50 px-3 py-2 text-sm text-hazard-700 dark:border-hazard-600/30 dark:bg-hazard-700/20 dark:text-hazard-100">
@@ -555,19 +643,59 @@ function PreviewDialog({
           </div>
         )}
 
-        {/* ── Summary Stats ── */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatCard label="الحسابات في الملف" value={preview.accountsInFile} />
-          <StatCard label="العملاء في الملف" value={preview.customersInFile} />
-          <StatCard label="المعاملات في الملف" value={preview.transactionsInFile} />
-          <StatCard
-            label="المعاملات القابلة للاستيراد"
-            value={preview.importableTransactions}
-            highlight
-          />
-        </div>
+        {/* ── Deferred execution (aging) ── */}
+        {!preview.executable && preview.deferredReason && (
+          <div className="flex items-start gap-2 rounded-lg border border-hazard-300 bg-hazard-50 px-3 py-2 text-sm text-hazard-700 dark:border-hazard-600/30 dark:bg-hazard-700/20 dark:text-hazard-100">
+            <Clock className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <span>{preview.deferredReason}</span>
+          </div>
+        )}
 
-        {preview.fragmentedAccountsMerged > 0 && (
+        {/* ── Summary Stats ── */}
+        {isStatement && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatCard label="الحسابات في الملف" value={preview.accountsInFile} />
+            <StatCard label="العملاء في الملف" value={preview.customersInFile} />
+            <StatCard label="المعاملات في الملف" value={preview.transactionsInFile} />
+            <StatCard
+              label="المعاملات القابلة للاستيراد"
+              value={preview.importableTransactions}
+              highlight
+            />
+          </div>
+        )}
+        {isMaster && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatCard label="العملاء في الملف" value={preview.customersInFile} />
+            <StatCard label="قابلون للاستيراد" value={preview.importableCustomers ?? 0} highlight />
+            <StatCard label="أخطاء تحليل" value={preview.parserErrors} />
+            <StatCard label="أخطاء قواعد" value={preview.ruleErrors} />
+          </div>
+        )}
+        {isBalance && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatCard label="العملاء في الملف" value={preview.customersInFile} />
+            <StatCard label="أسطر الأرصدة" value={preview.balancesInFile ?? 0} />
+            <StatCard label="قابلة للاستيراد" value={preview.importableBalances ?? 0} highlight />
+            <StatCard
+              label="العملات"
+              value={(preview.currenciesInFile ?? []).join('، ') || '—'}
+            />
+          </div>
+        )}
+        {isAging && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatCard label="الصفوف في الملف" value={preview.agingRowsInFile ?? 0} />
+            <StatCard label="العملاء في الملف" value={preview.customersInFile} />
+            <StatCard
+              label="العملات"
+              value={(preview.currenciesInFile ?? []).join('، ') || '—'}
+            />
+            <StatCard label="المعاينة" value="متاحة" highlight />
+          </div>
+        )}
+
+        {isStatement && preview.fragmentedAccountsMerged > 0 && (
           <p className="text-xs text-concrete-500">
             تم دمج {preview.fragmentedAccountsMerged} حسابات مجزأة.
           </p>
@@ -577,13 +705,13 @@ function PreviewDialog({
         {hasErrors && (
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-debt-700 dark:text-debt-400">
-              أخطاء وجدت ({preview.parserErrors.length + preview.ruleErrors.length})
+              أخطاء وجدت ({preview.parserErrors + preview.ruleErrors})
             </h3>
-            {preview.parserErrors.length > 0 && (
+            {preview.parserErrorDetails.length > 0 && (
               <div>
                 <p className="mb-1 text-xs font-medium text-concrete-500">أخطاء التحليل:</p>
                 <ul className="max-h-32 overflow-y-auto rounded-lg border border-concrete-100 bg-concrete-50 p-2 text-xs dark:border-white/10 dark:bg-iron-700">
-                  {preview.parserErrors.map((e, i) => (
+                  {preview.parserErrorDetails.map((e, i) => (
                     <li key={i} className="py-0.5">
                       <span className="tnum font-medium">صف {e.rowNumber}:</span>{' '}
                       <span className="text-debt-600 dark:text-debt-400">{e.message}</span>
@@ -592,11 +720,11 @@ function PreviewDialog({
                 </ul>
               </div>
             )}
-            {preview.ruleErrors.length > 0 && (
+            {preview.ruleErrorDetails.length > 0 && (
               <div>
                 <p className="mb-1 text-xs font-medium text-concrete-500">أخطاء القواعد:</p>
                 <ul className="max-h-32 overflow-y-auto rounded-lg border border-concrete-100 bg-concrete-50 p-2 text-xs dark:border-white/10 dark:bg-iron-700">
-                  {preview.ruleErrors.map((e, i) => (
+                  {preview.ruleErrorDetails.map((e, i) => (
                     <li key={i} className="py-0.5">
                       <span className="tnum font-medium">صف {e.rowNumber}:</span>{' '}
                       <span className="text-debt-600 dark:text-debt-400">{e.message}</span>
@@ -608,8 +736,8 @@ function PreviewDialog({
           </div>
         )}
 
-        {/* ── Sample Data ── */}
-        {preview.sampleAccounts.length > 0 && (
+        {/* ── Sample Data: كشف الحساب ── */}
+        {isStatement && preview.sampleAccounts.length > 0 && (
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-concrete-700 dark:text-concrete-200">
               عينة من البيانات
@@ -663,6 +791,121 @@ function PreviewDialog({
           </div>
         )}
 
+        {/* ── Sample Data: بيانات العملاء ── */}
+        {isMaster && preview.sampleCustomers.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-concrete-700 dark:text-concrete-200">
+              عينة من العملاء
+            </h3>
+            <Table>
+              <thead>
+                <tr className="text-right text-xs text-concrete-500">
+                  <th className="pb-1 font-medium">الكود</th>
+                  <th className="pb-1 font-medium">الاسم</th>
+                  <th className="pb-1 font-medium">الجوال</th>
+                  <th className="pb-1 font-medium">المنطقة</th>
+                  <th className="pb-1 font-medium">النوع</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.sampleCustomers.map((c) => (
+                  <tr key={c.rowNumber} className="text-xs">
+                    <td className="tnum pb-1 pr-0" dir="ltr">{c.customerCode}</td>
+                    <td className="pb-1 pr-2">{c.customerName}</td>
+                    <td className="pb-1" dir="ltr">{c.phone ?? '—'}</td>
+                    <td className="pb-1">{c.region ?? '—'}</td>
+                    <td className="pb-1">{c.customerType ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </div>
+        )}
+
+        {/* ── Sample Data: ملخص الأرصدة ── */}
+        {isBalance && preview.sampleBalances.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-concrete-700 dark:text-concrete-200">
+              عينة من الأرصدة
+            </h3>
+            <Table>
+              <thead>
+                <tr className="text-right text-xs text-concrete-500">
+                  <th className="pb-1 font-medium">الكود</th>
+                  <th className="pb-1 font-medium">الاسم</th>
+                  <th className="pb-1 font-medium">العملة</th>
+                  <th className="pb-1 font-medium">الرصيد</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.sampleBalances.map((b) => (
+                  <tr key={b.rowNumber} className="text-xs">
+                    <td className="tnum pb-1 pr-0" dir="ltr">{b.customerCode}</td>
+                    <td className="pb-1 pr-2">{b.customerName}</td>
+                    <td className="pb-1">
+                      <Badge tone="pine">{b.currency}</Badge>
+                    </td>
+                    <td className="tnum pb-1 font-medium">
+                      {b.balance.toLocaleString('en-US')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </div>
+        )}
+
+        {/* ── Sample Data: تقسيم الأعمار ── */}
+        {isAging && preview.sampleAgingRows.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-concrete-700 dark:text-concrete-200">
+              عينة من الأعمار
+            </h3>
+            <Table>
+              <thead>
+                <tr className="text-right text-xs text-concrete-500">
+                  {preview.profile === 'DEBT_AGING_DETAILS' && (
+                    <>
+                      <th className="pb-1 font-medium">الكود</th>
+                      <th className="pb-1 font-medium">الاسم</th>
+                    </>
+                  )}
+                  <th className="pb-1 font-medium">العملة</th>
+                  {Object.keys(preview.sampleAgingRows[0].buckets).map((bk) => (
+                    <th key={bk} className="pb-1 font-medium" dir="ltr">
+                      {bk}
+                    </th>
+                  ))}
+                  <th className="pb-1 font-medium">الإجمالي</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.sampleAgingRows.map((r) => (
+                  <tr key={r.rowNumber} className="text-xs">
+                    {preview.profile === 'DEBT_AGING_DETAILS' && (
+                      <>
+                        <td className="tnum pb-1 pr-0" dir="ltr">{r.customerCode}</td>
+                        <td className="pb-1 pr-2">{r.customerName}</td>
+                      </>
+                    )}
+                    <td className="pb-1">
+                      <Badge tone="pine">{r.currency}</Badge>
+                    </td>
+                    {Object.keys(r.buckets).map((bk) => (
+                      <td key={bk} className="tnum pb-1">
+                        {r.buckets[bk].toLocaleString('en-US')}
+                      </td>
+                    ))}
+                    <td className="tnum pb-1 font-medium">
+                      {r.total != null ? r.total.toLocaleString('en-US') : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </div>
+        )}
+
         {/* ── Actions ── */}
         <div className="flex justify-end gap-2 border-t border-concrete-100 pt-3 dark:border-white/10">
           <Button variant="secondary" onClick={onClose}>
@@ -672,7 +915,10 @@ function PreviewDialog({
             <Button
               onClick={onExecute}
               loading={executing}
-              disabled={hasErrors && preview.importableTransactions === 0}
+              disabled={
+                !preview.executable ||
+                (isStatement && hasErrors && preview.importableTransactions === 0)
+              }
             >
               <Play className="h-4 w-4" aria-hidden />
               تنفيذ الاستيراد
@@ -713,7 +959,7 @@ function ReportDialog({
       {data && (
         <div className="space-y-4 max-h-[70vh] overflow-y-auto">
           {/* ── Status ── */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {data.status === 'completed' ? (
               <CheckCircle2 className="h-5 w-5 text-pine-600" />
             ) : (
@@ -722,6 +968,9 @@ function ReportDialog({
             <span className="text-sm font-medium">
               {data.status === 'completed' ? 'تم بنجاح' : 'فشل'}
             </span>
+            {data.profile && (
+              <Badge tone="pine">{PROFILE_AR[data.profile] ?? data.profile}</Badge>
+            )}
           </div>
 
           {/* ── Main Counters ── */}
@@ -738,6 +987,12 @@ function ReportDialog({
             <StatCard label="معاملات مكررة" value={data.transactionsDuplicate} />
             <StatCard label="وقت التنفيذ" value={`${(data.durationMs / 1000).toFixed(1)} ث`} />
           </div>
+
+          {data.balancesWritten != null && (
+            <div className="grid grid-cols-2 gap-3">
+              <StatCard label="أسطر الأرصدة المكتوبة" value={data.balancesWritten} highlight />
+            </div>
+          )}
 
           {/* ── Balance Changes ── */}
           {Object.keys(data.balancesAfter).length > 0 && (
@@ -836,6 +1091,19 @@ function ErrorDialog({
       )}
       {data && (
         <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+          {data.profile && (
+            <div className="flex items-center gap-2">
+              <Badge tone="pine">{PROFILE_AR[data.profile] ?? data.profile}</Badge>
+            </div>
+          )}
+
+          {data.deferredReason && (
+            <div className="flex items-start gap-2 rounded-lg border border-hazard-300 bg-hazard-50 px-3 py-2 text-sm text-hazard-700 dark:border-hazard-600/30 dark:bg-hazard-700/20 dark:text-hazard-100">
+              <Clock className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span>{data.deferredReason}</span>
+            </div>
+          )}
+
           {data.fatal && (
             <div className="flex items-start gap-2 rounded-lg border border-debt-600/20 bg-debt-50 px-3 py-2 text-sm text-debt-700 dark:border-debt-500/30 dark:bg-debt-700/20 dark:text-debt-50">
               <XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
