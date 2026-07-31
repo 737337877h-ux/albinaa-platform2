@@ -227,6 +227,84 @@ class DetectTest(unittest.TestCase):
         self.assertEqual(res['stats']['validRows'], 2)
         self.assertEqual(res['stats']['emptyRowsSkipped'], 2)
 
+    def test_master_repeated_labels_tsv(self):
+        # تصدير الطباعة: تسميات مكررة كبادئة + قيم بترتيب ثابت
+        p = self.path('master_repeated.xls')
+        labels = ['اسم العميل', 'رقم الحساب', 'المجموعة', 'المدينه',
+                  'رقم التلفون', 'توقيف', 'تاريخ التعامل', 'رقم العميل']
+        make_tsv(p, [
+            labels + ['10001', 'العميل الأول', '112101001', '1', '', '', '', ''],
+            labels + ['10002', 'محلات محسن البده', '112101001', '3', 'صنعاء', '770000001', '', '01/01/2026'],
+            labels + ['10001', 'كود مكرر', '112101001', '1', '', '', '', ''],
+            labels + ['', 'بدون كود', '112101001', '1', '', '', '', ''],
+        ])
+        rows, fmt = read_table(p)
+        self.assertEqual(fmt, 'tsv')
+        self.assertEqual(detect_profile(rows), PROFILE_MASTER)
+        res = parse_profile(rows, PROFILE_MASTER)
+        self.assertEqual(res['stats']['validRows'], 2)
+        self.assertEqual(res['stats']['errors'], 2)
+        self.assertEqual(res['customers'][0]['customerCode'], '10001')
+        self.assertEqual(res['customers'][1]['phone'], '770000001')
+        self.assertEqual(res['customers'][1]['region'], 'صنعاء')
+        msgs = ' | '.join(e['message'] for e in res['errors'])
+        self.assertIn('كود مكرر', msgs)
+        self.assertIn('كود عميل ناقص', msgs)
+
+    def test_aging_summary_repeated_labels_tsv(self):
+        # تصدير الطباعة للملخص: تسميات متكررة + قيم الأعمار بترتيب ثابت
+        p = self.path('aging_summary_repeated.xls')
+        labels = ['إجمالي المبلغ المستحق', 'رقم العميل', 'اسم العميل', 'العملة',
+                  'المبلغ', '0 - 30', '31 - 60', '61 - 90', '91 - 120', '> 120']
+        make_tsv(p, [
+            labels + ['20154', 'خليل محمد صالح عثمان', '$', '800.00', '', '', '', '800.00', '', 'الإجمالي :', '125363834.72'],
+            labels + ['10002', 'محلات محسن البده', 'SR', '4454.21', '', '', '', '', '4454.21', 'الإجمالي :', '161943.30'],
+        ])
+        rows, fmt = read_table(p)
+        self.assertEqual(fmt, 'tsv')
+        self.assertEqual(detect_profile(rows), PROFILE_AGING_SUMMARY)
+        res = parse_profile(rows, PROFILE_AGING_SUMMARY)
+        self.assertEqual(res['stats']['validRows'], 2)
+        self.assertEqual(res['stats']['errors'], 0)
+        row = res['agingSummary'][0]
+        self.assertEqual(row['customerCode'], '20154')
+        self.assertEqual(row['currency'], 'USD')
+        self.assertEqual(row['buckets'], {'0-30': 0.0, '31-60': 0.0, '61-90': 0.0,
+                                          '91-120': 800.0, '120+': 0.0})
+        self.assertEqual(res['agingSummary'][1]['currency'], 'SAR')
+
+    def test_aging_details_block_tsv(self):
+        # بنية الكتل: رأس (عملية/رصيد/عميل) + وثائق بقيمتها في فئتها العمرية
+        p = self.path('aging_details_block.xls')
+        make_tsv(p, [
+            ['العملة : $', 'الرصيد : ', '0.00', 'رقم العميل : 20154 خليل محمد صالح عثمان',
+             'إجمالي المبلغ', 'رقم الوثيقة', 'تاريخ الوثيقة', 'نوع الوثيقة', 'المبلغ',
+             '0 - 30', '31 - 60', '61 - 90', '91 - 120', '> 120', 'الإجمالي :', '125363834.72'],
+            ['0', '01/01/2026', 'الرصيد الإفتتاحي', '0.00', '', '', '', '', '0.00', '0.00',
+             'الإجمالي :', '125363834.72'],
+            ['4254', '22/07/2026', 'فاتورة المبيعات آجل', '214.30', '214.30', '', '', '', '', '0.00',
+             'الإجمالي :', '125363834.72'],
+            ['العملة : SR', 'الرصيد : ', '4454.21', 'رقم العميل : 10002 محلات محسن البده',
+             'إجمالي المبلغ', 'رقم الوثيقة', 'تاريخ الوثيقة', 'نوع الوثيقة', 'المبلغ',
+             '0 - 30', '31 - 60', '61 - 90', '91 - 120', '> 120', 'الإجمالي :', '125363834.72'],
+            ['0', '01/01/2026', 'الرصيد الإفتتاحي', '4454.21', '', '', '', '', '4454.21', '0.00',
+             'الإجمالي :', '125363834.72'],
+        ])
+        rows, fmt = read_table(p)
+        self.assertEqual(fmt, 'tsv')
+        self.assertEqual(detect_profile(rows), PROFILE_AGING_DETAILS)
+        res = parse_profile(rows, PROFILE_AGING_DETAILS)
+        self.assertEqual(res['stats']['validRows'], 3)
+        self.assertEqual(res['stats']['errors'], 0)
+        self.assertEqual(res['agingDetails'][0]['customerCode'], '20154')
+        self.assertEqual(res['agingDetails'][0]['currency'], 'USD')
+        self.assertEqual(res['agingDetails'][0]['buckets'], {'0-30': 0.0, '31-60': 0.0,
+                                                             '61-90': 0.0, '91-120': 0.0, '120+': 0.0})
+        self.assertEqual(res['agingDetails'][1]['buckets']['0-30'], 214.3)
+        self.assertEqual(res['agingDetails'][2]['customerName'], 'محلات محسن البده')
+        self.assertEqual(res['agingDetails'][2]['currency'], 'SAR')
+        self.assertEqual(res['agingDetails'][2]['buckets']['120+'], 4454.21)
+
 
 if __name__ == '__main__':
     unittest.main()

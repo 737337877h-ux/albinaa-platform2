@@ -175,6 +175,28 @@ SUBSTR_RULES = [
 
 BUCKET_SUFFIX = re.compile(r'(يوم|يومًا|يوما|أيام|ايام|شهر|شهرًا|شهرا)\s*$')
 
+# بنى التصدير الطباعية من APMS: تسميات متكررة كبادئة لكل صف + قيم بترتيب ثابت
+MASTER_REPEATED_LABELS = [
+    'اسم العميل', 'رقم الحساب', 'المجموعة', 'المدينه',
+    'رقم التلفون', 'توقيف', 'تاريخ التعامل', 'رقم العميل',
+]
+MASTER_VALUE_COLS = {
+    'customer_code': 8, 'customer_name': 9, 'account_number': 10,
+    'customer_group': 11, 'region': 12, 'phone': 13,
+    'blocked': 14, 'last_deal_date': 15,
+}
+AGING_SUMMARY_REPEATED_LABELS = [
+    'إجمالي المبلغ المستحق', 'رقم العميل', 'اسم العميل', 'العملة',
+    'المبلغ', '0 - 30', '31 - 60', '61 - 90', '91 - 120', '> 120',
+]
+AGING_SUMMARY_VALUE_COLS = {
+    'customer_code': 10, 'customer_name': 11, 'currency': 12,
+    'total': 13, 'bucket0': 14,
+}
+# كتلة الأعمار التفصيلية: القيم تتراجع في عمود فئتها العمرية (4..8)
+DETAILS_BUCKET_KEYS = ['0-30', '31-60', '61-90', '91-120', '120+']
+DETAILS_BUCKET_COLS = [4, 5, 6, 7, 8]
+
 
 def bucket_key(label):
     """مفتاح موحد لعمود تقسيم الأعمار (مثل 0-30 أو 120+) أو None."""
@@ -266,10 +288,45 @@ def build_column_map(header):
     return cmap, bucket_cols
 
 
+def _label_row(row, labels):
+    """الصف يبدأ بتسميات ثابتة (بنيَة التصدير الطباعي من APMS)."""
+    if len(row) < len(labels) + 1:
+        return False
+    for i, lbl in enumerate(labels):
+        if normalize_text(row[i]) != normalize_text(lbl):
+            return False
+    return True
+
+
+def _is_aging_block_header(row):
+    """رأس كتلة تفصيلية: (العملة : $، الرصيد :، رقم العميل : CODE NAME)."""
+    if not row:
+        return False
+    s0 = normalize_text(row[0])
+    s1 = normalize_text(row[1]) if len(row) > 1 else ''
+    s3 = normalize_text(row[3]) if len(row) > 3 else ''
+    return 'العملة' in s0 and 'الرصيد' in s1 and 'رقم العميل' in s3
+
+
+def _bucket_num(v):
+    """رقم عمود أعمار: خلية فارغة → 0.0، نص غير رقمي → None (يُحسب خطأ)."""
+    if v is None or str(v).strip() == '':
+        return 0.0
+    return to_number(v)
+
+
 # ----------------------------------------------------------------------------
 # كشف نوع الملف
 # ----------------------------------------------------------------------------
 def detect_profile(rows):
+    # بنى التصدير الطباعي (تُفحص أولًا لأنها تزيّف الكشف الجدولي)
+    for row in rows[:8]:
+        if _is_aging_block_header(row):
+            return PROFILE_AGING_DETAILS
+        if _label_row(row, AGING_SUMMARY_REPEATED_LABELS):
+            return PROFILE_AGING_SUMMARY
+        if _label_row(row, MASTER_REPEATED_LABELS):
+            return PROFILE_MASTER
     header_idx = find_header_row(rows)
     if header_idx is not None:
         cmap, bucket_cols = build_column_map(rows[header_idx])
@@ -467,14 +524,166 @@ def parse_debt_aging(rows, details):
     return _profile_result(profile, rows, header_idx, errors, records, skipped, label)
 
 
+def parse_customer_master_repeated(rows):
+    """بيانات العملاء بتصدير الطباعة: تسميات مكررة + قيم بترتيب ثابت."""
+    records = []
+    errors = []
+    skipped = 0
+    seen = set()
+    for i, row in enumerate(rows):
+        if _is_empty_row(row):
+            skipped += 1
+            continue
+        if not _label_row(row, MASTER_REPEATED_LABELS):
+            errors.append(
+                (i + 1, 'سطر خارج بنية بيانات العملاء (التسميات المتكررة غير مكتملة) — الصف مستبعد', row))
+            continue
+        code = normalize_digits(_cell(row, MASTER_VALUE_COLS['customer_code']))
+        name = _cell(row, MASTER_VALUE_COLS['customer_name'])
+        rownum = i + 1
+        if not code:
+            errors.append((rownum, 'كود عميل ناقص — الصف مستبعد', row))
+            continue
+        if code in seen:
+            errors.append((rownum, f'كود مكرر داخل الملف ({code}) — الصف مستبعد', row))
+            continue
+        if not name:
+            errors.append((rownum, 'اسم عميل ناقص — الصف مستبعد', row))
+            continue
+        seen.add(code)
+        records.append({
+            'rowNumber': rownum,
+            'customerCode': code,
+            'customerName': name,
+            'accountNumber': normalize_digits(_cell(row, MASTER_VALUE_COLS['account_number'])) or None,
+            'customerGroup': _cell(row, MASTER_VALUE_COLS['customer_group']) or None,
+            'region': _cell(row, MASTER_VALUE_COLS['region']) or None,
+            'phone': _cell(row, MASTER_VALUE_COLS['phone']) or None,
+            'blocked': _cell(row, MASTER_VALUE_COLS['blocked']) or None,
+            'lastDealDate': _cell(row, MASTER_VALUE_COLS['last_deal_date']) or None,
+        })
+    return _profile_result(PROFILE_MASTER, rows, 0, errors, records, skipped, 'customers')
+
+
+def parse_aging_summary_repeated(rows):
+    """ملخص تقسيم الأعمار بتصدير الطباعة: تسميات مكررة + قيم ثابتة."""
+    records = []
+    errors = []
+    skipped = 0
+    for i, row in enumerate(rows):
+        if _is_empty_row(row):
+            skipped += 1
+            continue
+        if not _label_row(row, AGING_SUMMARY_REPEATED_LABELS):
+            errors.append(
+                (i + 1, 'سطر خارج بنية ملخص الأعمار (التسميات المتكررة غير مكتملة) — الصف مستبعد', row))
+            continue
+        rownum = i + 1
+        code = normalize_digits(_cell(row, AGING_SUMMARY_VALUE_COLS['customer_code']))
+        ccy_raw = _cell(row, AGING_SUMMARY_VALUE_COLS['currency'])
+        if not code:
+            errors.append((rownum, 'كود عميل ناقص — الصف مستبعد', row))
+            continue
+        if not ccy_raw:
+            errors.append((rownum, 'عملة ناقصة — الصف مستبعد', row))
+            continue
+        buckets = {}
+        for j, bk in enumerate(DETAILS_BUCKET_KEYS):
+            num = _bucket_num(_cell(row, AGING_SUMMARY_VALUE_COLS['bucket0'] + j))
+            if num is None:
+                errors.append(
+                    (rownum, f'قيمة غير رقمية في عمود الأعمار ({bk}) — تُعتبر صفرًا', row))
+                num = 0.0
+            buckets[bk] = num
+        records.append({
+            'rowNumber': rownum,
+            'customerCode': code,
+            'customerName': _cell(row, AGING_SUMMARY_VALUE_COLS['customer_name']) or code,
+            'currencyRaw': ccy_raw,
+            'currency': CURRENCY_MAP.get(ccy_raw, ccy_raw),
+            'buckets': buckets,
+            'total': to_number(_cell(row, AGING_SUMMARY_VALUE_COLS['total'])),
+        })
+    return _profile_result(PROFILE_AGING_SUMMARY, rows, 0, errors, records, skipped,
+                           'agingSummary')
+
+
+def parse_debt_aging_block(rows):
+    """الأعمار التفصيلية ببنية الكتل: رأس (عميل/عملة/رصيد) + وثائق بفئاتها."""
+    records = []
+    errors = []
+    skipped = 0
+    i = 0
+    n = len(rows)
+    while i < n:
+        row = rows[i]
+        if _is_empty_row(row):
+            skipped += 1
+            i += 1
+            continue
+        if not _is_aging_block_header(row):
+            errors.append((i + 1, 'صف خارج كتلة الأعمار التفصيلية — الصف مستبعد', row))
+            i += 1
+            continue
+        rownum = i + 1
+        s0 = normalize_text(row[0])
+        ccy_raw = s0.split(':', 1)[1].strip() if ':' in s0 else ''
+        m = re.match(r'رقم العميل\s*:\s*(\d+)\s*(.*)$', normalize_text(row[3]), re.DOTALL)
+        if not m:
+            errors.append((rownum, 'رأس كتلة بدون كود عميل — الكتلة مستبعدة', row))
+            i += 1
+            continue
+        code = m.group(1)
+        name = normalize_text(m.group(2))
+        i += 1
+        while i < n and not _is_aging_block_header(rows[i]):
+            drow = rows[i]
+            if _is_empty_row(drow):
+                skipped += 1
+                i += 1
+                continue
+            buckets = {}
+            for j, bk in enumerate(DETAILS_BUCKET_KEYS):
+                num = _bucket_num(_cell(drow, DETAILS_BUCKET_COLS[j]))
+                if num is None:
+                    errors.append(
+                        (i + 1, f'قيمة غير رقمية في عمود الأعمار ({bk}) — تُعتبر صفرًا', drow))
+                    num = 0.0
+                buckets[bk] = num
+            records.append({
+                'rowNumber': i + 1,
+                'customerCode': code,
+                'customerName': name or code,
+                'currencyRaw': ccy_raw,
+                'currency': CURRENCY_MAP.get(ccy_raw, ccy_raw),
+                'buckets': buckets,
+                'total': to_number(_cell(drow, 3)),
+                'documentNumber': _cell(drow, 0) or None,
+                'documentDate': _cell(drow, 1) or None,
+                'documentType': _cell(drow, 2) or None,
+            })
+            i += 1
+    return _profile_result(PROFILE_AGING_DETAILS, rows, 0, errors, records, skipped,
+                           'agingDetails')
+
+
 def parse_profile(rows, profile):
-    """توجيه الملف الجدولي إلى المحلل الصحيح (الكشف مسؤول عنها مسبقًا)."""
+    """توجيه الملف إلى المحلل الصحيح (الكشف مسؤول عنها مسبقًا)."""
     if profile == PROFILE_MASTER:
+        for row in rows[:8]:
+            if _label_row(row, MASTER_REPEATED_LABELS):
+                return parse_customer_master_repeated(rows)
         return parse_customer_master(rows)
     if profile == PROFILE_BALANCE:
         return parse_balance_summary(rows)
     if profile == PROFILE_AGING_SUMMARY:
+        for row in rows[:8]:
+            if _label_row(row, AGING_SUMMARY_REPEATED_LABELS):
+                return parse_aging_summary_repeated(rows)
         return parse_debt_aging(rows, details=False)
     if profile == PROFILE_AGING_DETAILS:
+        for row in rows[:8]:
+            if _is_aging_block_header(row):
+                return parse_debt_aging_block(rows)
         return parse_debt_aging(rows, details=True)
     raise ValueError(f'لا محلل مخصص للملف {profile}')
