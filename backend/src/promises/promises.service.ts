@@ -112,10 +112,11 @@ export class PromisesService {
       throw new ForbiddenException('لا يمكنك تسجيل وعد باسم محصل آخر');
     }
 
-    const customer = isAdmin
-      ? await this.prisma.customer.findFirst({ where: { id: dto.customerId, organizationId: actor.organizationId } })
-      : await this.assertCurrentAssignment(actor, dto.customerId, collectorId);
-    if (!customer) throw new NotFoundException('العميل غير موجود');
+    // قاعدة معتمدة (مراجعة M5): شرط الإسناد الحالي إلزامي للجميع — حتى المدير
+    // الذي يسجّل نيابةً عن محصل محدد لا يتجاوزه (الوعد بلا إسناد ساري = فساد).
+    // المسار الإشرافي بلا collectorId يحلّ المحصل تلقائيًا من الإسناد الحالي نفسه،
+    // فتمر هذه الدالة بلا مشكلة؛ وتفشل فقط حين يكون الإسناد غائبًا فعلاً.
+    const customer = await this.assertCurrentAssignment(actor, dto.customerId, collectorId);
     const currency = await this.prisma.currency.findFirst({
       where: { code: dto.currencyCode, active: true },
     });

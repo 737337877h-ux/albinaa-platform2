@@ -1,7 +1,8 @@
 /**
  * اختبارات E2E — تصحيحات مراجعة Dashboard (Milestone 6):
  * 1) GET /tasks/today لا يُلقي 403/404 لحساب إداري بلا سجل محصل شخصي —
- *    يعيد 200 بنتيجة فارغة مميزة (isCollector=false).
+ *    يعيد 200 مع isCollector=false و collectorId=null. (منذ PR5 الإدارة ترى
+ *    قائمة عمل المنشأة كاملة، فلا نعدّ بأن items فارغة على قاعدة بيانات مأهولة.)
  * 2) فلتر تحصيلات fromDate/toDate يشمل تحصيلات اليوم فعليًا (حدود بتوقيت
  *    المنشأة +03:00، ونهاية غير شاملة عبر بداية اليوم التالي).
  */
@@ -76,7 +77,7 @@ describe('Dashboard Review Fixes (e2e)', () => {
   });
 
   describe('/tasks/today — حساب إداري بلا سجل محصل شخصي', () => {
-    it('يعيد 200 بنتيجة فارغة مميزة (isCollector=false) لا 403 ولا 404', async () => {
+    it('يعيد 200 بـ isCollector=false و collectorId=null — لا 403 ولا 404، ويرى قائمة عمل المنشأة (PR5)', async () => {
       // تنظيف أي سجل محصل سابق للـ admin (يتركه اختبارات سابقة)
       const adminCollectors = await prisma.collector.findMany({ where: { userId: adminUserId }, select: { id: true } });
       const adminCollectorIds = adminCollectors.map((c) => c.id);
@@ -106,8 +107,11 @@ describe('Dashboard Review Fixes (e2e)', () => {
 
       expect(res.body.isCollector).toBe(false);
       expect(res.body.collectorId).toBeNull();
-      expect(res.body.items).toEqual([]);
-      expect(res.body.summary.tasksToday).toBe(0);
+      // منذ PR5: الإدارة بلا سجل محصل شخصي ترى قائمة عمل المنشأة كاملة (org-wide)،
+      // لذلك لا نعدّ بأن items فارغة على قاعدة بيانات مأهولة — لا نختبر إلا
+      // هوية النتيجة (ليس محصلاً) واتساق الملخص مع القائمة نفسها.
+      expect(Array.isArray(res.body.items)).toBe(true);
+      expect(res.body.summary.tasksToday).toBe(res.body.items.length);
     });
 
     it('لا يزال يرفض 403 عند تمرير collectorId بلا صلاحية إشرافية (خطأ صلاحية حقيقي)', async () => {

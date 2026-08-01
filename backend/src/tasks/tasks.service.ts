@@ -870,8 +870,10 @@ export class TasksService {
     const result = dto.result ?? 'note';
     const resultLabel = TASK_COMPLETE_RESULT_LABELS[result];
 
-    // التحقق المسبق من الوعد قبل أي كتابة (لا إغلاق للمهمة ثم فشل الوعد)
-    let promiseDue: { date: Date; amount: number; currency: string } | null = null;
+    // التحقق المسبق من الوعد قبل أي كتابة (لا إغلاق للمهمة ثم فشل الوعد):
+    // التاريخ/المبلغ/العملة + وجود إسناد ساري — والوعد يُسجَّل دائمًا باسم
+    // المحصل المسند حاليًا للعميل (قاعدة M5: لا وعد بلا إسناد ساري).
+    let promiseDue: { date: Date; amount: number; currency: string; collectorId: string } | null = null;
     if (result === 'promise') {
       if (!dto.promiseDueDate) {
         throw new BadRequestException('عند اختيار نتيجة "وعد بالسداد" يجب تحديد تاريخ الاستحقاق (promiseDueDate)');
@@ -890,7 +892,19 @@ export class TasksService {
       }
       const currencyRow = await this.prisma.currency.findFirst({ where: { code: currency, active: true } });
       if (!currencyRow) throw new BadRequestException('العملة غير معروفة');
-      promiseDue = { date: new Date(dto.promiseDueDate), amount, currency };
+      const assignment = await this.prisma.customerAssignment.findFirst({
+        where: { customerId: task.customerId!, effectiveTo: null },
+        orderBy: { effectiveFrom: 'desc' },
+      });
+      if (!assignment) {
+        throw new BadRequestException('العميل غير مسند لأي محصل حاليًا — تعذّر تسجيل وعد سداد');
+      }
+      promiseDue = {
+        date: new Date(dto.promiseDueDate),
+        amount,
+        currency,
+        collectorId: assignment.collectorId,
+      };
     }
 
     // نوع المتابعة الافتراضي + نتيجة المتابعة — upsert لضمان التوفر مهما كان سجل المنشأة
@@ -938,7 +952,7 @@ export class TasksService {
     if (promiseDue) {
       promise = await this.promises.create(user, {
         customerId: task.customerId,
-        collectorId: task.assignedTo ?? undefined,
+        collectorId: promiseDue.collectorId,
         dueDate: promiseDue.date.toISOString(),
         expectedAmount: promiseDue.amount,
         currencyCode: promiseDue.currency,
