@@ -5,7 +5,7 @@ import { AlertTriangle } from 'lucide-react';
 import { api, tokenStore } from '@/lib/api';
 import { useCan, useMe } from '@/lib/auth';
 import { todayISO } from '@/lib/errors';
-import { CCY_AR, fmtDateTime, fmtMoney, PROMISE_STATUS_AR } from '@/lib/format';
+import { CCY_AR, fmtDateTime, fmtMoney, PROMISE_STATUS_AR, TASK_TYPE_AR } from '@/lib/format';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Badge, Card, CardHeader, Money } from '@/components/ui/primitives';
@@ -50,6 +50,28 @@ interface TodayTasks { isCollector: boolean; items: TaskItem[]; summary: { tasks
 interface NotificationItem { id: string; kind: string; readAt: string | null; createdAt: string; payload: Record<string, unknown> }
 interface NotificationsResponse { unread: number; items: NotificationItem[] }
 
+interface KpiResponse {
+  customers: { total: number; active: number; debtors: number };
+  debtByCurrency: Record<string, number>;
+  riskDistribution: Record<string, number>;
+  tasksToday: { total: number; assigned: number; unassigned: number };
+  topReasons: { taskType: string; count: number }[];
+  debt120Plus: { count: number; totalByCurrency: Record<string, number> };
+  highRiskCustomers: {
+    customerId: string; customerCode: string | null; customerName: string;
+    score: number; riskLevel: string;
+  }[];
+  topPriorityTasks: {
+    taskId: string; customerId: string; customerName: string; customerCode: string | null;
+    taskType: string; priority: number; priorityReason: string;
+    expectedAmount: number | null; expectedCurrency: string | null; assignedTo: string | null;
+  }[];
+}
+
+const RISK_LEVEL_AR: Record<string, string> = {
+  low: 'منخفضة', medium: 'متوسطة', high: 'مرتفعة', critical: 'حرجة',
+};
+
 function notifText(n: NotificationItem): string {
   const p = n.payload as Record<string, any>;
   switch (n.kind) {
@@ -83,6 +105,11 @@ export default function DashboardPage() {
     queryFn: () => api<CollectorSummary>('/dashboard/collector'),
     enabled: canCollectorKpis && !canAdminKpis && hasToken(),
     retry: false,
+  });
+  const kpis = useQuery({
+    queryKey: ['dashboard-kpis'],
+    queryFn: () => api<KpiResponse>('/dashboard/kpis'),
+    enabled: canAdminKpis && hasToken(),
   });
 
   // ---- الوعود المستحقة والمتأخرة ----
@@ -216,6 +243,131 @@ export default function DashboardPage() {
           </DataState>
         )}
       </section>
+
+      {/* KPI Dashboard (PR 7) — بيانات حقيقية: مخاطر، مهام، أعمار */}
+      {canAdminKpis && (
+        <DataState
+          isLoading={kpis.isLoading}
+          isError={kpis.isError}
+          error={kpis.error}
+          onRetry={() => kpis.refetch()}
+          isFetching={kpis.isFetching}
+          isEmpty={false}
+          emptyTitle=""
+          skeletonClassName="h-64"
+        >
+          {kpis.data && (
+            <div className="space-y-5">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <Card className="p-4">
+                  <p className="text-xs text-concrete-500">توزيع المخاطر</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {['low', 'medium', 'high', 'critical'].map((lv) => (
+                      <div key={lv} className="rounded-lg border border-concrete-100 px-2 py-1.5 text-center dark:border-white/10">
+                        <p className="tnum text-lg font-bold text-iron-900 dark:text-concrete-100">
+                          {kpis.data.riskDistribution[lv] ?? 0}
+                        </p>
+                        <p className="text-[10px] text-concrete-500">{RISK_LEVEL_AR[lv] ?? lv}</p>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+                <Card className="p-4">
+                  <p className="text-xs text-concrete-500">مهام اليوم</p>
+                  <p className="tnum mt-1 font-display text-2xl font-bold">{kpis.data.tasksToday.total}</p>
+                  <p className="mt-1 text-xs text-concrete-500">
+                    مسندة: {kpis.data.tasksToday.assigned} • غير مسندة: {kpis.data.tasksToday.unassigned}
+                  </p>
+                </Card>
+                <Card className="p-4">
+                  <p className="text-xs text-concrete-500">عملاء +120 يوم</p>
+                  <p className="tnum mt-1 font-display text-2xl font-bold">{kpis.data.debt120Plus.count}</p>
+                  {Object.entries(kpis.data.debt120Plus.totalByCurrency).length > 0 && (
+                    <div className="mt-1 space-y-0.5">
+                      {Object.entries(kpis.data.debt120Plus.totalByCurrency).map(([ccy, amt]) => (
+                        <p key={ccy} className="tnum text-xs text-debt-600 dark:text-debt-400" dir="ltr">
+                          {fmtMoney(amt)} {ccy}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+                <Card className="p-4">
+                  <p className="text-xs text-concrete-500">أعلى أسباب المهام</p>
+                  <ul className="mt-2 space-y-1">
+                    {kpis.data.topReasons.map((r) => (
+                      <li key={r.taskType} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="truncate text-concrete-600 dark:text-concrete-400">
+                          {TASK_TYPE_AR[r.taskType] ?? r.taskType}
+                        </span>
+                        <span className="tnum font-bold">{r.count}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              </div>
+
+              <div className="grid gap-5 xl:grid-cols-2">
+                <Card>
+                  <CardHeader title="أعلى المخاطر" />
+                  <Table>
+                    <THead cols={['العميل', 'الدرجة', 'المستوى']} />
+                    <tbody>
+                      {kpis.data.highRiskCustomers.map((c) => (
+                        <TRow key={c.customerId}>
+                          <TD>
+                            <Link className="font-medium text-pine-700 hover:underline dark:text-pine-100"
+                                  href={`/customers/${c.customerId}`}>
+                              {c.customerName}
+                            </Link>
+                            {c.customerCode && <p className="text-xs text-concrete-500" dir="ltr">{c.customerCode}</p>}
+                          </TD>
+                          <TD className="tnum font-bold">{c.score}</TD>
+                          <TD>
+                            <Badge tone={c.riskLevel === 'critical' ? 'debt' : c.riskLevel === 'high' ? 'hazard' : 'neutral'}>
+                              {RISK_LEVEL_AR[c.riskLevel] ?? c.riskLevel}
+                            </Badge>
+                          </TD>
+                        </TRow>
+                      ))}
+                    </tbody>
+                  </Table>
+                </Card>
+
+                <Card>
+                  <CardHeader title="أولوية المهام" />
+                  <Table>
+                    <THead cols={['العميل', 'السبب', 'المبلغ المتوقع']} />
+                    <tbody>
+                      {kpis.data.topPriorityTasks.map((t) => (
+                        <TRow key={t.taskId}>
+                          <TD>
+                            <Link className="font-medium text-pine-700 hover:underline dark:text-pine-100"
+                                  href={`/customers/${t.customerId}`}>
+                              {t.customerName}
+                            </Link>
+                            {t.customerCode && <p className="text-xs text-concrete-500" dir="ltr">{t.customerCode}</p>}
+                          </TD>
+                          <TD className="max-w-[220px] text-xs text-concrete-600 dark:text-concrete-400">
+                            {t.priorityReason}
+                          </TD>
+                          <TD>
+                            {t.expectedAmount != null && t.expectedCurrency ? (
+                              <Money value={t.expectedAmount} currency={t.expectedCurrency} />
+                            ) : (
+                              <span className="text-concrete-400">—</span>
+                            )}
+                          </TD>
+                        </TRow>
+                      ))}
+                    </tbody>
+                  </Table>
+                </Card>
+              </div>
+            </div>
+          )}
+        </DataState>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-2">
         {/* الوعود المستحقة والمتأخرة */}

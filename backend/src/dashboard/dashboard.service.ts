@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { priorityOfTaskType } from '../tasks/tasks.service';
 
 /**
  * Dashboard API — المؤشرات الأساسية المتاحة من بيانات المرحلة الحالية.
@@ -158,6 +159,138 @@ export class DashboardService {
       estimated: true,
       basis: 'أقدم حركة متاحة في كشف الحساب — ليس تاريخ استحقاق الفاتورة',
       buckets,
+    };
+  }
+
+  /**
+   * KPI Dashboard (PR 7): مؤشرات من البيانات الحقيقية المبنية —
+   * المخاطر (PR 4)، قائمة عمل اليوم (PR 5)، أعمار الديون (PR 3)، الأرصدة، التحصيلات.
+   * كل الأرقام من قاعدة البيانات — لا أرقام وهمية.
+   */
+  async kpis(user: AuthUser) {
+    const orgId = user.organizationId;
+    const today = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
+    const tomorrow = new Date(today.getTime() + 86_400_000);
+
+    const [totalCustomers, activeCustomers, balances, scores, todayTasks, aging] = await Promise.all([
+      this.prisma.customer.count({ where: { organizationId: orgId } }),
+      this.prisma.customer.count({ where: { organizationId: orgId, status: 'active' } }),
+      this.prisma.customerBalance.findMany({
+        where: { customer: { organizationId: orgId }, accountingBalance: { gt: 0 } },
+        select: { customerId: true, currencyCode: true, accountingBalance: true },
+      }),
+      this.prisma.customerScore.findMany({
+        where: { customer: { organizationId: orgId } },
+        orderBy: { computedAt: 'desc' },
+        select: { customerId: true, score: true, riskLevel: true },
+      }),
+      this.prisma.task.findMany({
+        where: { status: 'open', dueDate: { gte: today, lt: tomorrow }, customer: { organizationId: orgId } },
+        select: {
+          id: true, customerId: true, assignedTo: true, taskType: true, priorityReason: true,
+          expectedAmount: true, expectedCurrency: true,
+        },
+      }),
+      this.prisma.debtAgingSummary.findMany({
+        where: { customer: { organizationId: orgId }, bucket_120_plus: { gt: 0 } },
+        select: { customerId: true, currencyCode: true, totalDue: true },
+      }),
+    ]);
+
+    const debtors = new Set(balances.map((b) => b.customerId)).size;
+
+    const debtByCurrency: Record<string, number> = {};
+    for (const b of balances) {
+      debtByCurrency[b.currencyCode] = (debtByCurrency[b.currencyCode] ?? 0) + Number(b.accountingBalance);
+    }
+
+    // أحدث درجة لكل عميل (computedAt تنازلي — الأول لكل عميل يفوز)
+    const latestScore = new Map<string, { score: number; riskLevel: string }>();
+    for (const s of scores) {
+      if (!latestScore.has(s.customerId)) latestScore.set(s.customerId, { score: Number(s.score), riskLevel: s.riskLevel });
+    }
+    const riskDistribution: Record<string, number> = { low: 0, medium: 0, high: 0, critical: 0 };
+    for (const v of latestScore.values()) {
+      riskDistribution[v.riskLevel] = (riskDistribution[v.riskLevel] ?? 0) + 1;
+    }
+
+    const tasksToday = {
+      total: todayTasks.length,
+      assigned: todayTasks.filter((t) => t.assignedTo).length,
+      unassigned: todayTasks.filter((t) => !t.assignedTo).length,
+    };
+
+    const byType = new Map<string, number>();
+    for (const t of todayTasks) byType.set(t.taskType, (byType.get(t.taskType) ?? 0) + 1);
+    const topReasons = [...byType.entries()]
+      .map(([taskType, count]) => ({ taskType, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    const debt120TotalByCurrency: Record<string, number> = {};
+    const debt120Customers = new Set<string>();
+    for (const a of aging) {
+      debt120Customers.add(a.customerId);
+      debt120TotalByCurrency[a.currencyCode] = (debt120TotalByCurrency[a.currencyCode] ?? 0) + Number(a.totalDue);
+    }
+    const debt120Plus = { count: debt120Customers.size, totalByCurrency: debt120TotalByCurrency };
+
+    const highRisk = await this.prisma.customer.findMany({
+      where: {
+        organizationId: orgId,
+        scores: { some: { riskLevel: { in: ['high', 'critical'] } } },
+      },
+      select: {
+        id: true,
+        externalCustomerCode: true,
+        name: true,
+        scores: { orderBy: { computedAt: 'desc' }, take: 1, select: { score: true, riskLevel: true } },
+      },
+    });
+    const highRiskCustomers = highRisk
+      .map((c) => ({
+        customerId: c.id,
+        customerCode: c.externalCustomerCode,
+        customerName: c.name,
+        score: Number(c.scores[0]?.score ?? 0),
+        riskLevel: c.scores[0]?.riskLevel ?? 'low',
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+
+    const customerIds = [...new Set(todayTasks.map((t) => t.customerId).filter((x): x is string => !!x))];
+    const customers = customerIds.length > 0
+      ? await this.prisma.customer.findMany({
+          where: { id: { in: customerIds } },
+          select: { id: true, name: true, externalCustomerCode: true },
+        })
+      : [];
+    const nameMap = new Map(customers.map((c) => [c.id, c]));
+    const topPriorityTasks = todayTasks
+      .map((t) => ({
+        taskId: t.id,
+        customerId: t.customerId ?? '',
+        customerName: nameMap.get(t.customerId ?? '')?.name ?? '',
+        customerCode: nameMap.get(t.customerId ?? '')?.externalCustomerCode ?? null,
+        taskType: t.taskType,
+        priority: priorityOfTaskType(t.taskType),
+        priorityReason: t.priorityReason ?? t.taskType,
+        expectedAmount: t.expectedAmount === null ? null : Number(t.expectedAmount),
+        expectedCurrency: t.expectedCurrency,
+        assignedTo: t.assignedTo,
+      }))
+      .sort((a, b) => a.priority - b.priority || (b.expectedAmount ?? 0) - (a.expectedAmount ?? 0))
+      .slice(0, 10);
+
+    return {
+      customers: { total: totalCustomers, active: activeCustomers, debtors },
+      debtByCurrency,
+      riskDistribution,
+      tasksToday,
+      topReasons,
+      debt120Plus,
+      highRiskCustomers,
+      topPriorityTasks,
     };
   }
 
