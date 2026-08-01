@@ -1,16 +1,16 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
-import { ArrowDownUp, Download, Phone, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
+import { ArrowDownUp, CheckCircle2, Download, Phone, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
-import { Badge, Button, Card, Empty, ErrorNote, Money, Pagination, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, Empty, ErrorNote, Field, Input, Money, Pagination, Select, Skeleton, Textarea } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsPanel } from '@/components/ui/tabs';
 
@@ -324,6 +324,28 @@ export default function Customer360Page() {
     retry: false,
   });
 
+  /* ──────── Task completion (PR 9) ──────── */
+  const [completeTask, setCompleteTask] = useState<CustomerTaskItem | null>(null);
+  const [completeTaskId, setCompleteTaskId] = useState<string | null>(searchParams.get('complete'));
+  useEffect(() => {
+    if (completeTaskId && !completeTask && customerTasks.data) {
+      const t = customerTasks.data.find(x => x.id === completeTaskId) ?? null;
+      if (t) setCompleteTask(t);
+      else setCompleteTaskId(null);
+    }
+  }, [completeTaskId, completeTask, customerTasks.data]);
+  const completeMut = useMutation({
+    mutationFn: ({ taskId, body }: { taskId: string; body: Record<string, unknown> }) =>
+      api(`/tasks/${taskId}/complete`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      setCompleteTask(null);
+      qc.invalidateQueries({ queryKey: ['customer360-tasks', id] });
+      qc.invalidateQueries({ queryKey: ['customer360', id] });
+      qc.invalidateQueries({ queryKey: ['tasks-today'] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+
   /* ──────── Assignment (إسناد/فك إسناد) ──────── */
   const [selCollector, setSelCollector] = useState('');
   const assignment = useQuery<AssignmentResponse>({
@@ -511,6 +533,19 @@ export default function Customer360Page() {
                     isError={customerTasks.isError}
                     error={customerTasks.error}
                     onRetry={() => customerTasks.refetch()}
+                    onComplete={setCompleteTask}
+                    completeBusyId={completeMut.isPending && completeTask ? completeTask.id : null}
+                  />
+                )}
+
+                {/* Task completion form (PR 9) */}
+                {canTasks && completeTask && (
+                  <TaskCompletePanel
+                    task={completeTask}
+                    busy={completeMut.isPending}
+                    error={completeMut.isError ? completeMut.error : null}
+                    onCancel={() => setCompleteTask(null)}
+                    onSubmit={(body) => completeMut.mutate({ taskId: completeTask.id, body })}
                   />
                 )}
 
@@ -921,12 +956,14 @@ function RiskCard({ data, isLoading, isError, error, onRetry }: {
   );
 }
 
-function TasksCard({ data, isLoading, isError, error, onRetry }: {
+function TasksCard({ data, isLoading, isError, error, onRetry, onComplete, completeBusyId }: {
   data: CustomerTaskItem[] | undefined;
   isLoading: boolean;
   isError: boolean;
   error: unknown;
   onRetry: () => void;
+  onComplete: (task: CustomerTaskItem) => void;
+  completeBusyId: string | null;
 }) {
   return (
     <Card>
@@ -955,6 +992,7 @@ function TasksCard({ data, isLoading, isError, error, onRetry }: {
               <th className="px-4 py-2.5 font-medium">المبلغ المتوقع</th>
               <th className="px-4 py-2.5 font-medium">الإسناد</th>
               <th className="px-4 py-2.5 font-medium">الاستحقاق</th>
+              <th className="px-4 py-2.5 font-medium">إجراء</th>
             </tr>
           </thead>
           <tbody>
@@ -981,11 +1019,132 @@ function TasksCard({ data, isLoading, isError, error, onRetry }: {
                   )}
                 </TD>
                 <TD className="text-xs">{fmtDate(t.dueDate)}</TD>
+                <TD>
+                  <Button
+                    variant="success"
+                    className="text-xs px-2 py-1"
+                    onClick={() => onComplete(t)}
+                    loading={completeBusyId === t.id}
+                    disabled={completeBusyId != null && completeBusyId !== t.id}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" /> إكمال
+                  </Button>
+                </TD>
               </TRow>
             ))}
           </tbody>
         </Table>
       )}
+    </Card>
+  );
+}
+
+/* ─── نتائج إكمال المهمة المعتمدة (PR 9) — تطابق واجهة POST /tasks/:id/complete ─── */
+const TASK_COMPLETE_RESULTS: { value: string; label: string }[] = [
+  { value: 'contacted', label: 'تواصل ناجح' },
+  { value: 'no_answer', label: 'لا يرد' },
+  { value: 'promise', label: 'وعد بالسداد' },
+  { value: 'needs_visit', label: 'يحتاج زيارة' },
+  { value: 'deferred', label: 'مؤجل' },
+  { value: 'note', label: 'ملاحظة' },
+];
+
+function TaskCompletePanel({ task, busy, error, onCancel, onSubmit }: {
+  task: CustomerTaskItem;
+  busy: boolean;
+  error: unknown;
+  onCancel: () => void;
+  onSubmit: (body: Record<string, unknown>) => void;
+}) {
+  const [result, setResult] = useState('contacted');
+  const [notes, setNotes] = useState('');
+  const [nextFollowupDate, setNextFollowupDate] = useState('');
+  const [promiseDueDate, setPromiseDueDate] = useState('');
+  const [promiseAmount, setPromiseAmount] = useState(
+    task.expectedAmount != null ? String(task.expectedAmount) : '',
+  );
+  const [promiseCurrency, setPromiseCurrency] = useState(task.expectedCurrency ?? 'YER');
+  const [clientError, setClientError] = useState<string | null>(null);
+
+  const isPromise = result === 'promise';
+
+  const submit = () => {
+    if (isPromise && !promiseDueDate) {
+      setClientError('حدد تاريخ استحقاق الوعد أولاً');
+      return;
+    }
+    setClientError(null);
+    const body: Record<string, unknown> = { result, notes: notes.trim() || undefined };
+    if (nextFollowupDate) body.nextFollowupDate = nextFollowupDate;
+    if (isPromise) {
+      body.promiseDueDate = promiseDueDate;
+      if (promiseAmount.trim()) body.promiseAmount = Number(promiseAmount);
+      body.promiseCurrency = promiseCurrency;
+    }
+    onSubmit(body);
+  };
+
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-iron-900 dark:text-concrete-100">
+          إكمال مهمة — {TASK_TYPE_AR[task.taskType] ?? task.taskType}
+        </h3>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="text-xs text-concrete-500 hover:text-concrete-700 dark:hover:text-concrete-300"
+        >
+          إغلاق
+        </button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="النتيجة">
+          <Select value={result} onChange={e => setResult(e.target.value)}>
+            {TASK_COMPLETE_RESULTS.map(r => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="موعد المتابعة القادمة">
+          <Input type="date" value={nextFollowupDate} onChange={e => setNextFollowupDate(e.target.value)} />
+        </Field>
+        {isPromise && (
+          <>
+            <Field label="تاريخ استحقاق الوعد (مطلوب)">
+              <Input type="date" value={promiseDueDate} onChange={e => setPromiseDueDate(e.target.value)} />
+            </Field>
+            <Field label="مبلغ الوعد" hint={task.expectedAmount != null ? `المتوقع في المهمة: ${task.expectedAmount}` : undefined}>
+              <Input
+                type="number" min="0" step="0.01" dir="ltr"
+                value={promiseAmount} onChange={e => setPromiseAmount(e.target.value)}
+              />
+            </Field>
+            <Field label="العملة">
+              <Select value={promiseCurrency} onChange={e => setPromiseCurrency(e.target.value)}>
+                {Object.entries(CCY_AR).map(([code, name]) => (
+                  <option key={code} value={code}>{name} ({code})</option>
+                ))}
+              </Select>
+            </Field>
+          </>
+        )}
+        <div className="sm:col-span-2">
+          <Field label="ملاحظات">
+            <Textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
+          </Field>
+        </div>
+      </div>
+      {clientError || error ? (
+        <ErrorNote message={clientError ?? friendlyApiError(error)} />
+      ) : null}
+      <div className="mt-3 flex items-center gap-2">
+        <Button variant="success" onClick={submit} loading={busy} disabled={busy}>
+          <CheckCircle2 className="h-4 w-4" /> إتمام المهمة
+        </Button>
+        <Button variant="secondary" onClick={onCancel} disabled={busy}>إلغاء</Button>
+      </div>
     </Card>
   );
 }

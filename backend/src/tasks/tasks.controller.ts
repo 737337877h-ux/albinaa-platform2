@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger'
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { CompleteTaskDto } from './dto/complete-task.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { TasksService } from './tasks.service';
 
@@ -63,8 +64,23 @@ export class TasksController {
 
   @Patch(':id/complete')
   @RequirePermissions('tasks.manage')
-  @ApiOperation({ summary: 'إتمام مهمة' })
+  @ApiOperation({ summary: 'إتمام مهمة (بدون متابعة)' })
   complete(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.tasks.complete(user, id);
+  }
+
+  @Post(':id/complete')
+  @RequirePermissions('tasks.manage')
+  @ApiOperation({
+    summary: 'إكمال مهمة مع تسجيل متابعة ونتيجة — وعند result=promise يُنشأ وعد سداد. ' +
+      'المهمة تغادر قائمة المهام المفتوحة فورًا. النتائج: تواصل ناجح / لا يرد / وعد بالسداد / يحتاج زيارة / مؤجل / ملاحظة',
+  })
+  completeWithResult(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CompleteTaskDto,
+    @Req() req: Request,
+  ) {
+    return this.tasks.completeWithResult(user, id, dto, req);
   }
 }

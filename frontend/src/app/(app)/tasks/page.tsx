@@ -188,6 +188,7 @@ export default function TasksPage() {
                         <th className="px-4 py-2.5 font-medium">السبب</th>
                         <th className="px-4 py-2.5 font-medium">الأرصدة</th>
                         <th className="px-4 py-2.5 font-medium">آخر متابعة</th>
+                        <th className="px-4 py-2.5 font-medium">إجراء</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -238,6 +239,18 @@ export default function TasksPage() {
                             </TD>
                             <TD className="text-xs text-concrete-500">
                               {item.lastFollowupAt ? fmtDate(item.lastFollowupAt) : 'لم تتم'}
+                            </TD>
+                            <TD>
+                              {item.taskId ? (
+                                <Link
+                                  href={`/customers/${item.customerId}?tab=overview&complete=${item.taskId}`}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-credit-600 px-2 py-1 text-xs font-medium text-white hover:bg-credit-700"
+                                >
+                                  <CheckCircle2 className="h-3.5 w-3.5" /> إكمال
+                                </Link>
+                              ) : (
+                                <span className="text-concrete-300">—</span>
+                              )}
                             </TD>
                           </TRow>
                         );

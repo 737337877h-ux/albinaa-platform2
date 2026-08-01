@@ -388,6 +388,177 @@ describe('Customer Domain — Milestone 4 (e2e)', () => {
   });
 
   // ==========================================================================
+  // PR 9 — إكمال المهمة + تسجيل متابعة + وعد سداد
+  // ==========================================================================
+  it('POST /tasks/:id/complete بنتيجة ملاحظة: يغلق المهمة ويُسجل متابعة بلا وعد', async () => {
+    const c = await prisma.customer.findFirstOrThrow({ where: { externalCustomerCode: '90002' } });
+    const task = await prisma.task.create({
+      data: {
+        customerId: c.id,
+        assignedTo: collectorId,
+        dueDate: new Date('2026-08-11'),
+        taskType: 'high_balance_no_followup',
+        status: 'open',
+        priorityReason: 'اختبار إكمال — ملاحظة',
+        expectedAmount: 5000,
+        expectedCurrency: 'YER',
+      },
+    });
+
+    const res = await request(app.getHttpServer())
+      .post(`/tasks/${task.id}/complete`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ result: 'note', notes: 'تم التوثيق' })
+      .expect(201);
+    expect(res.body.task.status).toBe('done');
+    expect(res.body.followup.result).toBe('ملاحظة');
+    expect(res.body.promise).toBeNull();
+
+    const after = await prisma.task.findUnique({ where: { id: task.id } });
+    expect(after!.status).toBe('done');
+    const f = await prisma.followup.findFirst({
+      where: { customerId: c.id, notes: 'تم التوثيق' },
+      include: { result: true },
+    });
+    expect(f).not.toBeNull();
+    expect(f!.result.name).toBe('ملاحظة');
+
+    // المهمة خرجت من قائمة المهام المفتوحة
+    const open = await prisma.task.findMany({ where: { customerId: c.id, status: 'open' } });
+    expect(open.some((t) => t.id === task.id)).toBe(false);
+  });
+
+  it('POST /tasks/:id/complete بنتيجة وعد بالسداد: متابعة + وعد + مهمة وعد مفتوحة', async () => {
+    const c = await prisma.customer.findFirstOrThrow({ where: { externalCustomerCode: '90002' } });
+    const task = await prisma.task.create({
+      data: {
+        customerId: c.id,
+        assignedTo: collectorId,
+        dueDate: new Date('2026-08-11'),
+        taskType: 'promise_due',
+        status: 'open',
+        priorityReason: 'وعد سداد مستحق',
+        expectedAmount: 5000,
+        expectedCurrency: 'YER',
+      },
+    });
+
+    const res = await request(app.getHttpServer())
+      .post(`/tasks/${task.id}/complete`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        result: 'promise',
+        promiseDueDate: '2026-08-20',
+        promiseAmount: 5000,
+        promiseCurrency: 'YER',
+        notes: 'وعد جديد',
+      })
+      .expect(201);
+    expect(res.body.task.status).toBe('done');
+    expect(res.body.followup.result).toBe('وعد بالسداد');
+    expect(res.body.promise).not.toBeNull();
+
+    const after = await prisma.task.findUnique({ where: { id: task.id } });
+    expect(after!.status).toBe('done');
+    const followup = await prisma.followup.findFirst({
+      where: { customerId: c.id, notes: 'وعد جديد' },
+      include: { result: true },
+    });
+    expect(followup).not.toBeNull();
+    expect(followup!.result.name).toBe('وعد بالسداد');
+
+    const promise = await prisma.paymentPromise.findFirst({
+      where: { customerId: c.id, notes: 'وعد جديد' },
+    });
+    expect(promise).not.toBeNull();
+    expect(Number(promise!.expectedAmount)).toBe(5000);
+    // الوعد أنشأ مهمة promise_due جديدة مفتوحة — لا وعد بلا مهمة
+    const promiseTask = await prisma.task.findFirst({
+      where: { sourcePromiseId: promise!.id, taskType: 'promise_due', status: 'open' },
+    });
+    expect(promiseTask).not.toBeNull();
+  });
+
+  it('نتيجة وعد بلا تاريخ استحقاق → 400 والمهمة تبقى مفتوحة', async () => {
+    const c = await prisma.customer.findFirstOrThrow({ where: { externalCustomerCode: '90002' } });
+    const task = await prisma.task.create({
+      data: {
+        customerId: c.id,
+        assignedTo: collectorId,
+        dueDate: new Date('2026-08-11'),
+        taskType: 'followup_overdue',
+        status: 'open',
+        priorityReason: 'اختبار رفض',
+      },
+    });
+
+    await request(app.getHttpServer())
+      .post(`/tasks/${task.id}/complete`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ result: 'promise' })
+      .expect(400);
+
+    const after = await prisma.task.findUnique({ where: { id: task.id } });
+    expect(after!.status).toBe('open');
+  });
+
+  it('إكمال مهمة غير مفتوحة → 409', async () => {
+    const c = await prisma.customer.findFirstOrThrow({ where: { externalCustomerCode: '90002' } });
+    const task = await prisma.task.create({
+      data: {
+        customerId: c.id,
+        assignedTo: collectorId,
+        dueDate: new Date('2026-08-11'),
+        taskType: 'debt_120plus',
+        status: 'done',
+        priorityReason: 'مكتملة مسبقًا',
+      },
+    });
+
+    await request(app.getHttpServer())
+      .post(`/tasks/${task.id}/complete`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ result: 'note' })
+      .expect(409);
+  });
+
+  it('المحصل يُكمل مهمته المسندة فقط — مهمة محصل آخر → 404', async () => {
+    const c = await prisma.customer.findFirstOrThrow({ where: { externalCustomerCode: '90002' } });
+    const ownTask = await prisma.task.create({
+      data: {
+        customerId: c.id,
+        assignedTo: collectorId,
+        dueDate: new Date('2026-08-11'),
+        taskType: 'high_balance_no_followup',
+        status: 'open',
+        priorityReason: 'اختبار نطاق محصل',
+      },
+    });
+    await request(app.getHttpServer())
+      .post(`/tasks/${ownTask.id}/complete`)
+      .set('Authorization', `Bearer ${collectorUserToken}`)
+      .send({ result: 'note' })
+      .expect(201);
+
+    const other = await prisma.customer.findFirstOrThrow({ where: { externalCustomerCode: '90003' } });
+    const otherTask = await prisma.task.create({
+      data: {
+        customerId: other.id,
+        assignedTo: otherCollectorId,
+        dueDate: new Date('2026-08-11'),
+        taskType: 'risk_high',
+        status: 'open',
+        priorityReason: 'مهمة محصل آخر',
+      },
+    });
+    await request(app.getHttpServer())
+      .post(`/tasks/${otherTask.id}/complete`)
+      .set('Authorization', `Bearer ${collectorUserToken}`)
+      .send({ result: 'note' })
+      .expect(404);
+  });
+
+  // ==========================================================================
   // Dashboard
   // ==========================================================================
   it('Dashboard summary يعيد المؤشرات مفصولة بالعملة + مديونية جديدة + أعمار تقديرية', async () => {
