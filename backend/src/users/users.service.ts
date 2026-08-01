@@ -137,7 +137,31 @@ export class UsersService {
     return this.shape(user);
   }
 
-  async resetPassword(actor: AuthUser, id: string, newPassword: string, req?: Request) {
+  /** تغيير اسم المستخدم — فريد ضمن المنشأة، ويُسجَّل في التدقيق. */
+  async changeUsername(actor: AuthUser, id: string, username: string, req?: Request) {
+    const before = await this.findOne(actor.organizationId, id);
+
+    if (before.username === username) return before;
+
+    const duplicate = await this.prisma.user.findFirst({
+      where: { organizationId: actor.organizationId, username },
+    });
+    if (duplicate) throw new ConflictException('اسم المستخدم مستخدم مسبقًا');
+
+    const user = await this.prisma.user.update({
+      where: { id },
+      data: { username },
+      select: SAFE_SELECT,
+    });
+    await this.audit.log({
+      userId: actor.id, action: 'user_username_changed', entityTable: 'users', entityId: id,
+      oldValue: { username: before.username }, newValue: { username }, req,
+    });
+    return this.shape(user);
+  }
+
+  async resetPassword(actor: AuthUser, id: string, newPassword: string | undefined, req?: Request) {
+    if (!newPassword) throw new BadRequestException('كلمة المرور الجديدة مطلوبة');
     await this.findOne(actor.organizationId, id);
     await this.prisma.user.update({
       where: { id }, data: { passwordHash: await this.passwords.hash(newPassword) },

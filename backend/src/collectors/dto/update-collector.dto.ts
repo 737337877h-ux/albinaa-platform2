@@ -11,4 +11,9 @@ export class UpdateCollectorDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @ApiPropertyOptional({ description: 'إعادة ربط المحصل بمستخدم آخر (فريد — لا يمكن لمستخدم الارتباط بأكثر من محصل)' })
+  @IsOptional()
+  @IsUUID()
+  userId?: string;
 }

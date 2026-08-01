@@ -63,6 +63,10 @@ const createSchema = z.object({
 type CreateForm = z.infer<typeof createSchema>;
 
 const editSchema = z.object({
+  username: z
+    .string()
+    .min(3, 'اسم المستخدم يجب أن يكون 3 أحرف على الأقل')
+    .regex(/^[a-zA-Z0-9._-]+$/, 'يسمح فقط بالأحرف اللاتينية والأرقام و . _ -'),
   fullName: z.string().min(1, 'الاسم الكامل مطلوب'),
   phone: z.string().optional(),
   branchId: z.string().optional(),
@@ -143,15 +147,22 @@ export default function UsersPage() {
   });
 
   const editMut = useMutation({
-    mutationFn: ({ id, ...data }: EditForm & { id: string }) =>
-      api<UserItem>(`/users/${id}`, {
+    mutationFn: async ({ id, currentUsername, username, ...data }: EditForm & { id: string; currentUsername: string }) => {
+      if (username !== currentUsername) {
+        await api<UserItem>(`/users/${id}/username`, {
+          method: 'PATCH',
+          body: JSON.stringify({ username }),
+        });
+      }
+      return api<UserItem>(`/users/${id}`, {
         method: 'PATCH',
         body: JSON.stringify({
           fullName: data.fullName,
           phone: data.phone || undefined,
           branchId: data.branchId || undefined,
         }),
-      }),
+      });
+    },
     onSuccess: () => {
       toast('تم تعديل المستخدم بنجاح', 'ok');
       setEditItem(null);
@@ -174,7 +185,7 @@ export default function UsersPage() {
     mutationFn: ({ id, password }: { id: string; password: string }) =>
       api(`/users/${id}/reset-password`, {
         method: 'POST',
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ newPassword: password }),
       }),
     onSuccess: () => {
       toast('تم إعادة تعيين كلمة المرور بنجاح', 'ok');
@@ -361,7 +372,7 @@ export default function UsersPage() {
         item={editItem}
         onClose={() => setEditItem(null)}
         branches={branchesQuery.data ?? []}
-        onSubmit={(data) => editMut.mutate({ ...data, id: editItem!.id })}
+        onSubmit={(data) => editMut.mutate({ ...data, id: editItem!.id, currentUsername: editItem!.username })}
         loading={editMut.isPending}
       />
 
@@ -515,6 +526,7 @@ function EditDialog({
   useEffect(() => {
     if (item) {
       reset({
+        username: item.username,
         fullName: item.fullName,
         phone: item.phone ?? '',
         branchId: item.branch?.id ?? '',
@@ -525,6 +537,10 @@ function EditDialog({
   return (
     <Dialog open={!!item} onClose={onClose} title={`تعديل المستخدم — ${item?.username ?? ''}`}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <Field label="اسم المستخدم *" error={errors.username?.message} hint="فريد — لا يمكن التكرار مع مستخدم آخر">
+          <Input placeholder="أدخل اسم المستخدم…" {...register('username')} />
+        </Field>
+
         <Field label="الاسم الكامل *" error={errors.fullName?.message}>
           <Input placeholder="أدخل الاسم الكامل…" {...register('fullName')} />
         </Field>
