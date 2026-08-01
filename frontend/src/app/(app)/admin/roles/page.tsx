@@ -1,12 +1,16 @@
 'use client';
 import { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Shield, ShieldAlert, Users, KeyRound } from 'lucide-react';
+import { Plus, Pencil, Trash2, Shield, ShieldAlert, Users, KeyRound, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
-import { Badge, Card } from '@/components/ui/primitives';
+import { Dialog } from '@/components/ui/dialog';
+import { Badge, Button, Card, Field, Input } from '@/components/ui/primitives';
 import { toast } from '@/components/ui/toast';
 
 interface RoleListItem {
@@ -87,12 +91,25 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   ]},
 ];
 
+const createRoleSchema = z.object({
+  name: z.string().min(2, 'اسم الدور يجب أن يكون حرفين على الأقل').max(100, 'اسم الدور طويل جداً'),
+});
+type CreateRoleForm = z.infer<typeof createRoleSchema>;
+
+const updateRoleSchema = z.object({
+  name: z.string().min(2, 'اسم الدور يجب أن يكون حرفين على الأقل').max(100, 'اسم الدور طويل جداً'),
+});
+type UpdateRoleForm = z.infer<typeof updateRoleSchema>;
+
 export default function RolesPage() {
   const can = useCan();
   const qc = useQueryClient();
   const canManage = can('users.manage');
 
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editRole, setEditRole] = useState<RoleListItem | null>(null);
+  const [deleteRole, setDeleteRole] = useState<RoleListItem | null>(null);
 
   const rolesQuery = useQuery<RoleListItem[]>({
     queryKey: ['roles'],
@@ -104,6 +121,45 @@ export default function RolesPage() {
     queryKey: ['roles', selectedRoleId, 'permissions'],
     queryFn: () => api<RolePermissions>(`/roles/${selectedRoleId}/permissions`),
     enabled: canManage && !!selectedRoleId,
+  });
+
+  const createRoleMut = useMutation({
+    mutationFn: (data: CreateRoleForm) =>
+      api('/roles', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      toast('تم إنشاء الدور بنجاح', 'ok');
+      setCreateOpen(false);
+      qc.invalidateQueries({ queryKey: ['roles'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const updateRoleMut = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateRoleForm }) =>
+      api(`/roles/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      toast('تم تعديل الدور بنجاح', 'ok');
+      setEditRole(null);
+      qc.invalidateQueries({ queryKey: ['roles'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const deleteRoleMut = useMutation({
+    mutationFn: (id: string) =>
+      api(`/roles/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast('تم حذف الدور بنجاح', 'ok');
+      setDeleteRole(null);
+      qc.invalidateQueries({ queryKey: ['roles'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
   });
 
   const addPermMut = useMutation({
@@ -153,7 +209,15 @@ export default function RolesPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="الأدوار والصلاحيات" />
+      <PageHeader
+        title="الأدوار والصلاحيات"
+        action={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" aria-hidden />
+            دور جديد
+          </Button>
+        }
+      />
 
       <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
         {/* قائمة الأدوار */}
@@ -174,40 +238,60 @@ export default function RolesPage() {
             <ul className="divide-y divide-concrete-100 dark:divide-white/10" role="listbox" aria-label="قائمة الأدوار">
               {roles.map((role) => (
                 <li key={role.id}>
-                  <button
-                    role="option"
-                    aria-selected={selectedRoleId === role.id}
-                    onClick={() => setSelectedRoleId(role.id)}
-                    className={`flex w-full items-center gap-3 px-4 py-3 text-right text-sm transition-colors hover:bg-pine-50/40 dark:hover:bg-white/5 ${
-                      selectedRoleId === role.id
-                        ? 'border-r-2 border-pine-700 bg-pine-50/60 dark:border-pine-100 dark:bg-white/10'
-                        : ''
-                    }`}
-                  >
-                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
-                      role.isSystem
-                        ? 'bg-hazard-50 text-hazard-600 dark:bg-hazard-700/20 dark:text-hazard-100'
-                        : 'bg-concrete-100 text-concrete-500 dark:bg-white/10 dark:text-concrete-300'
-                    }`}>
-                      {role.isSystem ? <ShieldAlert className="h-4 w-4" /> : <Shield className="h-4 w-4" />}
-                    </div>
-                    <div className="min-w-0 flex-1 text-right">
-                      <p className="font-medium truncate">{role.name}</p>
-                      <div className="mt-0.5 flex items-center gap-2 text-xs text-concrete-500">
-                        <span className="inline-flex items-center gap-0.5">
-                          <Users className="h-3 w-3" aria-hidden />
-                          {role._count.userRoles}
-                        </span>
-                        <span className="inline-flex items-center gap-0.5">
-                          <KeyRound className="h-3 w-3" aria-hidden />
-                          {role._count.rolePermissions}
-                        </span>
+                  <div className="flex w-full items-center gap-2">
+                    <button
+                      role="option"
+                      aria-selected={selectedRoleId === role.id}
+                      onClick={() => setSelectedRoleId(role.id)}
+                      className={`flex w-full items-center gap-3 px-4 py-3 text-right text-sm transition-colors hover:bg-pine-50/40 dark:hover:bg-white/5 ${
+                        selectedRoleId === role.id
+                          ? 'border-r-2 border-pine-700 bg-pine-50/60 dark:border-pine-100 dark:bg-white/10'
+                          : ''
+                      }`}
+                    >
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                        role.isSystem
+                          ? 'bg-hazard-50 text-hazard-600 dark:bg-hazard-700/20 dark:text-hazard-100'
+                          : 'bg-concrete-100 text-concrete-500 dark:bg-white/10 dark:text-concrete-300'
+                      }`}>
+                        {role.isSystem ? <ShieldAlert className="h-4 w-4" /> : <Shield className="h-4 w-4" />}
                       </div>
-                    </div>
-                    {role.isSystem && (
-                      <Badge tone="hazard">نظام</Badge>
+                      <div className="min-w-0 flex-1 text-right">
+                        <p className="font-medium truncate">{role.name}</p>
+                        <div className="mt-0.5 flex items-center gap-2 text-xs text-concrete-500">
+                          <span className="inline-flex items-center gap-0.5">
+                            <Users className="h-3 w-3" aria-hidden />
+                            {role._count.userRoles}
+                          </span>
+                          <span className="inline-flex items-center gap-0.5">
+                            <KeyRound className="h-3 w-3" aria-hidden />
+                            {role._count.rolePermissions}
+                          </span>
+                        </div>
+                      </div>
+                      {role.isSystem && (
+                        <Badge tone="hazard">نظام</Badge>
+                      )}
+                    </button>
+                    {!role.isSystem && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setEditRole(role)}
+                          className="rounded p-1.5 text-concrete-400 hover:bg-pine-50 hover:text-pine-600 dark:hover:bg-white/10 dark:hover:text-pine-400"
+                          aria-label="تعديل الدور"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteRole(role)}
+                          className="rounded p-1.5 text-concrete-400 hover:bg-debt-50 hover:text-debt-600 dark:hover:bg-white/10 dark:hover:text-debt-400"
+                          aria-label="حذف الدور"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     )}
-                  </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -293,8 +377,136 @@ export default function RolesPage() {
               </DataState>
             </>
           )}
-        </Card>
+</Card>
       </div>
+
+      <CreateRoleDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onSubmit={(data) => createRoleMut.mutate(data)}
+        loading={createRoleMut.isPending}
+      />
+
+      <EditRoleDialog
+        role={editRole}
+        onClose={() => setEditRole(null)}
+        onSubmit={(data) => updateRoleMut.mutate({ id: editRole!.id, data })}
+        loading={updateRoleMut.isPending}
+      />
+
+      <DeleteRoleDialog
+        role={deleteRole}
+        onClose={() => setDeleteRole(null)}
+        onConfirm={() => deleteRoleMut.mutate(deleteRole!.id)}
+        loading={deleteRoleMut.isPending}
+      />
     </div>
+  );
+}
+
+function CreateRoleDialog({
+  open, onClose, onSubmit, loading,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (data: CreateRoleForm) => void;
+  loading: boolean;
+}) {
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<CreateRoleForm>({
+    resolver: zodResolver(createRoleSchema),
+  });
+
+  const handleClose = () => {
+    reset();
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onClose={handleClose} title="إنشاء دور جديد">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <Field label="اسم الدور *" error={errors.name?.message}>
+          <Input placeholder="أدخل اسم الدور…" {...register('name')} />
+        </Field>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="secondary" type="button" onClick={handleClose}>إلغاء</Button>
+          <Button type="submit" loading={loading}>
+            <Plus className="h-4 w-4" aria-hidden />
+            إنشاء الدور
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function EditRoleDialog({
+  role, onClose, onSubmit, loading,
+}: {
+  role: RoleListItem | null;
+  onClose: () => void;
+  onSubmit: (data: UpdateRoleForm) => void;
+  loading: boolean;
+}) {
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<UpdateRoleForm>({
+    resolver: zodResolver(updateRoleSchema),
+  });
+
+  const handleClose = () => {
+    reset();
+    onClose();
+  };
+
+  if (!role) return null;
+
+  return (
+    <Dialog open={!!role} onClose={handleClose} title={`تعديل الدور — ${role.name}`}>
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <Field label="اسم الدور *" error={errors.name?.message}>
+          <Input placeholder="أدخل اسم الدور…" {...register('name')} defaultValue={role.name} />
+        </Field>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="secondary" type="button" onClick={handleClose}>إلغاء</Button>
+          <Button type="submit" loading={loading}>
+            <Pencil className="h-4 w-4" aria-hidden />
+            حفظ التعديلات
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function DeleteRoleDialog({
+  role, onClose, onConfirm, loading,
+}: {
+  role: RoleListItem | null;
+  onClose: () => void;
+  onConfirm: () => void;
+  loading: boolean;
+}) {
+  if (!role) return null;
+
+  return (
+    <Dialog open={!!role} onClose={onClose} title="حذف الدور">
+      <div className="space-y-4">
+        <p className="text-sm text-concrete-600 dark:text-concrete-400">
+          هل أنت متأكد من حذف دور <strong>{role.name}</strong>؟
+        </p>
+        {role._count.userRoles > 0 && (
+          <p className="text-sm text-debt-600 dark:text-debt-400">
+            هذا الدور مرتبط بـ {role._count.userRoles} مستخدم — لا يمكن حذفه إلا بعد إزالة الدور من جميع المستخدمين.
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>إلغاء</Button>
+          <Button variant="danger" onClick={onConfirm} loading={loading} disabled={role._count.userRoles > 0}>
+            <Trash2 className="h-4 w-4" aria-hidden />
+            حذف الدور
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
