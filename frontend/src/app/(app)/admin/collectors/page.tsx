@@ -40,6 +40,7 @@ const createSchema = z.object({
 });
 
 const editSchema = z.object({
+  userId: z.string().min(1, 'يرجى اختيار مستخدم'),
   branchId: z.string().optional(),
   active: z.boolean(),
 });
@@ -77,6 +78,10 @@ export default function CollectorsPage() {
     (u) => !collectors.data?.some((c) => c.user.id === u.id),
   ) ?? [];
 
+  const relinkUsers = users.data?.filter(
+    (u) => u.id === editItem?.user.id || !collectors.data?.some((c) => c.user.id === u.id),
+  ) ?? [];
+
   const createMut = useMutation({
     mutationFn: (data: CreateForm) =>
       api<Collector>('/collectors', {
@@ -99,6 +104,7 @@ export default function CollectorsPage() {
       api<Collector>(`/collectors/${id}`, {
         method: 'PATCH',
         body: JSON.stringify({
+          userId: data.userId,
           branchId: data.branchId || undefined,
           active: data.active,
         }),
@@ -192,6 +198,7 @@ export default function CollectorsPage() {
       <EditDialog
         item={editItem}
         onClose={() => setEditItem(null)}
+        users={relinkUsers}
         branches={branches.data ?? []}
         branchesLoading={branches.isLoading}
         onSubmit={(data) => {
@@ -259,10 +266,11 @@ function CreateDialog({
 }
 
 function EditDialog({
-  item, onClose, branches, branchesLoading, onSubmit, loading,
+  item, onClose, users, branches, branchesLoading, onSubmit, loading,
 }: {
   item: Collector | null;
   onClose: () => void;
+  users: User[];
   branches: Branch[];
   branchesLoading: boolean;
   onSubmit: (data: EditForm) => void;
@@ -270,7 +278,7 @@ function EditDialog({
 }) {
   const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
-    values: item ? { branchId: item.branch?.id ?? '', active: item.active } : undefined,
+    values: item ? { userId: item.user.id, branchId: item.branch?.id ?? '', active: item.active } : undefined,
   });
 
   const active = watch('active');
@@ -285,11 +293,15 @@ function EditDialog({
   return (
     <Dialog open={!!item} onClose={handleClose} title="تعديل المحصل">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        {/* User info (read-only) */}
-        <div className="rounded-lg bg-concrete-50 p-3 dark:bg-white/5">
-          <p className="text-sm font-medium text-concrete-700 dark:text-concrete-200">{item.user.fullName}</p>
-          <p className="text-xs text-concrete-500" dir="ltr">@{item.user.username}</p>
-        </div>
+        <Field label="المستخدم *" error={errors.userId?.message} hint="إعادة ربط المحصل بمستخدم آخر — لا يمكن لمستخدم الارتباط بأكثر من محصل">
+          <Select {...register('userId')}>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.fullName} (@{u.username})
+              </option>
+            ))}
+          </Select>
+        </Field>
 
         <Field label="الفرع" hint="اختياري — يمكن تركه فارغاً">
           <Select {...register('branchId')} disabled={branchesLoading}>

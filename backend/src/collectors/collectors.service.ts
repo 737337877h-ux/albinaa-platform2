@@ -62,11 +62,25 @@ export class CollectorsService {
     const data: Record<string, unknown> = {};
     if (dto.branchId !== undefined) data.branchId = dto.branchId;
     if (dto.active !== undefined) data.active = dto.active;
+    if (dto.userId !== undefined) {
+      // إعادة ربط المحصل بمستخدم آخر — المستخدم يجب أن يكون في نفس المنشأة وغير مرتبط بمحصل آخر
+      if (dto.userId !== before.userId) {
+        const user = await this.prisma.user.findFirst({
+          where: { id: dto.userId, organizationId: actor.organizationId },
+        });
+        if (!user) throw new NotFoundException('المستخدم غير موجود في المنشأة');
+        const linked = await this.prisma.collector.findFirst({
+          where: { userId: dto.userId, id: { not: id } },
+        });
+        if (linked) throw new ConflictException('هذا المستخدم مضاف مسبقاً كمحصل');
+        data.userId = dto.userId;
+      }
+    }
     const collector = await this.prisma.collector.update({ where: { id }, data });
     await this.audit.log({
       userId: actor.id, action: 'collector_updated', entityTable: 'collectors', entityId: id,
-      oldValue: { branchId: before.branch?.name, active: before.active },
-      newValue: { branchId: dto.branchId, active: dto.active }, req,
+      oldValue: { userId: before.userId, branchId: before.branch?.name, active: before.active },
+      newValue: { userId: dto.userId ?? before.userId, branchId: dto.branchId, active: dto.active }, req,
     });
     return collector;
   }

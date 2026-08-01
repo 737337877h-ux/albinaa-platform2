@@ -6,6 +6,7 @@ import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { ChangeUsernameDto } from './dto/change-username.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { GrantRolesDto } from './dto/grant-roles.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -49,6 +50,17 @@ export class UsersController {
     return this.users.update(user, id, dto, req);
   }
 
+  @Patch(':id/username')
+  @ApiOperation({ summary: 'تغيير اسم المستخدم (فريد ضمن المنشأة)' })
+  changeUsername(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChangeUsernameDto,
+    @Req() req: Request,
+  ) {
+    return this.users.changeUsername(user, id, dto.username, req);
+  }
+
   @Patch(':id/status')
   @ApiOperation({ summary: 'تفعيل/تعطيل — لا يوجد حذف نهائي، ويُمنع تعطيل آخر مدير نشط' })
   setStatus(
@@ -68,7 +80,7 @@ export class UsersController {
     @Body() dto: ResetPasswordDto,
     @Req() req: Request,
   ) {
-    return this.users.resetPassword(user, id, dto.newPassword, req);
+    return this.users.resetPassword(user, id, dto.newPassword ?? dto.password, req);
   }
 
   @Post(':id/roles')
