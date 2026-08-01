@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { Search, SlidersHorizontal, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
@@ -47,19 +48,25 @@ export default function CustomersPage() {
   const can = useCan();
   const canRead = can('customers.read');
 
-  const [search, setSearch] = useState('');
+  // Initial filter values from the URL — lets dashboard KPI cards / charts
+  // link straight into a pre-filtered customers view (drilldown).
+  const urlParams = useSearchParams();
+
+  const [search, setSearch] = useState(() => urlParams.get('search') ?? '');
   const debouncedSearch = useDebounced(search, 350);
 
-  const [balanceState, setBalanceState] = useState<string>('');
-  const [currency, setCurrency] = useState('');
-  const [status, setStatus] = useState('');
+  const [balanceState, setBalanceState] = useState<string>(() => urlParams.get('balanceState') ?? '');
+  const [currency, setCurrency] = useState(() => urlParams.get('currency') ?? '');
+  const [status, setStatus] = useState(() => urlParams.get('status') ?? '');
+  const [region, setRegion] = useState(() => urlParams.get('region') ?? '');
+  const [collectorId, setCollectorId] = useState(() => urlParams.get('collectorId') ?? '');
   const [sortBy, setSortBy] = useState<SortBy>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [page, setPage] = useState(1);
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(() => !!(urlParams.get('region') || urlParams.get('balanceState') || urlParams.get('currency') || urlParams.get('status')));
 
   const query = useQuery<CustomersResponse>({
-    queryKey: ['customers', debouncedSearch, balanceState, currency, status, sortBy, sortDir, page],
+    queryKey: ['customers', debouncedSearch, balanceState, currency, status, region, collectorId, sortBy, sortDir, page],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set('page', String(page));
@@ -68,6 +75,8 @@ export default function CustomersPage() {
       if (balanceState) params.set('balanceState', balanceState);
       if (currency) params.set('currency', currency);
       if (status) params.set('status', status);
+      if (region) params.set('region', region);
+      if (collectorId) params.set('collectorId', collectorId);
       if (sortBy) params.set('sortBy', sortBy);
       if (sortDir) params.set('sortDir', sortDir);
       return api<CustomersResponse>(`/customers?${params.toString()}`);
@@ -85,7 +94,7 @@ export default function CustomersPage() {
     setPage(1);
   };
 
-  const activeFilters = [balanceState, currency, status].filter(Boolean).length;
+  const activeFilters = [balanceState, currency, status, region, collectorId].filter(Boolean).length;
 
   const sortIcon = (col: SortBy) => {
     if (sortBy !== col) return '';
@@ -142,9 +151,24 @@ export default function CustomersPage() {
             </Button>
           </div>
 
-          {/* الفلاتر الم展开 */}
+          {collectorId && (
+            <div className="mt-3 flex items-center gap-2 text-xs">
+              <span className="rounded-full bg-pine-50 px-2.5 py-1 text-pine-700 dark:bg-pine-900 dark:text-pine-100">
+                مُصفّى حسب محصل محدد (من رابط الإحالة)
+              </span>
+              <button
+                onClick={() => { setCollectorId(''); setPage(1); }}
+                className="rounded p-0.5 text-concrete-400 hover:bg-concrete-100 dark:hover:bg-white/10"
+                aria-label="إلغاء تصفية المحصل"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* الفلاتر الموسّعة */}
           {showFilters && (
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
               <label className="block space-y-1">
                 <span className="text-xs font-medium text-concrete-500">حالة الرصيد</span>
                 <Select
@@ -181,6 +205,14 @@ export default function CustomersPage() {
                 </Select>
               </label>
               <label className="block space-y-1">
+                <span className="text-xs font-medium text-concrete-500">المنطقة</span>
+                <Input
+                  value={region}
+                  onChange={(e) => { setRegion(e.target.value); setPage(1); }}
+                  placeholder="اسم المنطقة"
+                />
+              </label>
+              <label className="block space-y-1">
                 <span className="text-xs font-medium text-concrete-500">ترتيب حسب</span>
                 <Select
                   value={sortBy}
@@ -193,10 +225,10 @@ export default function CustomersPage() {
                 </Select>
               </label>
               {activeFilters > 0 && (
-                <div className="col-span-2 sm:col-span-4">
+                <div className="col-span-2 sm:col-span-5">
                   <Button
                     variant="ghost"
-                    onClick={() => { setBalanceState(''); setCurrency(''); setStatus(''); setPage(1); }}
+                    onClick={() => { setBalanceState(''); setCurrency(''); setStatus(''); setRegion(''); setCollectorId(''); setPage(1); }}
                   >
                     <X className="h-3.5 w-3.5" aria-hidden />
                     مسح الفلاتر
