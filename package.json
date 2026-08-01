@@ -1,6 +1,6 @@
 {
   "name": "albinaa-platform",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "منصة البناء الراقي لإدارة المديونية والتحصيل — Sprint 1: Data Foundation",
   "private": true,
   "scripts": {

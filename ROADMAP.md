@@ -1,6 +1,6 @@
 # خارطة الطريق — Roadmap
 
-**آخر تحديث:** 2026-08-01 (بعد إصدار v1.2.0)
+**آخر تحديث:** 2026-08-01 (بعد إصدار v1.2.1)
 
 ---
 
@@ -12,6 +12,7 @@
 | **v1.0.0** | 2026-07-30 | الإصدار المستقر: النظام الكامل + 11 إصلاحًا + Mobile App |
 | **v1.1.0** | 2026-07-30 | أدوات التواصل: Call/SMS/WhatsApp + خريطة + إشعارات تفاعلية + عملات ديناميكية |
 | **v1.2.0** | 2026-08-01 | إدارة المديونية الذكية: Import Profiles + Debt Aging · Risk Score · Daily Work Queue · Customer360 Risk/Tasks · Dashboard KPIs · Customer Assignments · Task Execution + Followup + Promise · Stabilization (full e2e 122/122) |
+| **v1.2.1** | 2026-08-01 | صفحة الإشعارات الكاملة (Web Hotfix): قائمة + تعليم كمقروء/الكل + فلتر غير المقروء + مزامنة جرس الإشعارات |
 
 ---
 

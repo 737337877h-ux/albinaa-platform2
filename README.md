@@ -1,6 +1,6 @@
 # البناء الراقي — AlBinaa Platform
 
-نظام إدارة المديونية والتحصيل — الإصدار 1.2.0 Release Candidate
+نظام إدارة المديونية والتحصيل — الإصدار 1.2.1 (Web Hotfix)
 
 ## الوصف
 
@@ -88,6 +88,7 @@ npx tsc --noEmit && npx expo-doctor && npx jest
 |---------|-------|
 | [PROJECT_STATE.md](./PROJECT_STATE.md) | حالة المشروع الحالية |
 | [CHANGELOG.md](./CHANGELOG.md) | سجل التغييرات |
+| [RELEASE_NOTES_v1.2.1.md](./RELEASE_NOTES_v1.2.1.md) | ملاحظات إصدار v1.2.1 (Web Hotfix) |
 | [RELEASE_NOTES_v1.2.0.md](./RELEASE_NOTES_v1.2.0.md) | ملاحظات إصدار v1.2.0 |
 | [V11_DELIVERY_REPORT.md](./V11_DELIVERY_REPORT.md) | تقرير تسليم v1.1.0 الكامل |
 | [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) | توثيق قاعدة البيانات / Prisma Schema |
@@ -98,6 +99,7 @@ npx tsc --noEmit && npx expo-doctor && npx jest
 
 ## الإصدار
 
+- **v1.2.1** (2026-08-01) — صفحة الإشعارات الكاملة (Web Hotfix): قائمة + تعليم كمقروء/الكل + مزامنة جرس الإشعارات
 - **v1.2.0** (2026-08-01) — إدارة المديونية الذكية: Import Profiles + Debt Aging · Risk Score · Daily Work Queue · Customer360 Risk/Tasks · Dashboard KPIs · Customer Assignments · Task Execution + Followup + Promise · Stabilization 122/122
 - **v1.1.0** (2026-07-30) — أدوات التواصل مع العملاء (Call/SMS/WhatsApp، خريطة، إشعارات تفاعلية، عملات ديناميكية)
 - **v1.0.0** (2026-07-30) — الإصدار المستقر الأول
