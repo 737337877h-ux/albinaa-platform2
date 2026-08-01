@@ -24,6 +24,13 @@ export class TasksController {
     return this.tasks.today(user, collectorId);
   }
 
+  @Get('by-customer/:id')
+  @RequirePermissions('tasks.manage')
+  @ApiOperation({ summary: 'مهام عميل مفتوحة (Customer360): النوع، الأولوية، السبب، المبلغ المتوقع، الإسناد' })
+  byCustomer(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.tasks.listForCustomer(user, id);
+  }
+
   @Post('generate-today')
   @RequirePermissions('tasks.manage')
   @ApiOperation({

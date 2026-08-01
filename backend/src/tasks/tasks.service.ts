@@ -779,6 +779,39 @@ export class TasksService {
     };
   }
 
+  /** مهام عميل مفتوحة (Customer360) — مرتبة حسب الأولوية ثم المبلغ المتوقع. */
+  async listForCustomer(user: AuthUser, customerId: string) {
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        status: 'open',
+        customerId,
+        customer: { organizationId: user.organizationId },
+      },
+      include: {
+        customer: { select: { id: true, name: true, externalCustomerCode: true } },
+        collector: { select: { id: true, user: { select: { fullName: true } } } },
+      },
+      orderBy: { dueDate: 'asc' },
+    });
+    return tasks
+      .map((t) => ({
+        id: t.id,
+        customerId: t.customerId ?? '',
+        customerName: t.customer?.name ?? '',
+        customerCode: t.customer?.externalCustomerCode ?? null,
+        taskType: t.taskType,
+        priority: priorityOfTaskType(t.taskType),
+        priorityReason: t.priorityReason ?? t.taskType,
+        dueDate: t.dueDate,
+        status: t.status,
+        expectedAmount: t.expectedAmount === null ? null : Number(t.expectedAmount),
+        expectedCurrency: t.expectedCurrency,
+        assignedTo: t.assignedTo,
+        assignedToName: t.collector?.user?.fullName ?? null,
+      }))
+      .sort((a, b) => a.priority - b.priority || (b.expectedAmount ?? 0) - (a.expectedAmount ?? 0));
+  }
+
   /** قائمة المهام المخزنة (المفتوحة افتراضيًا) للمحصل أو للإدارة. */
   async list(user: AuthUser, collectorIdParam?: string, status = 'open') {
     const collector = await this.resolveCollector(user, collectorIdParam);
