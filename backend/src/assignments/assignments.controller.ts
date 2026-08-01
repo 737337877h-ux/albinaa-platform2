@@ -7,6 +7,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { AssignmentsService } from './assignments.service';
+import { BulkAssignmentDto } from './dto/bulk-assignment.dto';
 import { CreateAssignmentDto } from './dto/create-assignment.dto';
 
 @ApiTags('Assignments')
@@ -43,5 +44,27 @@ export class AssignmentsController {
   @ApiOperation({ summary: 'إنهاء إسناد حالي دون فتح بديل (يصبح العميل بلا محصل)' })
   end(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Req() req: Request) {
     return this.assignments.end(user, id, req);
+  }
+
+  @Get('collectors')
+  @RequirePermissions('customers.transfer')
+  @ApiOperation({ summary: 'Active collectors available as bulk assignment targets' })
+  listCollectors(@CurrentUser() user: AuthUser) {
+    return this.assignments.listActiveCollectors(user);
+  }
+
+  @Post('bulk/preview')
+  @HttpCode(200)
+  @RequirePermissions('customers.transfer')
+  @ApiOperation({ summary: 'Bulk assign/transfer preview: returns counts without writing anything' })
+  bulkPreview(@CurrentUser() user: AuthUser, @Body() dto: BulkAssignmentDto) {
+    return this.assignments.previewBulkAssign(user, dto);
+  }
+
+  @Post('bulk')
+  @RequirePermissions('customers.transfer')
+  @ApiOperation({ summary: 'Bulk assign/transfer selected customers to one target collector' })
+  bulkExecute(@CurrentUser() user: AuthUser, @Body() dto: BulkAssignmentDto, @Req() req: Request) {
+    return this.assignments.executeBulkAssign(user, dto, req);
   }
 }
