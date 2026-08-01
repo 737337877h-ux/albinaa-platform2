@@ -282,6 +282,39 @@ export class DashboardService {
       .sort((a, b) => a.priority - b.priority || (b.expectedAmount ?? 0) - (a.expectedAmount ?? 0))
       .slice(0, 10);
 
+    // Collector performance today: today's collections grouped by collector + currency.
+    // Amounts stay separated by currency (no cross-currency summing), consistent with the rest
+    // of this service. Uses only existing Collection/Collector data — no schema changes.
+    const today0 = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
+    const tomorrow0 = new Date(today0.getTime() + 86_400_000);
+    const collectionsByCollector = await this.prisma.collection.groupBy({
+      by: ['collectorId', 'currencyCode'],
+      where: {
+        status: { not: 'reversed' },
+        collectedAt: { gte: today0, lt: tomorrow0 },
+        collector: { user: { organizationId: orgId } },
+      },
+      _sum: { amount: true },
+      _count: true,
+    });
+    const perfCollectorIds = [...new Set(collectionsByCollector.map((c) => c.collectorId))];
+    const perfCollectors = perfCollectorIds.length
+      ? await this.prisma.collector.findMany({
+          where: { id: { in: perfCollectorIds } },
+          include: { user: { select: { fullName: true } } },
+        })
+      : [];
+    const perfNameMap = new Map(perfCollectors.map((c) => [c.id, c.user.fullName]));
+    const collectorPerformanceToday = collectionsByCollector
+      .map((c) => ({
+        collectorId: c.collectorId,
+        collectorName: perfNameMap.get(c.collectorId) ?? c.collectorId,
+        currency: c.currencyCode,
+        amount: Number(c._sum.amount ?? 0),
+        count: c._count,
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
     return {
       customers: { total: totalCustomers, active: activeCustomers, debtors },
       debtByCurrency,
@@ -291,6 +324,7 @@ export class DashboardService {
       debt120Plus,
       highRiskCustomers,
       topPriorityTasks,
+      collectorPerformanceToday,
     };
   }
 

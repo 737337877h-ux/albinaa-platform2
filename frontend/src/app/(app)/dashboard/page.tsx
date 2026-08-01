@@ -8,6 +8,7 @@ import { todayISO } from '@/lib/errors';
 import { CCY_AR, fmtDateTime, fmtMoney, PROMISE_STATUS_AR, TASK_TYPE_AR } from '@/lib/format';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
+import { HBarChart, StackedBar } from '@/components/ui/charts';
 import { Badge, Card, CardHeader, Money } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
 
@@ -65,6 +66,9 @@ interface KpiResponse {
     taskId: string; customerId: string; customerName: string; customerCode: string | null;
     taskType: string; priority: number; priorityReason: string;
     expectedAmount: number | null; expectedCurrency: string | null; assignedTo: string | null;
+  }[];
+  collectorPerformanceToday: {
+    collectorId: string; collectorName: string; currency: string; amount: number; count: number;
   }[];
 }
 
@@ -169,11 +173,13 @@ export default function DashboardPage() {
           >
             {summary.data && (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <Card className="p-4">
-                  <p className="text-xs text-concrete-500">إجمالي العملاء</p>
-                  <p className="tnum mt-1 font-display text-2xl font-bold">{summary.data.customers.total}</p>
-                  <p className="mt-1 text-xs text-concrete-500">النشطون: {summary.data.customers.active}</p>
-                </Card>
+                <Link href="/customers">
+                  <Card className="p-4 transition-colors hover:bg-pine-50/40 dark:hover:bg-white/5">
+                    <p className="text-xs text-concrete-500">إجمالي العملاء</p>
+                    <p className="tnum mt-1 font-display text-2xl font-bold">{summary.data.customers.total}</p>
+                    <p className="mt-1 text-xs text-concrete-500">النشطون: {summary.data.customers.active}</p>
+                  </Card>
+                </Link>
                 {Object.entries(summary.data.byCurrency).map(([ccy, v]) => (
                   <Card key={ccy} className="p-4">
                     <div className="flex items-center justify-between">
@@ -181,14 +187,14 @@ export default function DashboardPage() {
                       <Badge tone="pine">{ccy}</Badge>
                     </div>
                     <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                      <div>
+                      <Link href={`/customers?balanceState=debtor&currency=${ccy}`} className="rounded-lg p-1 -m-1 hover:bg-debt-50 dark:hover:bg-debt-700/20">
                         <p className="text-xs text-debt-600 dark:text-debt-400">مديونية ({v.debtors})</p>
                         <p className="tnum font-bold text-debt-600 dark:text-debt-400" dir="ltr">{fmtMoney(v.debtTotal)}</p>
-                      </div>
-                      <div>
+                      </Link>
+                      <Link href={`/customers?balanceState=creditor&currency=${ccy}`} className="rounded-lg p-1 -m-1 hover:bg-credit-50 dark:hover:bg-credit-700/20">
                         <p className="text-xs text-credit-600 dark:text-credit-400">دائن ({v.creditors})</p>
                         <p className="tnum font-bold text-credit-600 dark:text-credit-400" dir="ltr">{fmtMoney(v.creditTotal)}</p>
-                      </div>
+                      </Link>
                     </div>
                   </Card>
                 ))}
@@ -271,14 +277,26 @@ export default function DashboardPage() {
                       </div>
                     ))}
                   </div>
+                  <div className="mt-3">
+                    <StackedBar
+                      items={[
+                        { key: 'low', label: RISK_LEVEL_AR.low, value: kpis.data.riskDistribution.low ?? 0, tone: 'pine' },
+                        { key: 'medium', label: RISK_LEVEL_AR.medium, value: kpis.data.riskDistribution.medium ?? 0, tone: 'neutral' },
+                        { key: 'high', label: RISK_LEVEL_AR.high, value: kpis.data.riskDistribution.high ?? 0, tone: 'hazard' },
+                        { key: 'critical', label: RISK_LEVEL_AR.critical, value: kpis.data.riskDistribution.critical ?? 0, tone: 'debt' },
+                      ]}
+                    />
+                  </div>
                 </Card>
-                <Card className="p-4">
-                  <p className="text-xs text-concrete-500">مهام اليوم</p>
-                  <p className="tnum mt-1 font-display text-2xl font-bold">{kpis.data.tasksToday.total}</p>
-                  <p className="mt-1 text-xs text-concrete-500">
-                    مسندة: {kpis.data.tasksToday.assigned} • غير مسندة: {kpis.data.tasksToday.unassigned}
-                  </p>
-                </Card>
+                <Link href="/tasks">
+                  <Card className="p-4 transition-colors hover:bg-pine-50/40 dark:hover:bg-white/5">
+                    <p className="text-xs text-concrete-500">مهام اليوم</p>
+                    <p className="tnum mt-1 font-display text-2xl font-bold">{kpis.data.tasksToday.total}</p>
+                    <p className="mt-1 text-xs text-concrete-500">
+                      مسندة: {kpis.data.tasksToday.assigned} • غير مسندة: {kpis.data.tasksToday.unassigned}
+                    </p>
+                  </Card>
+                </Link>
                 <Card className="p-4">
                   <p className="text-xs text-concrete-500">عملاء +120 يوم</p>
                   <p className="tnum mt-1 font-display text-2xl font-bold">{kpis.data.debt120Plus.count}</p>
@@ -304,6 +322,41 @@ export default function DashboardPage() {
                       </li>
                     ))}
                   </ul>
+                </Card>
+              </div>
+
+              <div className="grid gap-5 xl:grid-cols-2">
+                <Card>
+                  <CardHeader title="توزيع الديون بالعملة" />
+                  <div className="p-4">
+                    <HBarChart
+                      emptyText="لا مديونية مسجّلة"
+                      items={Object.entries(kpis.data.debtByCurrency).map(([ccy, amt]) => ({
+                        key: ccy,
+                        label: CCY_AR[ccy] ?? ccy,
+                        value: amt,
+                        valueLabel: `${fmtMoney(amt)} ${ccy}`,
+                        href: `/customers?balanceState=debtor&currency=${ccy}`,
+                        tone: 'debt',
+                      }))}
+                    />
+                  </div>
+                </Card>
+                <Card>
+                  <CardHeader title="أداء المحصلين اليوم" />
+                  <div className="p-4">
+                    <HBarChart
+                      emptyText="لا تحصيلات مسجّلة اليوم بعد"
+                      items={kpis.data.collectorPerformanceToday.slice(0, 8).map((c) => ({
+                        key: `${c.collectorId}-${c.currency}`,
+                        label: `${c.collectorName} (${c.currency})`,
+                        value: c.amount,
+                        valueLabel: `${fmtMoney(c.amount)} ${c.currency}`,
+                        href: `/customers?collectorId=${c.collectorId}`,
+                        tone: 'credit',
+                      }))}
+                    />
+                  </div>
                 </Card>
               </div>
 
