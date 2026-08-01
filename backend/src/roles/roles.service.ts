@@ -1,10 +1,12 @@
 import {
-  BadRequestException, ForbiddenException, Injectable, NotFoundException,
+  BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { CreateRoleDto } from './dto/create-role.dto';
+import { UpdateRoleDto } from './dto/update-role.dto';
 
 /** الأدوار النظامية الحساسة — تعديل صلاحياتها يتطلب تحققًا إضافيًا (settings.manage). */
 const SENSITIVE_SYSTEM_ROLES = ['مدير النظام'];
@@ -46,7 +48,7 @@ export class RolesService {
     };
   }
 
-  /** تعديل الأدوار النظامية الحساسة يتطلب صلاحية settings.manage إضافةً إلى users.manage. */
+  /** تعديل/حذف الأدوار النظامية الحساسة يتطلب صلاحية settings.manage. */
   private assertCanModify(actor: AuthUser, role: { name: string; isSystem: boolean }) {
     if (role.isSystem && SENSITIVE_SYSTEM_ROLES.includes(role.name)) {
       if (!actor.permissions.includes('settings.manage')) {
@@ -55,6 +57,81 @@ export class RolesService {
         );
       }
     }
+  }
+
+  /** إنشاء دور جديد — فريد ضمن المنشأة. */
+  async createRole(actor: AuthUser, dto: CreateRoleDto, req?: Request) {
+    const exists = await this.prisma.role.findFirst({
+      where: { organizationId: actor.organizationId, name: dto.name },
+    });
+    if (exists) throw new ConflictException('اسم الدور مستخدم مسبقًا');
+
+    const role = await this.prisma.role.create({
+      data: {
+        organizationId: actor.organizationId,
+        name: dto.name,
+        isSystem: dto.isSystem ?? false,
+      },
+      select: { id: true, name: true, isSystem: true },
+    });
+    await this.audit.log({
+      userId: actor.id, action: 'role_created', entityTable: 'roles', entityId: role.id,
+      newValue: { name: dto.name, isSystem: dto.isSystem ?? false }, req,
+    });
+    return role;
+  }
+
+  /** تعديل اسم الدور — لا يمكن تعديل الأدوار النظامية الحساسة بدون settings.manage. */
+  async updateRole(actor: AuthUser, id: string, dto: UpdateRoleDto, req?: Request) {
+    const before = await this.prisma.role.findFirst({
+      where: { id, organizationId: actor.organizationId },
+    });
+    if (!before) throw new NotFoundException('الدور غير موجود');
+    if (before.isSystem && SENSITIVE_SYSTEM_ROLES.includes(before.name)) {
+      if (!actor.permissions.includes('settings.manage')) {
+        throw new ForbiddenException('لا يمكن تعديل اسم الدور النظامي الحساس');
+      }
+    }
+
+    if (dto.name && dto.name !== before.name) {
+      const dup = await this.prisma.role.findFirst({
+        where: { organizationId: actor.organizationId, name: dto.name },
+      });
+      if (dup) throw new ConflictException('اسم الدور مستخدم مسبقًا');
+    }
+
+    const role = await this.prisma.role.update({
+      where: { id },
+      data: { name: dto.name ?? before.name },
+      select: { id: true, name: true, isSystem: true },
+    });
+    await this.audit.log({
+      userId: actor.id, action: 'role_updated', entityTable: 'roles', entityId: id,
+      oldValue: { name: before.name }, newValue: { name: role.name }, req,
+    });
+    return role;
+  }
+
+  /** حذف الدور — ممنوع إذا كان عليه مستخدمون، والأدوار النظامية الحساسة لا تحذف. */
+  async deleteRole(actor: AuthUser, id: string, req?: Request) {
+    const role = await this.prisma.role.findFirst({
+      where: { id, organizationId: actor.organizationId },
+      include: { _count: { select: { userRoles: true } } },
+    });
+    if (!role) throw new NotFoundException('الدور غير موجود');
+    if (role._count.userRoles > 0) {
+      throw new ConflictException('لا يمكن حذف دور عليه مستخدمون — انزع الدور من المستخدمين أولاً');
+    }
+    if (role.isSystem && SENSITIVE_SYSTEM_ROLES.includes(role.name)) {
+      throw new ForbiddenException('لا يمكن حذف الدور النظامي الحساس');
+    }
+
+    await this.prisma.role.delete({ where: { id } });
+    await this.audit.log({
+      userId: actor.id, action: 'role_deleted', entityTable: 'roles', entityId: id,
+      oldValue: { name: role.name, isSystem: role.isSystem }, req,
+    });
+    return { message: 'تم حذف الدور' };
   }
 
   async grantPermissions(actor: AuthUser, roleId: string, permissionIds: string[], req?: Request) {
