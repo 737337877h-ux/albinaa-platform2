@@ -1,6 +1,6 @@
 # خارطة الطريق — Roadmap
 
-**آخر تحديث:** 2026-07-30 (بعد إصدار v1.1.0)
+**آخر تحديث:** 2026-08-01 (بعد إصدار v1.2.0)
 
 ---
 
@@ -11,10 +11,11 @@
 | **v0.2.0** | 2026-07 | Milestone 2: API Foundation (Auth + RBAC + أساسيات) |
 | **v1.0.0** | 2026-07-30 | الإصدار المستقر: النظام الكامل + 11 إصلاحًا + Mobile App |
 | **v1.1.0** | 2026-07-30 | أدوات التواصل: Call/SMS/WhatsApp + خريطة + إشعارات تفاعلية + عملات ديناميكية |
+| **v1.2.0** | 2026-08-01 | إدارة المديونية الذكية: Import Profiles + Debt Aging · Risk Score · Daily Work Queue · Customer360 Risk/Tasks · Dashboard KPIs · Customer Assignments · Task Execution + Followup + Promise · Stabilization (full e2e 122/122) |
 
 ---
 
-## 🔜 v1.2.0 — قيد التخطيط (تنتظر الموافقة)
+## 🔜 v1.3.0 — قيد التخطيط (تنتظر الموافقة)
 
 ### إشعارات Push (FCM/APNS)
 - تنبيهات لحظية على جهاز المحصل عند الأحداث المهمة
