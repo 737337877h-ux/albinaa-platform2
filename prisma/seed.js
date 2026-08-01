@@ -113,6 +113,8 @@ async function main() {
     ['settings.manage', 'إدارة الإعدادات'],
     ['audit.read', 'عرض سجل التدقيق'],
     ['duplicates.review', 'مراجعة حالات تشابه العملاء'],
+    ['risk.read', 'عرض درجة المخاطر'],
+    ['risk.recalculate', 'إعادة احتساب درجات المخاطر'],
   ];
   for (const [code, descriptionAr] of permissions) {
     await prisma.permission.upsert({ where: { code }, update: { descriptionAr }, create: { code, descriptionAr } });
@@ -126,6 +128,7 @@ async function main() {
     'مدير المديونية': [
       'customers.read', 'customers.read_all', 'customers.transfer', 'balances.read', 'followups.create',
       'promises.create', 'tasks.manage', 'reports.read', 'reports.export', 'duplicates.review',
+      'risk.read', 'risk.recalculate',
     ],
     'المحصل': [
       'customers.read', 'balances.read', 'followups.create', 'promises.create',
@@ -133,7 +136,7 @@ async function main() {
     ],
     'المحاسب': [
       'customers.read', 'customers.read_all', 'balances.read', 'collections.approve', 'imports.run',
-      'imports.read', 'reconciliation.review', 'reports.read', 'reports.export',
+      'imports.read', 'reconciliation.review', 'reports.read', 'reports.export', 'risk.read',
     ],
     'أمين الصندوق': ['cash.receive', 'collections.approve', 'balances.read'],
   };
