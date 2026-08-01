@@ -37,6 +37,13 @@ export class CustomersController {
     return this.customers.listDuplicates(user);
   }
 
+  @Get('data-quality')
+  @RequirePermissions('duplicates.review')
+  @ApiOperation({ summary: 'Data quality KPIs: missing phone, pending duplicates, multi-currency, suspicious balances (read-only)' })
+  dataQuality(@CurrentUser() user: AuthUser) {
+    return this.customers.dataQuality(user);
+  }
+
   @Patch('duplicates/:pairId')
   @RequirePermissions('duplicates.review')
   @ApiOperation({ summary: 'اعتماد قرار مراجعة حالة تشابه' })

@@ -719,6 +719,42 @@ export class CustomersService {
     });
   }
 
+  // --------------------------------------------------------------------------
+  // Data Quality Dashboard: read-only counts from existing data only.
+  // No merge/delete/edit here — review stays a separate human decision (reviewDuplicate).
+  // --------------------------------------------------------------------------
+  async dataQuality(actor: AuthUser) {
+    const orgId = actor.organizationId;
+
+    const [missingPhone, pendingDuplicatePairs, currencyGroups, balances] = await Promise.all([
+      this.prisma.customer.count({
+        where: { organizationId: orgId, OR: [{ phonePrimary: null }, { phonePrimary: '' }] },
+      }),
+      this.prisma.potentialDuplicateCustomer.count({
+        where: { reviewStatus: 'pending', customerA: { organizationId: orgId } },
+      }),
+      this.prisma.customerBalance.groupBy({
+        by: ['customerId'],
+        where: { customer: { organizationId: orgId } },
+        _count: { currencyCode: true },
+      }),
+      this.prisma.customerBalance.findMany({
+        where: {
+          customer: { organizationId: orgId },
+          declaredBalance: { not: null },
+        },
+        select: { accountingBalance: true, declaredBalance: true },
+      }),
+    ]);
+
+    const multiCurrencyCustomers = currencyGroups.filter((g) => g._count.currencyCode > 1).length;
+    const suspiciousBalances = balances.filter(
+      (b) => b.declaredBalance !== null && Number(b.declaredBalance) !== Number(b.accountingBalance),
+    ).length;
+
+    return { missingPhone, pendingDuplicatePairs, multiCurrencyCustomers, suspiciousBalances };
+  }
+
   async reviewDuplicate(actor: AuthUser, pairId: string, decision: string, req?: Request) {
     const pair = await this.prisma.potentialDuplicateCustomer.findFirst({
       where: { id: pairId, customerA: { organizationId: actor.organizationId } },
