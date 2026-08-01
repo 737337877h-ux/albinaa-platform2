@@ -10,6 +10,8 @@ import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR
 import { friendlyApiError } from '@/lib/errors';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
+import { Dialog } from '@/components/ui/dialog';
+import { toast } from '@/components/ui/toast';
 import { Badge, Button, Card, Empty, ErrorNote, Field, Input, Money, Pagination, Select, Skeleton, Textarea } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsPanel } from '@/components/ui/tabs';
@@ -145,6 +147,25 @@ interface PaginatedResponse<T> {
   totalsByCurrency?: Record<string, number>;
 }
 
+interface ReservationItem {
+  id: string;
+  itemName: string;
+  itemType: string | null;
+  quantity: string | number | null;
+  unit: string | null;
+  unitPrice: string | number | null;
+  totalAmount: string | number | null;
+  issuedQty: string | number;
+  remainingQty: string | number | null;
+  currencyCode: string;
+  status: string;
+  warehouse: string | null;
+  documentNumber: string | null;
+  notes: string | null;
+  reservedAt: string;
+  expiresAt: string | null;
+}
+
 interface RiskFactor {
   label: string;
   points: number;
@@ -221,6 +242,13 @@ function promiseStatusBadge(s: string) {
   return tones[s] ?? 'neutral';
 }
 
+function reservationStatusBadge(s: string) {
+  const tones: Record<string, string> = {
+    open: 'neutral', partial: 'hazard', completed: 'pine', cancelled: 'debt',
+  };
+  return tones[s] ?? 'neutral';
+}
+
 function collectionStatusBadge(s: string) {
   const tones: Record<string, string> = {
     approved: 'pine', matched: 'pine',
@@ -242,6 +270,7 @@ export default function Customer360Page() {
   const canRisk = can('risk.read');
   const canTasks = can('tasks.manage');
   const canTransfer = can('customers.transfer');
+  const canReservationsManage = can('reservations.manage');
   const qc = useQueryClient();
 
   const [tab, setTab] = useState(searchParams.get('tab') ?? 'overview');
@@ -307,6 +336,56 @@ export default function Customer360Page() {
     ),
     enabled: canRead && tab === 'collections',
   });
+
+  /* ──────── Reservations (PR-F) ──────── */
+  const reservations = useQuery<ReservationItem[]>({
+    queryKey: ['reservations', id],
+    queryFn: () => api<ReservationItem[]>(`/reservations?customerId=${id}`),
+    enabled: canRead && tab === 'reservations',
+  });
+
+  const [createResOpen, setCreateResOpen] = useState(false);
+  const [issueRes, setIssueRes] = useState<ReservationItem | null>(null);
+
+  const createResMut = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      api('/reservations', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      toast('تم إنشاء الحجز بنجاح', 'ok');
+      setCreateResOpen(false);
+      qc.invalidateQueries({ queryKey: ['reservations', id] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const issueResMut = useMutation({
+    mutationFn: ({ resId, qty }: { resId: string; qty: number }) =>
+      api(`/reservations/${resId}/issue`, { method: 'POST', body: JSON.stringify({ qty }) }),
+    onSuccess: () => {
+      toast('تم صرف الكمية بنجاح', 'ok');
+      setIssueRes(null);
+      qc.invalidateQueries({ queryKey: ['reservations', id] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const cancelResMut = useMutation({
+    mutationFn: (resId: string) => api(`/reservations/${resId}/cancel`, { method: 'POST' }),
+    onSuccess: () => {
+      toast('تم إلغاء الحجز', 'ok');
+      qc.invalidateQueries({ queryKey: ['reservations', id] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const [resForm, setResForm] = useState({
+    itemName: '', itemType: '', quantity: '', unit: '', unitPrice: '',
+    currencyCode: 'YER', warehouse: '', documentNumber: '', notes: '', expiresAt: '',
+  });
+  const resFormValid = resForm.itemName.trim() !== '' && resForm.unit.trim() !== ''
+    && Number(resForm.quantity) > 0 && Number(resForm.unitPrice) > 0;
+
+  const [issueQty, setIssueQty] = useState('');
 
   /* ──────── Risk score (PR 4) ──────── */
   const risk = useQuery<RiskResponse>({
@@ -489,6 +568,7 @@ export default function Customer360Page() {
           <TabsTrigger value="followups" badge={c?.counts.followups}>المتابعات</TabsTrigger>
           <TabsTrigger value="promises" badge={c?.counts.promises}>الوعود</TabsTrigger>
           <TabsTrigger value="collections" badge={c?.counts.collections}>التحصيلات</TabsTrigger>
+          <TabsTrigger value="reservations" badge={reservations.data?.length}>Reservations</TabsTrigger>
         </TabsList>
 
         {/* ──────────────── Overview Tab ──────────────── */}
@@ -889,7 +969,201 @@ export default function Customer360Page() {
             </DataState>
           </Card>
         </TabsPanel>
+
+        {/* Reservations tab (PR-F) — operational tracking only, no balance impact. English labels here to avoid RTL corruption. */}
+        <TabsPanel value="reservations">
+          <Card>
+            {canReservationsManage && (
+              <div className="flex justify-end border-b border-concrete-100 px-4 py-2.5 dark:border-white/10">
+                <Button onClick={() => setCreateResOpen(true)}>New Reservation</Button>
+              </div>
+            )}
+            <DataState
+              isLoading={reservations.isLoading}
+              isError={reservations.isError}
+              error={reservations.error}
+              onRetry={() => reservations.refetch()}
+              isFetching={reservations.isFetching}
+              isEmpty={!reservations.data?.length}
+              emptyTitle="No goods reservations"
+              skeletonClassName="h-48"
+            >
+              <Table>
+                <THead cols={['Item', 'Quantity', 'Unit', 'Unit price', 'Total', 'Issued', 'Remaining', 'Status', 'Reserved date', '']} />
+                <tbody>
+                  {(reservations.data ?? []).map(r => (
+                    <TRow key={r.id}>
+                      <TD>
+                        <div className="font-medium">{r.itemName}</div>
+                        {r.itemType && <p className="text-xs text-concrete-500">{r.itemType}</p>}
+                      </TD>
+                      <TD className="tnum">{r.quantity ?? '—'}</TD>
+                      <TD>{r.unit ?? '—'}</TD>
+                      <TD><Money value={r.unitPrice ?? 0} currency={r.currencyCode} /></TD>
+                      <TD><Money value={r.totalAmount ?? 0} currency={r.currencyCode} /></TD>
+                      <TD className="tnum">{r.issuedQty}</TD>
+                      <TD className="tnum">{r.remainingQty ?? '—'}</TD>
+                      <TD>
+                        <Badge tone={reservationStatusBadge(r.status) as any}>
+                          {{ open: 'Open', partial: 'Partial', completed: 'Completed', cancelled: 'Cancelled' }[r.status] ?? r.status}
+                        </Badge>
+                      </TD>
+                      <TD>{fmtDate(r.reservedAt)}</TD>
+                      <TD>
+                        {canReservationsManage && r.status !== 'completed' && r.status !== 'cancelled' && (
+                          <div className="flex gap-2">
+                            <Button variant="secondary" onClick={() => setIssueRes(r)}>Issue</Button>
+                            <Button variant="danger" onClick={() => cancelResMut.mutate(r.id)} loading={cancelResMut.isPending}>
+                              Cancel
+                            </Button>
+                          </div>
+                        )}
+                      </TD>
+                    </TRow>
+                  ))}
+                </tbody>
+              </Table>
+            </DataState>
+          </Card>
+        </TabsPanel>
       </Tabs>
+
+      {/* Reservations dialogs (PR-F) — English labels to avoid RTL corruption. */}
+      <Dialog
+        open={createResOpen}
+        onClose={() => setCreateResOpen(false)}
+        title="New Reservation"
+      >
+        <div className="space-y-4">
+          <Field label="Item *">
+            <Input
+              value={resForm.itemName}
+              onChange={(e) => setResForm(f => ({ ...f, itemName: e.target.value }))}
+              placeholder="e.g. Iron rebar 12mm"
+            />
+          </Field>
+          <Field label="Item type" hint="Optional">
+            <Input
+              value={resForm.itemType}
+              onChange={(e) => setResForm(f => ({ ...f, itemType: e.target.value }))}
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Quantity *">
+              <Input
+                type="number" min="0" step="any"
+                value={resForm.quantity}
+                onChange={(e) => setResForm(f => ({ ...f, quantity: e.target.value }))}
+              />
+            </Field>
+            <Field label="Unit *">
+              <Input
+                value={resForm.unit}
+                onChange={(e) => setResForm(f => ({ ...f, unit: e.target.value }))}
+                placeholder="ton, piece..."
+              />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Unit price *">
+              <Input
+                type="number" min="0" step="any"
+                value={resForm.unitPrice}
+                onChange={(e) => setResForm(f => ({ ...f, unitPrice: e.target.value }))}
+              />
+            </Field>
+            <Field label="Currency *">
+              <Select
+                value={resForm.currencyCode}
+                onChange={(e) => setResForm(f => ({ ...f, currencyCode: e.target.value }))}
+              >
+                {Object.entries(CCY_AR).map(([code]) => (
+                  <option key={code} value={code}>{code}</option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <Field label="Warehouse" hint="Optional">
+            <Input
+              value={resForm.warehouse}
+              onChange={(e) => setResForm(f => ({ ...f, warehouse: e.target.value }))}
+            />
+          </Field>
+          <Field label="Document number" hint="Optional">
+            <Input
+              value={resForm.documentNumber}
+              onChange={(e) => setResForm(f => ({ ...f, documentNumber: e.target.value }))}
+            />
+          </Field>
+          <Field label="Notes" hint="Optional">
+            <Textarea
+              value={resForm.notes}
+              onChange={(e) => setResForm(f => ({ ...f, notes: e.target.value }))}
+              rows={2}
+            />
+          </Field>
+          <Field label="Expiry date" hint="Optional">
+            <Input
+              type="date"
+              value={resForm.expiresAt}
+              onChange={(e) => setResForm(f => ({ ...f, expiresAt: e.target.value }))}
+            />
+          </Field>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setCreateResOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!resFormValid}
+              loading={createResMut.isPending}
+              onClick={() => createResMut.mutate({
+                customerId: id,
+                itemName: resForm.itemName,
+                itemType: resForm.itemType || undefined,
+                quantity: Number(resForm.quantity),
+                unit: resForm.unit,
+                unitPrice: Number(resForm.unitPrice),
+                currencyCode: resForm.currencyCode,
+                warehouse: resForm.warehouse || undefined,
+                documentNumber: resForm.documentNumber || undefined,
+                notes: resForm.notes || undefined,
+                expiresAt: resForm.expiresAt || undefined,
+              })}
+            >
+              Create Reservation
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={!!issueRes}
+        onClose={() => setIssueRes(null)}
+        title="Issue Reserved Goods"
+      >
+        {issueRes && (
+          <div className="space-y-4">
+            <p className="text-sm text-concrete-600 dark:text-concrete-400">
+              {issueRes.itemName} — Remaining: <span className="tnum font-medium">{issueRes.remainingQty}</span> {issueRes.unit}
+            </p>
+            <Field label="Quantity to issue *">
+              <Input
+                type="number" min="0" step="any"
+                value={issueQty}
+                onChange={(e) => setIssueQty(e.target.value)}
+              />
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setIssueRes(null)}>Cancel</Button>
+              <Button
+                disabled={!(Number(issueQty) > 0 && Number(issueQty) <= Number(issueRes.remainingQty ?? 0))}
+                loading={issueResMut.isPending}
+                onClick={() => issueResMut.mutate({ resId: issueRes.id, qty: Number(issueQty) })}
+              >
+                Issue
+              </Button>
+            </div>
+          </div>
+        )}
+      </Dialog>
     </div>
   );
 }
