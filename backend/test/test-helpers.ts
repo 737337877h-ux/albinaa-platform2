@@ -43,7 +43,22 @@ export async function cleanupTestCustomers(prisma: PrismaService) {
     await prisma.customerAssignment.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customerCreditPolicy.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customer.deleteMany({ where: { id: { in: ids } } });
-    await prisma.importJob.deleteMany({});
+    // لا نحذف كل import_jobs (قد تشير لها أرصدة عملاء حقيقيين في بيئة تطوير مشتركة) —
+    // نحذف فقط الوظائف غير المرتبطة بأي بيانات بعد تنظيف عملاء الاختبار
+    await prisma.$executeRawUnsafe(`
+      DELETE FROM import_jobs j
+      WHERE NOT EXISTS (
+        SELECT 1 FROM balance_snapshots      b WHERE b.import_job_id = j.id
+        UNION ALL
+        SELECT 1 FROM imported_transactions  t WHERE t.import_job_id = j.id
+        UNION ALL
+        SELECT 1 FROM balance_reconciliations r WHERE r.import_job_id = j.id
+        UNION ALL
+        SELECT 1 FROM debt_aging_summary     a WHERE a.import_job_id = j.id
+        UNION ALL
+        SELECT 1 FROM debt_aging_details     d WHERE d.import_job_id = j.id
+      )
+    `);
   } finally {
     // إعادة تفعيل الحماية دائمًا حتى لو حدث خطأ
     await prisma.$executeRawUnsafe(`ALTER TABLE operational_ledger ENABLE TRIGGER trg_ledger_immutable`);

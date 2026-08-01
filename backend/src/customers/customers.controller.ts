@@ -130,4 +130,22 @@ export class CustomersController {
   ) {
     return this.customers.assignCollector(user, id, dto, req);
   }
+
+  @Get(':id/assignment')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'الإسناد الحالي للعميل + قائمة المحصلين النشطين (لاختيار الإسناد)' })
+  assignment(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.customers.assignment(user, id);
+  }
+
+  @Post(':id/unassign')
+  @RequirePermissions('customers.transfer')
+  @ApiOperation({ summary: 'فك إسناد العميل: إغلاق الإسناد الحالي + إعادة مهامه المفتوحة المسندة للمحصل إلى غير مسندة' })
+  unassign(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request,
+  ) {
+    return this.customers.unassignCollector(user, id, req);
+  }
 }

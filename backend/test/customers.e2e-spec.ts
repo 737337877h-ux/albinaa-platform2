@@ -25,6 +25,7 @@ describe('Customer Domain — Milestone 4 (e2e)', () => {
   let cust90001Id: string;
   let collectorUserToken: string;
   let collectorId: string;
+  let otherCollectorId: string;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -54,6 +55,14 @@ describe('Customer Domain — Milestone 4 (e2e)', () => {
       where: { externalCustomerCode: '90001' },
     });
     cust90001Id = c.id;
+
+    // محصل ثانٍ لاختبار العزل (لا يلمس فك الإسناد مهامه)
+    const userB = await request(app.getHttpServer())
+      .post('/users')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: `m4collectorB_${uniq}`, fullName: 'محصل م4ب', password: 'Test1234pass' })
+      .expect(201);
+    otherCollectorId = (await prisma.collector.create({ data: { userId: userB.body.id } })).id;
   });
 
   afterAll(async () => {
@@ -292,6 +301,90 @@ describe('Customer Domain — Milestone 4 (e2e)', () => {
     const open = history.filter((h) => h.effectiveTo === null);
     expect(open.length).toBe(1); // إسناد حالي واحد فقط (القيد الجزئي)
     expect(open[0].collectorId).toBe(collectorId);
+  });
+
+  // ==========================================================================
+  // PR 8 — إسناد/فك إسناد والمهام المفتوحة
+  // ==========================================================================
+  it('assign يسند المهام المفتوحة غير المسندة فقط ويرجع tasksUpdated', async () => {
+    const c = await prisma.customer.findFirstOrThrow({ where: { externalCustomerCode: '90002' } });
+    const mk = (taskType: string, status: string, assignedTo: string | null) =>
+      prisma.task.create({
+        data: {
+          customerId: c.id,
+          dueDate: new Date('2026-08-10'),
+          taskType,
+          status,
+          assignedTo,
+          priorityReason: 'اختبار إسناد',
+        },
+      });
+    const openNull = await mk('high_balance', 'open', null);
+    const openOther = await mk('followup_overdue', 'open', otherCollectorId);
+    const doneNull = await mk('risk_high', 'done', null);
+
+    const res = await request(app.getHttpServer())
+      .post(`/customers/${c.id}/assign`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ collectorId, reason: 'اختبار إسناد' })
+      .expect(201);
+    expect(res.body.tasksUpdated).toBe(1);
+
+    const after = await prisma.task.findMany({
+      where: { id: { in: [openNull.id, openOther.id, doneNull.id] } },
+    });
+    const byId = new Map(after.map((t) => [t.id, t]));
+    expect(byId.get(openNull.id)!.assignedTo).toBe(collectorId);
+    expect(byId.get(openOther.id)!.assignedTo).toBe(otherCollectorId);
+    expect(byId.get(doneNull.id)!.status).toBe('done');
+    expect(byId.get(doneNull.id)!.assignedTo).toBeNull();
+  });
+
+  it('unassign يغلق الإسناد ويفك فقط مهام المحصل المفتوحة ويرجع tasksUpdated', async () => {
+    // 90001 مسند حاليًا إلى collectorId (من اختبار النقل أعلاه)
+    const c = await prisma.customer.findFirstOrThrow({ where: { externalCustomerCode: '90001' } });
+    const mk = (taskType: string, status: string, assignedTo: string | null) =>
+      prisma.task.create({
+        data: {
+          customerId: c.id,
+          dueDate: new Date('2026-08-10'),
+          taskType,
+          status,
+          assignedTo,
+          priorityReason: 'اختبار فك إسناد',
+        },
+      });
+    const o1 = await mk('high_balance', 'open', collectorId);
+    const o2 = await mk('followup_overdue', 'open', collectorId);
+    const o3 = await mk('risk_high', 'open', otherCollectorId);
+    const o4 = await mk('debt_ageing', 'done', collectorId);
+    const o5 = await mk('unfollowed', 'open', null);
+
+    const res = await request(app.getHttpServer())
+      .post(`/customers/${c.id}/unassign`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(201);
+    expect(res.body.unassigned).toBe(true);
+    expect(res.body.tasksUpdated).toBe(2);
+
+    const after = await prisma.task.findMany({
+      where: { id: { in: [o1.id, o2.id, o3.id, o4.id, o5.id] } },
+    });
+    const byId = new Map(after.map((t) => [t.id, t]));
+    expect(byId.get(o1.id)!.assignedTo).toBeNull();
+    expect(byId.get(o2.id)!.assignedTo).toBeNull();
+    expect(byId.get(o3.id)!.assignedTo).toBe(otherCollectorId);
+    expect(byId.get(o4.id)!.status).toBe('done');
+    expect(byId.get(o4.id)!.assignedTo).toBe(collectorId);
+    expect(byId.get(o5.id)!.assignedTo).toBeNull();
+
+    // الإسناد الحالي أُغلق (لا أحداث مفتوحة) والتاريخ محفوظ
+    const openAssign = await prisma.customerAssignment.findFirst({
+      where: { customerId: c.id, effectiveTo: null },
+    });
+    expect(openAssign).toBeNull();
+    const history = await prisma.customerAssignment.findMany({ where: { customerId: c.id } });
+    expect(history.some((h) => h.effectiveTo !== null)).toBe(true);
   });
 
   // ==========================================================================

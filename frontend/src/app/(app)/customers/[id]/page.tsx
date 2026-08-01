@@ -1,9 +1,9 @@
 'use client';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
-import { ArrowDownUp, Download, Phone, MapPin, Building2, UserCheck, Clock, AlertTriangle } from 'lucide-react';
+import { ArrowDownUp, Download, Phone, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
@@ -185,6 +185,16 @@ interface CustomerTaskItem {
   assignedToName: string | null;
 }
 
+interface AssignmentResponse {
+  assignment: {
+    collectorId: string;
+    collectorName: string;
+    since: string;
+    reason: string | null;
+  } | null;
+  collectors: { id: string; name: string }[];
+}
+
 /* ──────────────────────────────── Status Helpers ──────────────────────────────────── */
 
 const TIMELINE_COLORS: Record<string, string> = {
@@ -231,6 +241,8 @@ export default function Customer360Page() {
   const canBalances = can('balances.read');
   const canRisk = can('risk.read');
   const canTasks = can('tasks.manage');
+  const canTransfer = can('customers.transfer');
+  const qc = useQueryClient();
 
   const [tab, setTab] = useState(searchParams.get('tab') ?? 'overview');
 
@@ -310,6 +322,36 @@ export default function Customer360Page() {
     queryFn: () => api<CustomerTaskItem[]>(`/tasks/by-customer/${id}`),
     enabled: canRead && canTasks,
     retry: false,
+  });
+
+  /* ──────── Assignment (إسناد/فك إسناد) ──────── */
+  const [selCollector, setSelCollector] = useState('');
+  const assignment = useQuery<AssignmentResponse>({
+    queryKey: ['customer360-assignment', id],
+    queryFn: () => api<AssignmentResponse>(`/customers/${id}/assignment`),
+    enabled: canRead,
+    retry: false,
+  });
+  const refreshAfterAssignment = () => {
+    qc.invalidateQueries({ queryKey: ['customer360', id] });
+    qc.invalidateQueries({ queryKey: ['customer360-assignment', id] });
+    qc.invalidateQueries({ queryKey: ['customer360-tasks', id] });
+    qc.invalidateQueries({ queryKey: ['tasks-today'] });
+  };
+  const assignMut = useMutation({
+    mutationFn: (collectorId: string) =>
+      api(`/customers/${id}/assign`, {
+        method: 'POST',
+        body: JSON.stringify({ collectorId, reason: 'إسناد من Customer360' }),
+      }),
+    onSuccess: () => {
+      setSelCollector('');
+      refreshAfterAssignment();
+    },
+  });
+  const unassignMut = useMutation({
+    mutationFn: () => api(`/customers/${id}/unassign`, { method: 'POST' }),
+    onSuccess: refreshAfterAssignment,
   });
 
   /* ──────── CSV Export ──────── */
@@ -469,6 +511,26 @@ export default function Customer360Page() {
                     isError={customerTasks.isError}
                     error={customerTasks.error}
                     onRetry={() => customerTasks.refetch()}
+                  />
+                )}
+
+                {/* Assignment (إسناد/فك إسناد) */}
+                {canRead && (
+                  <AssignmentCard
+                    data={assignment.data}
+                    isLoading={assignment.isLoading}
+                    isError={assignment.isError}
+                    error={assignment.error}
+                    onRetry={() => assignment.refetch()}
+                    canManage={canTransfer}
+                    selCollector={selCollector}
+                    onSelectCollector={setSelCollector}
+                    assignBusy={assignMut.isPending}
+                    unassignBusy={unassignMut.isPending}
+                    assignError={assignMut.isError ? assignMut.error : null}
+                    unassignError={unassignMut.isError ? unassignMut.error : null}
+                    onAssign={() => { if (selCollector) assignMut.mutate(selCollector); }}
+                    onUnassign={() => unassignMut.mutate()}
                   />
                 )}
 
@@ -923,6 +985,96 @@ function TasksCard({ data, isLoading, isError, error, onRetry }: {
             ))}
           </tbody>
         </Table>
+      )}
+    </Card>
+  );
+}
+
+function AssignmentCard({ data, isLoading, isError, error, onRetry, canManage, selCollector, onSelectCollector, assignBusy, unassignBusy, assignError, unassignError, onAssign, onUnassign }: {
+  data: AssignmentResponse | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+  onRetry: () => void;
+  canManage: boolean;
+  selCollector: string;
+  onSelectCollector: (v: string) => void;
+  assignBusy: boolean;
+  unassignBusy: boolean;
+  assignError: unknown;
+  unassignError: unknown;
+  onAssign: () => void;
+  onUnassign: () => void;
+}) {
+  const current = data?.assignment ?? null;
+  return (
+    <Card>
+      <div className="flex items-center justify-between border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-iron-900 dark:text-concrete-100">
+          <UserCheck className="h-4 w-4 text-pine-700 dark:text-pine-100" /> الإسناد للمحصل
+        </h3>
+      </div>
+      {isLoading ? (
+        <Skeleton className="m-4 h-20" />
+      ) : isError ? (
+        <div className="space-y-2 p-4">
+          <ErrorNote message={friendlyApiError(error)} />
+          <Button variant="secondary" onClick={onRetry}>إعادة المحاولة</Button>
+        </div>
+      ) : (
+        <div className="space-y-3 p-4">
+          {current ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge tone="pine">{current.collectorName}</Badge>
+              <span className="text-concrete-500">منذ {fmtDate(current.since)}</span>
+              {current.reason && (
+                <span className="text-xs text-concrete-400">({current.reason})</span>
+              )}
+            </div>
+          ) : data!.collectors.length === 0 ? (
+            <p className="text-sm text-concrete-600 dark:text-concrete-400">
+              العميل غير مسند لأي محصل — لا يوجد محصلون نشطون في المنظمة حالياً.
+            </p>
+          ) : (
+            <p className="text-sm text-concrete-600 dark:text-concrete-400">
+              العميل غير مسند لأي محصل حالياً.
+            </p>
+          )}
+
+          {canManage && data!.collectors.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={selCollector}
+                onChange={e => onSelectCollector(e.target.value)}
+                className="min-w-[220px]"
+              >
+                <option value="">اختر محصلاً...</option>
+                {data!.collectors.map(co => (
+                  <option key={co.id} value={co.id}>{co.name}</option>
+                ))}
+              </Select>
+              <Button
+                onClick={onAssign}
+                disabled={!selCollector || assignBusy}
+                title={!selCollector ? 'اختر محصلاً أولاً' : undefined}
+              >
+                {assignBusy ? 'جارٍ الإسناد...' : 'إسناد'}
+              </Button>
+              {current && (
+                <Button variant="secondary" onClick={onUnassign} disabled={unassignBusy}>
+                  <UserX className="h-4 w-4" /> {unassignBusy ? 'جارٍ فك الإسناد...' : 'فك الإسناد'}
+                </Button>
+              )}
+            </div>
+          )}
+
+          {assignError ? (
+            <ErrorNote message={friendlyApiError(assignError)} />
+          ) : null}
+          {unassignError ? (
+            <ErrorNote message={friendlyApiError(unassignError)} />
+          ) : null}
+        </div>
       )}
     </Card>
   );
