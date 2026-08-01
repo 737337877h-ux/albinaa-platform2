@@ -1,9 +1,12 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { PromisesService } from '../promises/promises.service';
+import { CompleteTaskDto, TASK_COMPLETE_RESULT_LABELS } from './dto/complete-task.dto';
 
 /**
  * قائمة أولويات قائمة عمل اليوم (PR 5) — الترتيب المعتمد من مالك المنتج:
@@ -837,6 +840,117 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException('المهمة غير موجودة أو خارج نطاق صلاحيتك');
     return this.prisma.task.update({ where: { id: taskId }, data: { status: 'done' } });
+  }
+
+  /**
+   * إكمال مهمة مع تسجيل متابعة ونتيجتها (PR 9):
+   * - يغلق المهمة المفتوحة (done) ويُسجّل متابعة بنتيجة معتمدة.
+   * - عند result=promise: يُنشئ وعد سداد عبر PromisesService (وعد + مهمته في معاملة واحدة)
+   *   مع التحقق المسبق من المدخلات حتى لا تُغلق المهمة ثم يفشل الوعد.
+   * - بلا تحصيل مالي، بلا رسائل واتساب — إنجاز وتسجيل متابعة فقط.
+   */
+  async completeWithResult(user: AuthUser, taskId: string, dto: CompleteTaskDto, req?: Request) {
+    const collector = await this.resolveCollector(user, undefined).catch(() => null);
+    const task = await this.prisma.task.findFirst({
+      where: {
+        id: taskId,
+        ...(user.permissions.includes('customers.read_all') || !collector
+          ? {}
+          : { assignedTo: collector.id }),
+      },
+    });
+    if (!task) throw new NotFoundException('المهمة غير موجودة أو خارج نطاق صلاحيتك');
+    if (task.status !== 'open') {
+      throw new ConflictException(`المهمة في الحالة "${task.status}" — يمكن إتمام المهام المفتوحة فقط`);
+    }
+    if (!task.customerId) {
+      throw new BadRequestException('المهمة بلا عميل — لا يمكن تسجيل متابعة لها');
+    }
+
+    const result = dto.result ?? 'note';
+    const resultLabel = TASK_COMPLETE_RESULT_LABELS[result];
+
+    // التحقق المسبق من الوعد قبل أي كتابة (لا إغلاق للمهمة ثم فشل الوعد)
+    let promiseDue: { date: Date; amount: number; currency: string } | null = null;
+    if (result === 'promise') {
+      if (!dto.promiseDueDate) {
+        throw new BadRequestException('عند اختيار نتيجة "وعد بالسداد" يجب تحديد تاريخ الاستحقاق (promiseDueDate)');
+      }
+      const amount = dto.promiseAmount ?? Number(task.expectedAmount ?? 0);
+      const currency = dto.promiseCurrency ?? task.expectedCurrency ?? '';
+      if (!amount || amount <= 0) {
+        throw new BadRequestException(
+          'عند اختيار "وعد بالسداد" يجب تحديد مبلغ الوعد (promiseAmount) أو أن يكون المبلغ المتوقع محددًا في المهمة',
+        );
+      }
+      if (!currency) {
+        throw new BadRequestException(
+          'عند اختيار "وعد بالسداد" يجب تحديد عملة الوعد (promiseCurrency) أو أن تكون العملة محددة في المهمة',
+        );
+      }
+      const currencyRow = await this.prisma.currency.findFirst({ where: { code: currency, active: true } });
+      if (!currencyRow) throw new BadRequestException('العملة غير معروفة');
+      promiseDue = { date: new Date(dto.promiseDueDate), amount, currency };
+    }
+
+    // نوع المتابعة الافتراضي + نتيجة المتابعة — upsert لضمان التوفر مهما كان سجل المنشأة
+    const followupType = await this.prisma.followupType.upsert({
+      where: { organizationId_name: { organizationId: user.organizationId, name: 'مكالمة هاتفية' } },
+      update: {},
+      create: { organizationId: user.organizationId, name: 'مكالمة هاتفية' },
+    });
+    const followupResult = await this.prisma.followupResult.upsert({
+      where: { organizationId_name: { organizationId: user.organizationId, name: resultLabel } },
+      update: {},
+      create: { organizationId: user.organizationId, name: resultLabel },
+    });
+
+    // ذريًا: إغلاق المهمة + تسجيل المتابعة — لا إتمام بلا متابعة
+    const followup = await this.prisma.$transaction(async (tx) => {
+      await tx.task.update({ where: { id: taskId }, data: { status: 'done' } });
+      return tx.followup.create({
+        data: {
+          customerId: task.customerId!,
+          userId: user.id,
+          typeId: followupType.id,
+          resultId: followupResult.id,
+          followupAt: new Date(),
+          notes: dto.notes
+            ?? `إنجاز مهمة — ${resultLabel}${task.priorityReason ? ` (${task.priorityReason})` : ''}`,
+          nextFollowupDate: dto.nextFollowupDate ? new Date(dto.nextFollowupDate) : null,
+          expectedAmount: task.expectedAmount === null ? null : Number(task.expectedAmount),
+          expectedCurrency: task.expectedCurrency,
+        },
+      });
+    });
+
+    await this.audit.log({
+      userId: user.id, action: 'task_completed', entityTable: 'tasks', entityId: taskId,
+      oldValue: { status: 'open' },
+      newValue: {
+        status: 'done', result: resultLabel, followupId: followup.id,
+        promiseDueDate: promiseDue ? promiseDue.date.toISOString().slice(0, 10) : null,
+      },
+      req,
+    });
+
+    let promise: Awaited<ReturnType<PromisesService['create']>> | null = null;
+    if (promiseDue) {
+      promise = await this.promises.create(user, {
+        customerId: task.customerId,
+        collectorId: task.assignedTo ?? undefined,
+        dueDate: promiseDue.date.toISOString(),
+        expectedAmount: promiseDue.amount,
+        currencyCode: promiseDue.currency,
+        notes: dto.notes ?? `وعد سداد سُجّل من إكمال مهمة (${task.taskType})`,
+      }, req);
+    }
+
+    return {
+      task: { id: taskId, status: 'done' },
+      followup: { id: followup.id, result: resultLabel },
+      promise: promise ? { id: promise.id, dueDate: promiseDue!.date, status: promise.status } : null,
+    };
   }
 
   /** إنشاء مهمة جديدة. الإدارة (customers.read_all) تحدد collectorId صراحة أو تُترك فارغة للإسناد الذاتي. */
