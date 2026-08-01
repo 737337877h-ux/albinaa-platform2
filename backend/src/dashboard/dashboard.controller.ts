@@ -11,6 +11,15 @@ import { DashboardService } from './dashboard.service';
 export class DashboardController {
   constructor(private readonly dashboard: DashboardService) {}
 
+  @Get('kpis')
+  @RequirePermissions('reports.read')
+  @ApiOperation({
+    summary: 'KPI Dashboard (PR 7): توزيع المخاطر، مهام اليوم، أعلى أسباب المهام، عملاء +120 يوم، أعلى المخاطر، أولوية المهام',
+  })
+  kpis(@CurrentUser() user: AuthUser) {
+    return this.dashboard.kpis(user);
+  }
+
   @Get('summary')
   @RequirePermissions('reports.read')
   @ApiOperation({
