@@ -4,13 +4,13 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { ArrowDownUp, Download, Phone, MapPin, Building2, UserCheck, Clock, AlertTriangle } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { useCan } from '@/lib/auth';
-import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
+import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
-import { Badge, Button, Card, Empty, Money, Pagination, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, Empty, ErrorNote, Money, Pagination, Select, Skeleton } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsPanel } from '@/components/ui/tabs';
 
@@ -145,6 +145,46 @@ interface PaginatedResponse<T> {
   totalsByCurrency?: Record<string, number>;
 }
 
+interface RiskFactor {
+  label: string;
+  points: number;
+  text: string;
+}
+
+interface RiskResponse {
+  customerId: string;
+  customerCode: string;
+  customerName: string;
+  score: number;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  reasons: {
+    factors: Record<string, RiskFactor>;
+    perCurrency: {
+      currency: string | null;
+      score: number;
+      riskLevel: string;
+      factors: Record<string, RiskFactor>;
+    }[];
+  };
+  computedAt: string;
+}
+
+interface CustomerTaskItem {
+  id: string;
+  customerId: string;
+  customerName: string;
+  customerCode: string | null;
+  taskType: string;
+  priority: number;
+  priorityReason: string;
+  dueDate: string;
+  status: string;
+  expectedAmount: number | null;
+  expectedCurrency: string | null;
+  assignedTo: string | null;
+  assignedToName: string | null;
+}
+
 /* ──────────────────────────────── Status Helpers ──────────────────────────────────── */
 
 const TIMELINE_COLORS: Record<string, string> = {
@@ -189,6 +229,8 @@ export default function Customer360Page() {
   const can = useCan();
   const canRead = can('customers.read');
   const canBalances = can('balances.read');
+  const canRisk = can('risk.read');
+  const canTasks = can('tasks.manage');
 
   const [tab, setTab] = useState(searchParams.get('tab') ?? 'overview');
 
@@ -252,6 +294,22 @@ export default function Customer360Page() {
       `/collections?customerId=${id}&page=${coPage}&limit=25`,
     ),
     enabled: canRead && tab === 'collections',
+  });
+
+  /* ──────── Risk score (PR 4) ──────── */
+  const risk = useQuery<RiskResponse>({
+    queryKey: ['customer360-risk', id],
+    queryFn: () => api<RiskResponse>(`/customers/${id}/risk`),
+    enabled: canRead && canRisk,
+    retry: false,
+  });
+
+  /* ──────── Customer open tasks (PR 5) ──────── */
+  const customerTasks = useQuery<CustomerTaskItem[]>({
+    queryKey: ['customer360-tasks', id],
+    queryFn: () => api<CustomerTaskItem[]>(`/tasks/by-customer/${id}`),
+    enabled: canRead && canTasks,
+    retry: false,
   });
 
   /* ──────── CSV Export ──────── */
@@ -391,6 +449,28 @@ export default function Customer360Page() {
                   <StatCard label="تاريخRelationship" value={c.relationshipStartDate ? fmtDate(c.relationshipStartDate) : '—'} />
                   <StatCard label="تاريخ الإنشاء" value={fmtDateTime(c.createdAt)} />
                 </div>
+
+                {/* Risk Score (PR 4) */}
+                {canRisk && (
+                  <RiskCard
+                    data={risk.data}
+                    isLoading={risk.isLoading}
+                    isError={risk.isError}
+                    error={risk.error}
+                    onRetry={() => risk.refetch()}
+                  />
+                )}
+
+                {/* Open Tasks (PR 5) */}
+                {canTasks && (
+                  <TasksCard
+                    data={customerTasks.data}
+                    isLoading={customerTasks.isLoading}
+                    isError={customerTasks.isError}
+                    error={customerTasks.error}
+                    onRetry={() => customerTasks.refetch()}
+                  />
+                )}
 
                 {/* Detail Grid */}
                 <Card className="p-4">
@@ -718,6 +798,135 @@ export default function Customer360Page() {
 }
 
 /* ──────────────────────────── Small Helpers ────────────────────────────── */
+
+const RISK_LEVEL_TONE: Record<string, 'neutral' | 'pine' | 'hazard' | 'debt' | 'credit'> = {
+  low: 'pine', medium: 'credit', high: 'hazard', critical: 'debt',
+};
+const RISK_LEVEL_AR: Record<string, string> = {
+  low: 'منخفضة', medium: 'متوسطة', high: 'مرتفعة', critical: 'حرجة',
+};
+
+function RiskCard({ data, isLoading, isError, error, onRetry }: {
+  data: RiskResponse | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+  onRetry: () => void;
+}) {
+  const notComputed = isError && error instanceof ApiError && error.status === 404;
+  const factors = Object.values(data?.reasons?.factors ?? {}).sort((a, b) => b.points - a.points);
+  return (
+    <Card className="p-4">
+      <h3 className="mb-3 text-sm font-semibold text-iron-900 dark:text-concrete-100">درجة المخاطر</h3>
+      {isLoading ? (
+        <Skeleton className="h-24" />
+      ) : notComputed || !data ? (
+        <Empty
+          title="لا توجد درجة مخاطر محسوبة"
+          hint="نفّذ إعادة احتساب درجات المخاطر أولاً من شاشة إعدادات النظام"
+        />
+      ) : (
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="tnum text-3xl font-bold text-iron-900 dark:text-concrete-100">{data.score}</span>
+            <Badge tone={RISK_LEVEL_TONE[data.riskLevel] ?? 'neutral'}>
+              {RISK_LEVEL_AR[data.riskLevel] ?? data.riskLevel}
+            </Badge>
+            <span className="text-xs text-concrete-400">آخر احتساب: {fmtDateTime(data.computedAt)}</span>
+          </div>
+          {factors.length > 0 && (
+            <ul className="mt-3 space-y-1.5">
+              {factors.map((f, i) => (
+                <li key={i} className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="tnum w-8 shrink-0 rounded bg-concrete-100 px-1 text-center text-xs font-bold text-concrete-600 dark:bg-white/10 dark:text-concrete-300">
+                    {f.points}
+                  </span>
+                  <span className="w-36 shrink-0 text-xs text-concrete-500">{f.label}</span>
+                  <span className="text-concrete-700 dark:text-concrete-200">{f.text}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {isError && !notComputed && (
+            <div className="mt-3 space-y-2">
+              <ErrorNote message={friendlyApiError(error)} />
+              <Button variant="secondary" onClick={onRetry}>إعادة المحاولة</Button>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function TasksCard({ data, isLoading, isError, error, onRetry }: {
+  data: CustomerTaskItem[] | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+  onRetry: () => void;
+}) {
+  return (
+    <Card>
+      <div className="flex items-center justify-between border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+        <h3 className="text-sm font-semibold text-iron-900 dark:text-concrete-100">المهام المفتوحة</h3>
+        {data && data.length > 0 && <Badge tone="hazard">{data.length} مهمة</Badge>}
+      </div>
+      {isLoading ? (
+        <Skeleton className="h-24" />
+      ) : isError ? (
+        <div className="space-y-2 p-4">
+          <ErrorNote message={friendlyApiError(error)} />
+          <Button variant="secondary" onClick={onRetry}>إعادة المحاولة</Button>
+        </div>
+      ) : !data?.length ? (
+        <Empty
+          title="لا توجد مهام مفتوحة لهذا العميل"
+          hint="تظهر المهام هنا بعد توليد قائمة عمل اليوم"
+        />
+      ) : (
+        <Table>
+          <thead>
+            <tr className="border-b border-concrete-100 text-right text-xs text-concrete-500 dark:border-white/10">
+              <th className="px-4 py-2.5 font-medium">النوع</th>
+              <th className="px-4 py-2.5 font-medium">السبب</th>
+              <th className="px-4 py-2.5 font-medium">المبلغ المتوقع</th>
+              <th className="px-4 py-2.5 font-medium">الإسناد</th>
+              <th className="px-4 py-2.5 font-medium">الاستحقاق</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map(t => (
+              <TRow key={t.id}>
+                <TD className="text-xs">
+                  <Badge tone="neutral">{TASK_TYPE_AR[t.taskType] ?? t.taskType}</Badge>
+                </TD>
+                <TD className="text-xs text-concrete-600 dark:text-concrete-400">{t.priorityReason}</TD>
+                <TD>
+                  {t.expectedAmount != null && t.expectedCurrency ? (
+                    <Money value={t.expectedAmount} currency={t.expectedCurrency} />
+                  ) : (
+                    <span className="text-concrete-400">—</span>
+                  )}
+                </TD>
+                <TD className="text-xs">
+                  {t.assignedToName ? (
+                    <span className="flex items-center gap-1 text-pine-700 dark:text-pine-100">
+                      <UserCheck className="h-3.5 w-3.5" /> {t.assignedToName}
+                    </span>
+                  ) : (
+                    <Badge tone="hazard">غير مسند</Badge>
+                  )}
+                </TD>
+                <TD className="text-xs">{fmtDate(t.dueDate)}</TD>
+              </TRow>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Card>
+  );
+}
 
 function StatCard({ label, value }: { label: string; value: React.ReactNode }) {
   return (

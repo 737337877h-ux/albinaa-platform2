@@ -24,7 +24,17 @@ export const TASK_STATUS_AR: Record<string, string> = {
   open: 'مفتوحة', escalated: 'تصعيد', done: 'منجزة',
 };
 export const TASK_TYPE_AR: Record<string, string> = {
-  promise_due: 'وعد سداد مستحق', promise_escalation: 'تصعيد وعد متأخر',
+  promise_due: 'وعد سداد مستحق',
+  promise_escalation: 'تصعيد وعد متأخر',
+  followup_overdue: 'متابعة متأخرة',
+  risk_critical: 'مخاطر حرجة',
+  risk_high: 'مخاطر مرتفعة',
+  debt_120plus: 'دين +120 يوم',
+  high_balance_no_followup: 'رصيد مرتفع بلا متابعة حديثة',
+  repeated_no_answer: 'لا يرد متكرر',
+  needs_visit: 'يحتاج زيارة',
+  followup_periodic_medium: 'متابعة دورية (مخاطر متوسطة)',
+  followup_normal: 'متابعة عادية',
 };
 
 export const IMPORT_STATUS_AR: Record<string, string> = {
