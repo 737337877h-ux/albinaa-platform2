@@ -1,27 +1,24 @@
-# Project State — v1.2.0 Released
+# Project State — v1.2.1 Released
 
 ## Current Version
-**v1.2.0** — إدارة المديونية الذكية (Release Candidate) (2026-08-01)
+**v1.2.1** — صفحة الإشعارات الكاملة (Web Hotfix) (2026-08-01)
 
 ## Release Summary
 | Area | Status |
 |------|--------|
-| Import Profiles + Debt Aging storage | ✅ APMS detection + line-hash dedup |
-| Risk Score | ✅ 7 factors · recalculate endpoint |
-| Daily Work Queue | ✅ generate-today + priority board |
-| Customer360 Risk/Tasks | ✅ score/reasons + open tasks |
-| Dashboard KPIs | ✅ real data KPIs |
-| Customer Assignments | ✅ assign/unassign + task reassignment |
-| Task Execution + Followup + Promise | ✅ results + promise on completion |
-| Stabilization | ✅ full e2e 122/122 |
-| Tests | ✅ 122 e2e + 25 unit |
+| Notifications page | ✅ full list + kind/detail + read state + customer link |
+| Mark as read | ✅ per-notification (PATCH `/notifications/:id/read`) |
+| Mark all as read | ✅ header action (PATCH `/notifications/read-all`) |
+| Unread-only filter | ✅ with unread counter |
+| Pagination | ✅ 25/page via `GET /notifications` |
+| Bell sync | ✅ badge refreshes after any read action |
+| Tests | ✅ no schema/migration/dependency changes |
 | TypeScript / ESLint | ✅ 0 errors (Backend + Frontend) |
-| Docker Compose | ✅ all services healthy |
 
 ## Key Files
-- **Backend:** `backend/src/imports/`, `backend/src/risk/`, `backend/src/tasks/`, `backend/src/dashboard/`, `backend/src/customers/`, `backend/src/promises/`
-- **Frontend:** `frontend/src/app/(app)/dashboard/`, `frontend/src/app/(app)/customers/`, `frontend/src/app/(app)/tasks/`, `frontend/src/app/(app)/imports/`
-- **Docs:** `RELEASE_NOTES_v1.2.0.md`, `CHANGELOG.md`, `ROADMAP.md`
+- **Backend:** `backend/src/notifications/` (unchanged — v1.2.1 uses existing endpoints)
+- **Frontend:** `frontend/src/app/(app)/notifications/`, `frontend/src/components/notifications-menu.tsx`
+- **Docs:** `RELEASE_NOTES_v1.2.1.md`, `RELEASE_NOTES_v1.2.0.md`, `CHANGELOG.md`, `ROADMAP.md`
 
 ## Next (Planned — v1.3.0)
 - Push notifications (FCM/APNS)
