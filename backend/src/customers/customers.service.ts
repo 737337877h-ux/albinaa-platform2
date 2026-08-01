@@ -603,7 +603,7 @@ export class CustomersService {
           data: { effectiveTo: effectiveFrom },
         });
       }
-      return tx.customerAssignment.create({
+      const assignment = await tx.customerAssignment.create({
         data: {
           customerId: id,
           collectorId: dto.collectorId,
@@ -612,14 +612,85 @@ export class CustomersService {
           assignedBy: actor.id,
         },
       });
+      // PR 8: المهام المفتوحة غير المسندة لنفس العميل تُسند للمحصل الجديد (لا نقل تلقائي)
+      const tasksUpdated = await tx.task.updateMany({
+        where: { customerId: id, status: 'open', assignedTo: null },
+        data: { assignedTo: dto.collectorId },
+      });
+      return { assignment, tasksUpdated: tasksUpdated.count };
     });
 
     await this.audit.log({
       userId: actor.id, action: 'customer_reassigned', entityTable: 'customers', entityId: id,
       oldValue: { collectorId: current?.collectorId ?? null },
-      newValue: { collectorId: dto.collectorId, reason: dto.reason }, req,
+      newValue: { collectorId: dto.collectorId, reason: dto.reason, tasksUpdated: result.tasksUpdated }, req,
     });
-    return { assignment: result, collectorName: collector.user.fullName };
+    return { assignment: result.assignment, collectorName: collector.user.fullName, tasksUpdated: result.tasksUpdated };
+  }
+
+  /** إسناد العميل الحالي + قائمة المحصلين النشطين (لاختيار الإسناد من Customer360). */
+  async assignment(user: AuthUser, id: string) {
+    await this.assertAccess(user, id);
+    const [current, collectors] = await Promise.all([
+      this.prisma.customerAssignment.findFirst({
+        where: { customerId: id, effectiveTo: null },
+        include: { collector: { include: { user: { select: { fullName: true } } } } },
+      }),
+      this.prisma.collector.findMany({
+        where: { active: true, user: { organizationId: user.organizationId } },
+        include: { user: { select: { fullName: true } } },
+        orderBy: { user: { fullName: 'asc' } },
+      }),
+    ]);
+    return {
+      assignment: current
+        ? {
+            collectorId: current.collectorId,
+            collectorName: current.collector.user.fullName,
+            since: current.effectiveFrom,
+            reason: current.reason ?? null,
+          }
+        : null,
+      collectors: collectors.map((c) => ({ id: c.id, name: c.user.fullName })),
+    };
+  }
+
+  /** فك إسناد العميل: إغلاق الإسناد الحالي فقط (التاريخ محفوظ) + إعادة المهام المفتوحة المسندة للمحصل إلى غير مسندة. */
+  async unassignCollector(actor: AuthUser, id: string, req?: Request) {
+    await this.assertAccess(actor, id);
+    const current = await this.prisma.customerAssignment.findFirst({
+      where: { customerId: id, effectiveTo: null },
+      include: { collector: { include: { user: { select: { fullName: true } } } } },
+    });
+    if (!current) {
+      throw new BadRequestException('العميل غير مسند لأي محصل — لا حاجة لفك الإسناد');
+    }
+    const today = new Date();
+    const result = await this.prisma.$transaction(async (tx) => {
+      // إغلاق الإسناد الحالي فقط — لا نعدل التاريخ السابق
+      await tx.customerAssignment.update({
+        where: { id: current.id },
+        data: { effectiveTo: today },
+      });
+      // PR 8: فقط المهام المفتوحة المسندة لهذا المحصل تُعاد إلى غير مسندة.
+      // لا نلمس المهام المغلقة، ولا مهام مسندة لمحصل آخر، ولا المهام غير المسندة أصلًا.
+      const tasksUpdated = await tx.task.updateMany({
+        where: { customerId: id, status: 'open', assignedTo: current.collectorId },
+        data: { assignedTo: null },
+      });
+      return tasksUpdated.count;
+    });
+    await this.audit.log({
+      userId: actor.id, action: 'customer_unassigned', entityTable: 'customers', entityId: id,
+      oldValue: { collectorId: current.collectorId },
+      newValue: { effectiveTo: today, tasksUnassigned: result }, req,
+    });
+    return {
+      unassigned: true,
+      collectorId: current.collectorId,
+      collectorName: current.collector.user.fullName,
+      tasksUpdated: result,
+    };
   }
 
   // --------------------------------------------------------------------------
