@@ -93,6 +93,7 @@ model User {
   cashReceived         CashHandover[]
   followups            Followup[]
   tasksCreated         Task[]                  @relation("TaskCreator")
+  reservationsCreated  Reservation[]           @relation("ReservationCreator")
   attachments          Attachment[]
   gpsLogs              GpsLog[]
   notifications        Notification[]
@@ -728,20 +729,38 @@ model Reservation {
   id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   customerId     String    @map("customer_id") @db.Uuid
   currencyCode   String    @map("currency_code")
+
+  // --- Legacy fields (pre-PR-F credit-reservation shape) — kept as-is, not dropped, not used by app code ---
   creditAmount   Decimal   @map("credit_amount") @db.Decimal(18, 4)
   usedAmount     Decimal   @default(0) @map("used_amount") @db.Decimal(18, 4)
   paymentDate    DateTime? @map("payment_date") @db.Date
+
+  // --- Goods reservation fields (PR-F) — nullable so this ADD COLUMN stays non-destructive ---
+  itemName       String?   @map("item_name")
+  itemType       String?   @map("item_type")
+  quantity       Decimal?  @db.Decimal(18, 4)
+  unit           String?
+  unitPrice      Decimal?  @map("unit_price") @db.Decimal(18, 4)
+  totalAmount    Decimal?  @map("total_amount") @db.Decimal(18, 4)
+  issuedQty      Decimal   @default(0) @map("issued_qty") @db.Decimal(18, 4)
+  remainingQty   Decimal?  @map("remaining_qty") @db.Decimal(18, 4)
+  createdBy      String?   @map("created_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
   documentNumber String?   @map("document_number")
   warehouse      String?
   reservedAt     DateTime  @default(dbgenerated("CURRENT_DATE")) @map("reserved_at") @db.Date
   expiresAt      DateTime? @map("expires_at") @db.Date
-  status         String    @default("active")
+  status         String    @default("open")
   notes          String?
 
   customer Customer          @relation(fields: [customerId], references: [id])
   currency Currency          @relation(fields: [currencyCode], references: [code])
+  creator  User?             @relation("ReservationCreator", fields: [createdBy], references: [id])
   items    ReservationItem[]
 
+  @@index([customerId], map: "idx_reservations_customer")
   @@map("reservations")
 }
 
