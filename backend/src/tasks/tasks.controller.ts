@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
+import { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
@@ -21,6 +22,16 @@ export class TasksController {
   })
   today(@CurrentUser() user: AuthUser, @Query('collectorId') collectorId?: string) {
     return this.tasks.today(user, collectorId);
+  }
+
+  @Post('generate-today')
+  @RequirePermissions('tasks.manage')
+  @ApiOperation({
+    summary: 'توليد قائمة عمل اليوم: مهام مخزنة من درجات المخاطر، تقادم الديون، الوعود، المتابعات، الأرصدة، ' +
+      'والإسنادات — مع منع التكرار (عميل+عملة+نوع+تاريخ+مصدر) ودمج الأسباب وعدم نقل العملاء',
+  })
+  generateToday(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.tasks.generateToday(user, req);
   }
 
   @Get()
