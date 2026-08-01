@@ -32,7 +32,7 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000
-      APP_VERSION: 0.2.0
+      APP_VERSION: 1.2.0
       DATABASE_URL: postgresql://albinaa:${DB_PASSWORD:-albinaa_dev_only}@db:5432/albinaa?schema=public
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?يجب ضبط JWT_ACCESS_SECRET في .env}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?يجب ضبط JWT_REFRESH_SECRET في .env}
