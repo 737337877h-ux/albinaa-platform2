@@ -23,6 +23,7 @@ import { CurrenciesModule } from './currencies/currencies.module';
 import { SettingsModule } from './settings/settings.module';
 import { CollectorsModule } from './collectors/collectors.module';
 import { MobileModule } from './mobile/mobile.module';
+import { RiskModule } from './risk/risk.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -53,6 +54,7 @@ import { IdempotencyInterceptor } from './common/interceptors/idempotency.interc
     SettingsModule,
     CollectorsModule,
     MobileModule,
+    RiskModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },         // 1) Rate limiting
