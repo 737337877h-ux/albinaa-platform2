@@ -116,6 +116,8 @@ async function main() {
     ['risk.read', 'عرض درجة المخاطر'],
     ['risk.recalculate', 'إعادة احتساب درجات المخاطر'],
     ['reservations.manage', 'إدارة حجوزات البضاعة'],
+    ['analytical_accounts.manage', 'إدارة الحسابات التحليلية'],
+    ['analytical_accounts.read', 'عرض الحسابات التحليلية'],
   ];
   for (const [code, descriptionAr] of permissions) {
     await prisma.permission.upsert({ where: { code }, update: { descriptionAr }, create: { code, descriptionAr } });
@@ -130,6 +132,7 @@ async function main() {
       'customers.read', 'customers.read_all', 'customers.transfer', 'balances.read', 'followups.create',
       'promises.create', 'tasks.manage', 'reports.read', 'reports.export', 'duplicates.review',
       'risk.read', 'risk.recalculate', 'reservations.manage',
+      'analytical_accounts.manage', 'analytical_accounts.read',
     ],
     'المحصل': [
       'customers.read', 'balances.read', 'followups.create', 'promises.create',

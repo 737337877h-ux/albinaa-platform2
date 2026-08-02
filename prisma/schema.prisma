@@ -41,6 +41,7 @@ model Organization {
   followupTypes     FollowupType[]
   followupResults   FollowupResult[]
   systemSettings    SystemSetting[]
+  analyticalAccounts AnalyticalAccount[]
 
   @@map("organizations")
 }
@@ -94,6 +95,7 @@ model User {
   followups            Followup[]
   tasksCreated         Task[]                  @relation("TaskCreator")
   reservationsCreated  Reservation[]           @relation("ReservationCreator")
+  analyticalAccountsCreated AnalyticalAccount[] @relation("AnalyticalAccountCreator")
   attachments          Attachment[]
   gpsLogs              GpsLog[]
   notifications        Notification[]
@@ -194,6 +196,8 @@ model Currency {
   balanceSnapshots    BalanceSnapshot[]
   agingRows           DebtAgingSummary[]
   agingDocuments      DebtAgingDetail[]
+  analyticalAccounts  AnalyticalAccount[]
+  analyticalMovements AnalyticalMovement[]
 
   @@map("currencies")
 }
@@ -374,6 +378,7 @@ model ImportJob {
   reconciliations  BalanceReconciliation[]
   agingRows        DebtAgingSummary[]
   agingDocuments   DebtAgingDetail[]
+  analyticalMovements AnalyticalMovement[]
 
   @@index([organizationId, fileHash], map: "idx_import_jobs_hash")
   @@map("import_jobs")
@@ -904,4 +909,58 @@ model AuthSession {
 
   @@index([userId, revokedAt], map: "idx_auth_sessions_user")
   @@map("auth_sessions")
+}
+
+// ---------------------------------------------------------------------------
+// PR-7: Analytical Accounts — extensible non-customer accounting accounts
+// (debtors, employee advances, employee custodies, and future types).
+// Fully separate from Customer/CustomerBalance — never touches
+// accountingBalance/operationalBalance, never affects collections.
+// ---------------------------------------------------------------------------
+model AnalyticalAccount {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  accountNumber  String   @map("account_number")
+  accountName    String   @map("account_name")
+  category       String   // debtor | employee_advance | employee_custody | other
+  personName     String?  @map("person_name")
+  employeeNumber String?  @map("employee_number")
+  currencyCode   String   @map("currency_code")
+  status         String   @default("active")
+  metadata       Json?    @db.JsonB
+  createdBy      String?  @map("created_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization Organization         @relation(fields: [organizationId], references: [id])
+  currency     Currency             @relation(fields: [currencyCode], references: [code])
+  creator      User?                @relation("AnalyticalAccountCreator", fields: [createdBy], references: [id])
+  movements    AnalyticalMovement[]
+
+  @@unique([organizationId, accountNumber, currencyCode], map: "uq_analytical_account_org_number_ccy")
+  @@index([organizationId, category], map: "idx_analytical_accounts_category")
+  @@map("analytical_accounts")
+}
+
+model AnalyticalMovement {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId         String   @map("account_id") @db.Uuid
+  currencyCode      String   @map("currency_code")
+  txDate            DateTime @map("tx_date") @db.Date
+  documentType      String?  @map("document_type")
+  documentNumber    String?  @map("document_number")
+  description       String?
+  debit             Decimal  @default(0) @db.Decimal(18, 4)
+  credit            Decimal  @default(0) @db.Decimal(18, 4)
+  sourceImportJobId String?  @map("source_import_job_id") @db.Uuid
+  sourceRowNumber   Int?     @map("source_row_number")
+  lineHash          String   @unique @map("line_hash")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  account         AnalyticalAccount @relation(fields: [accountId], references: [id])
+  currency        Currency          @relation(fields: [currencyCode], references: [code])
+  sourceImportJob ImportJob?        @relation(fields: [sourceImportJobId], references: [id])
+
+  @@index([accountId, currencyCode, txDate], map: "idx_analytical_movements_account")
+  @@map("analytical_movements")
 }
