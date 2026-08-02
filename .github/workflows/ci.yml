@@ -17,6 +17,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -25,6 +30,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install Python parser dependency
+        run: python -m pip install --disable-pip-version-check openpyxl==3.1.5
+
+      - name: Parser unit tests (Python)
+        working-directory: backend/parser
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest test_import_profiles
 
       - name: Generate Prisma Client
         run: npx prisma generate --schema=../prisma/schema.prisma
