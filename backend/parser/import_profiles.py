@@ -121,7 +121,10 @@ def read_table(path):
     if ext in ('xlsx', 'xlsm'):
         wb = load_workbook(path, read_only=True, data_only=True)
         ws = wb[wb.sheetnames[0]]
-        return [list(r) for r in ws.iter_rows(values_only=True)], 'xlsx'
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        # read_only يُبقي مقبض الملف مفتوحًا — نغلقه بعد التحميل الكامل.
+        wb.close()
+        return rows, 'xlsx'
     if ext == 'xls':
         if head[:8] == OLE2_MAGIC:
             raise ValueError(
@@ -318,6 +321,12 @@ def _bucket_num(v):
 # ----------------------------------------------------------------------------
 # كشف نوع الملف
 # ----------------------------------------------------------------------------
+# عناوين فتح كتلة كشف الحساب التحليلي — تنويعان حقيقيان للتصدير:
+# 'رقم العميل' (موجَّه للعميل) و'رقم الحساب' (موجَّه لدليل الحسابات، والهوية
+# فيه على سطر 'الحساب التحليلي' التالي).
+STATEMENT_BLOCK_LABELS = ('رقم العميل', 'رقم الحساب')
+
+
 def detect_profile(rows):
     # بنى التصدير الطباعي (تُفحص أولًا لأنها تزيّف الكشف الجدولي)
     for row in rows[:8]:
@@ -341,8 +350,9 @@ def detect_profile(rows):
             'لم يُتعرَّف على بنية الملف — تأكد من ترويسة الأعمدة: '
             'كود العميل + اسم العميل، أو + العملة/الرصيد، أو أعمدة تقسيم الأعمار')
     seen_date = any(row and normalize_text(row[0]) == 'التاريخ' for row in rows)
-    seen_customer = any(row and normalize_text(row[0]) == 'رقم العميل' for row in rows)
-    if seen_date and seen_customer:
+    seen_block = any(
+        row and normalize_text(row[0]) in STATEMENT_BLOCK_LABELS for row in rows)
+    if seen_date and seen_block:
         return PROFILE_STATEMENT
     raise ValueError(
         'لم يُتعرَّف على نوع الملف — المدعوم: كشف حساب تحليلي (بنية الكتل)، '

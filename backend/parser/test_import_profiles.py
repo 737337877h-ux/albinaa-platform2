@@ -10,6 +10,7 @@ import unittest
 
 from openpyxl import Workbook
 
+from albinaa_parser import normalize_text, parse_workbook
 from import_profiles import (
     PROFILE_STATEMENT, PROFILE_MASTER, PROFILE_BALANCE,
     PROFILE_AGING_SUMMARY, PROFILE_AGING_DETAILS,
@@ -304,6 +305,298 @@ class DetectTest(unittest.TestCase):
         self.assertEqual(res['agingDetails'][2]['customerName'], 'محلات محسن البده')
         self.assertEqual(res['agingDetails'][2]['currency'], 'SAR')
         self.assertEqual(res['agingDetails'][2]['buckets']['120+'], 4454.21)
+
+# ---------------------------------------------------------------------------
+# Fix 1 — GL-oriented statement variant (رقم الحساب + الحساب التحليلي)
+#
+# All fixtures below are synthetic: invented GL codes, customer codes and
+# names. No production workbook or real customer data is committed.
+# ---------------------------------------------------------------------------
+GL_CODE = 999000001
+GL_NAME = 'حساب تجريبي أب'
+
+
+def _gl_block(code, name, ccy='YR', ccy_name='ريال يمني', txns=(),
+              opening=(0, 0), gl_code=GL_CODE, gl_name=GL_NAME,
+              with_analytic=True, totals=True):
+    """One GL-variant block. Row geometry mirrors the real export."""
+    rows = [['رقم الحساب', gl_code, None, gl_name, None, None, None]]
+    if with_analytic:
+        rows.append(['الحساب التحليلي', code, None, name, None, None, None])
+    rows.append([None, 0])
+    rows.append([None, 0])
+    rows.append(['العملة', None, ccy, ccy_name, None, None, None])
+    rows.append([None, None, None, None, None, 'المبلغ الأجنبي', 'المبلغ الأجنبي'])
+    rows.append(['التاريخ', 'نوع المستند', 'رقم المستند', 'البيان', 'رقم المرجع', 'مدين', 'دائن'])
+    od, oc = opening
+    rows.append([None, None, None, 'الرصيد الإفتتاحي', None, od, oc])
+    for t in txns:
+        rows.append(list(t))
+    if totals:
+        td = sum(t[5] or 0 for t in txns)
+        tc = sum(t[6] or 0 for t in txns)
+        rows.append([None, None, None, 'إجمالي العمليات', None, td, tc])
+        declared = (od + td) - (oc + tc)
+        rows.append([None, None, 'إجمالي الرصيد عليكم', 'نص', None, declared, None])
+    return rows
+
+
+def _txn(date, desc, debit=0, credit=0, doc=101):
+    return [date, 'فاتورة المبيعات آجل', doc, desc, None, debit, credit]
+
+
+def make_gl_statement_xlsx(path, blocks):
+    rows = [[None] * 7]
+    for b in blocks:
+        rows.extend(b)
+    make_xlsx(path, rows)
+
+
+class GLStatementVariantTests(unittest.TestCase):
+    """رقم الحساب + الحساب التحليلي variant — identity comes from the
+    الحساب التحليلي row; the رقم الحساب row is the parent GL account only."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def path(self, name):
+        return os.path.join(self.dir, name)
+
+    # -- detection ----------------------------------------------------------
+    def test_gl_variant_is_detected_as_statement(self):
+        p = self.path('gl.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', txns=[_txn('2026-02-01', 'فاتورة', 5000, 0)]),
+        ])
+        rows, fmt = read_table(p)
+        self.assertEqual(fmt, 'xlsx')
+        self.assertEqual(detect_profile(rows), PROFILE_STATEMENT)
+
+    def test_legacy_customer_variant_still_detected(self):
+        p = self.path('legacy.xlsx')
+        make_xlsx(p, [
+            ['رقم العميل', 90001, None, 'عميل الاختبار', None, None, None],
+            [None, 0],
+            ['العملة', None, 'YR', 'ريال يمني', None, None, None],
+            ['التاريخ', 'نوع المستند', 'رقم المستند', 'البيان', 'رقم المرجع', 'مدين', 'دائن'],
+            ['2026-02-01', 'فاتورة المبيعات آجل', 101, 'فاتورة', None, 5000, 0],
+            [None, None, None, 'إجمالي العمليات', None, 5000, 0],
+        ])
+        rows, _ = read_table(p)
+        self.assertEqual(detect_profile(rows), PROFILE_STATEMENT)
+
+    # -- identity -----------------------------------------------------------
+    def test_identity_comes_from_analytic_row(self):
+        p = self.path('identity.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', txns=[_txn('2026-02-01', 'فاتورة', 5000, 0)]),
+        ])
+        res = parse_workbook(p)
+        self.assertEqual(len(res.accounts), 1)
+        acc = list(res.accounts.values())[0]
+        self.assertEqual(int(acc.customer_code), 10001)
+        self.assertEqual(normalize_text(acc.customer_name), 'عميل تجريبي أ')
+
+    def test_parent_gl_is_never_customer_identity(self):
+        p = self.path('parent.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', txns=[_txn('2026-02-01', 'فاتورة', 5000, 0)]),
+        ])
+        res = parse_workbook(p)
+        codes = [str(c) for (c, _ccy) in res.accounts.keys()]
+        names = [normalize_text(a.customer_name) for a in res.accounts.values()]
+        self.assertNotIn(str(GL_CODE), codes)
+        self.assertNotIn(GL_NAME, names)
+        # parent details retained as metadata only
+        acc = list(res.accounts.values())[0]
+        self.assertEqual(str(acc.parent_account_code), str(GL_CODE))
+        self.assertEqual(normalize_text(acc.parent_account_name), GL_NAME)
+
+    def test_three_analytics_under_one_gl_stay_separate(self):
+        p = self.path('three.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', txns=[_txn('2026-02-01', 'أ', 1000, 0)]),
+            _gl_block(10002, 'عميل تجريبي ب', txns=[_txn('2026-02-02', 'ب', 2000, 0),
+                                                     _txn('2026-02-03', 'ب2', 500, 0)]),
+            _gl_block(10003, 'عميل تجريبي ج', txns=[_txn('2026-02-04', 'ج', 3000, 0)]),
+        ])
+        res = parse_workbook(p)
+        self.assertEqual(len(res.accounts), 3)
+        self.assertEqual([m for _r, m, _raw in res.errors], [])
+        by_code = {int(c): a for (c, _ccy), a in res.accounts.items()}
+        self.assertEqual(sorted(by_code), [10001, 10002, 10003])
+        # the terminator must not let one block swallow the next
+        self.assertEqual(len(by_code[10001].transactions), 1)
+        self.assertEqual(len(by_code[10002].transactions), 2)
+        self.assertEqual(len(by_code[10003].transactions), 1)
+
+    # -- currency -----------------------------------------------------------
+    def test_same_customer_two_currencies_one_identity(self):
+        p = self.path('ccy.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', ccy='YR',
+                      txns=[_txn('2026-02-01', 'يمني', 1000, 0)]),
+            _gl_block(10001, 'عميل تجريبي أ', ccy='SR', ccy_name='ريال سعودي',
+                      txns=[_txn('2026-02-02', 'سعودي', 200, 0)]),
+        ])
+        res = parse_workbook(p)
+        self.assertEqual(len(res.accounts), 2)
+        self.assertEqual([m for _r, m, _raw in res.errors], [])
+        currencies = sorted(a.currency for a in res.accounts.values())
+        self.assertEqual(currencies, ['SAR', 'YER'])
+        names = {normalize_text(a.customer_name) for a in res.accounts.values()}
+        codes = {int(a.customer_code) for a in res.accounts.values()}
+        self.assertEqual(names, {'عميل تجريبي أ'})
+        self.assertEqual(codes, {10001})
+
+    def test_same_code_under_different_gl_same_name_allowed(self):
+        p = self.path('gl2.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', txns=[_txn('2026-02-01', 'أ', 1000, 0)]),
+            _gl_block(10001, 'عميل تجريبي أ', gl_code=888000002, gl_name='حساب تجريبي جد',
+                      txns=[_txn('2026-02-02', 'أ2', 500, 0)]),
+        ])
+        res = parse_workbook(p)
+        self.assertEqual(len(res.accounts), 1)
+        self.assertEqual([m for _r, m, _raw in res.errors], [])
+        acc = list(res.accounts.values())[0]
+        self.assertEqual(int(acc.customer_code), 10001)
+        self.assertEqual(len(acc.transactions), 2)
+
+    # -- conflicts ----------------------------------------------------------
+    def test_conflicting_names_for_one_code_reports_conflict(self):
+        p = self.path('conflict.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', txns=[_txn('2026-02-01', 'أ', 1000, 0)]),
+            _gl_block(10001, 'عميل تجريبي مختلف', txns=[_txn('2026-02-02', 'ب', 9999, 0)]),
+        ])
+        res = parse_workbook(p)
+        msgs = ' | '.join(m for _r, m, _raw in res.errors)
+        self.assertIn('تعارض', msgs)
+        # conflicting block must not be silently merged
+        acc = list(res.accounts.values())[0]
+        self.assertEqual(normalize_text(acc.customer_name), 'عميل تجريبي أ')
+        self.assertEqual(len(acc.transactions), 1)
+
+    def test_missing_analytic_row_reports_block_error(self):
+        p = self.path('missing.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', with_analytic=False,
+                      txns=[_txn('2026-02-01', 'أ', 1000, 0)]),
+            _gl_block(10002, 'عميل تجريبي ب', txns=[_txn('2026-02-02', 'ب', 2000, 0)]),
+        ])
+        res = parse_workbook(p)
+        msgs = ' | '.join(m for _r, m, _raw in res.errors)
+        self.assertIn('الحساب التحليلي', msgs)
+        # the healthy block must still parse
+        self.assertEqual(len(res.accounts), 1)
+        acc = list(res.accounts.values())[0]
+        self.assertEqual(int(acc.customer_code), 10002)
+
+    # -- reconciliation / idempotency --------------------------------------
+    def test_balances_and_transactions_reconcile(self):
+        p = self.path('recon.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', opening=(1000, 0), txns=[
+                _txn('2026-02-01', 'فاتورة', 5000, 0),
+                _txn('2026-02-02', 'سداد', 0, 2000),
+            ]),
+        ])
+        res = parse_workbook(p)
+        acc = list(res.accounts.values())[0]
+        self.assertAlmostEqual(acc.computed_balance, 4000.0, places=4)
+        self.assertAlmostEqual(acc.declared_balance, 4000.0, places=4)
+        self.assertEqual(len(acc.transactions), 2)
+
+    def test_line_hash_is_idempotent(self):
+        p = self.path('hash.xlsx')
+        make_gl_statement_xlsx(p, [
+            _gl_block(10001, 'عميل تجريبي أ', txns=[
+                _txn('2026-02-01', 'فاتورة', 1000, 0),
+                _txn('2026-02-01', 'فاتورة', 1000, 0),
+            ]),
+        ])
+        first = [t.line_hash for a in parse_workbook(p).accounts.values() for t in a.transactions]
+        second = [t.line_hash for a in parse_workbook(p).accounts.values() for t in a.transactions]
+        self.assertEqual(first, second)
+        self.assertEqual(len(set(first)), 2, 'identical rows must get distinct sequenced hashes')
+
+    # -- correct rejections stay rejected -----------------------------------
+    def test_unrelated_workbooks_still_rejected(self):
+        rules = self.path('rules.xlsx')
+        make_xlsx(rules, [
+            ['RuleID', 'Category', 'القرار الموصى به', 'الأولوية', 'شرط التفعيل'],
+            ['D001', 'Inventory', 'إعادة طلب فوري', 'Critical', 'الكمية منخفضة'],
+        ])
+        rows, _ = read_table(rules)
+        with self.assertRaises(ValueError):
+            detect_profile(rows)
+
+        dash = self.path('dash.xlsx')
+        make_xlsx(dash, [
+            [None, None, None],
+            [None, 'نظام متابعة تحصيل', None],
+            [None, 'حتى تاريخ 02-07-2026', None],
+        ])
+        rows, _ = read_table(dash)
+        with self.assertRaises(ValueError):
+            detect_profile(rows)
+
+
+class LegacyStatementParityTests(unittest.TestCase):
+    """The رقم العميل layout must keep parsing exactly as before."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _legacy(self):
+        p = os.path.join(self.dir, 'legacy.xlsx')
+        make_xlsx(p, [
+            [None] * 7,
+            ['رقم العميل', 90001, None, 'عميل الاختبار', None, None, None],
+            [None, 0],
+            ['العملة', None, 'YR', 'ريال يمني', None, None, None],
+            ['التاريخ', 'نوع المستند', 'رقم المستند', 'البيان', 'رقم المرجع', 'مدين', 'دائن'],
+            [None, None, None, 'الرصيد الإفتتاحي', None, 1000, 0],
+            ['2026-02-01', 'فاتورة المبيعات آجل', 101, 'فاتورة', None, 5000, 0],
+            ['2026-02-02', 'سند قبض', 102, 'سداد', None, 0, 2000],
+            [None, None, None, 'إجمالي العمليات', None, 5000, 2000],
+            [None, None, 'إجمالي الرصيد عليكم', 'نص', None, 4000, None],
+        ])
+        return p
+
+    def test_legacy_identity_and_balances_unchanged(self):
+        res = parse_workbook(self._legacy())
+        self.assertEqual(len(res.accounts), 1)
+        acc = list(res.accounts.values())[0]
+        self.assertEqual(int(acc.customer_code), 90001)
+        self.assertEqual(normalize_text(acc.customer_name), 'عميل الاختبار')
+        self.assertEqual(acc.currency, 'YER')
+        self.assertAlmostEqual(acc.computed_balance, 4000.0, places=4)
+        self.assertAlmostEqual(acc.declared_balance, 4000.0, places=4)
+        self.assertEqual(len(acc.transactions), 2)
+        self.assertEqual([m for _r, m, _raw in res.errors], [])
+
+    def test_legacy_has_no_parent_gl_metadata(self):
+        res = parse_workbook(self._legacy())
+        acc = list(res.accounts.values())[0]
+        self.assertIsNone(acc.parent_account_code)
+        self.assertIsNone(acc.parent_account_name)
+
+    def test_legacy_line_hashes_are_stable(self):
+        p = self._legacy()
+        a = [t.line_hash for acc in parse_workbook(p).accounts.values() for t in acc.transactions]
+        b = [t.line_hash for acc in parse_workbook(p).accounts.values() for t in acc.transactions]
+        self.assertEqual(a, b)
+        self.assertEqual(len(set(a)), 2)
 
 
 if __name__ == '__main__':
