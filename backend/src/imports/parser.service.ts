@@ -143,6 +143,62 @@ export interface ParseResultJson {
   skippedEmptyRows: number;
 }
 
+/* ──────────────────── Structured parser-error recovery ─────────────────── */
+
+/** Narrow shape of a child_process failure that carries captured output. */
+interface ProcessExecError {
+  stdout?: string | Buffer;
+}
+
+/**
+ * parser_cli.py reports recognition failures as structured JSON on stdout and
+ * then exits non-zero, so execFileAsync rejects before the success path can read
+ * stdout. Recover that JSON here so the real diagnosis reaches the caller instead
+ * of a generic "invalid Excel" message.
+ *
+ * Returns null when stdout is missing, empty, not valid JSON, or lacks a usable
+ * error string — the caller then keeps the existing generic fallback.
+ */
+export function extractParserError(e: unknown): string | null {
+  if (typeof e !== 'object' || e === null) return null;
+
+  const raw = (e as ProcessExecError).stdout;
+  const text = typeof raw === 'string'
+    ? raw
+    : Buffer.isBuffer(raw) ? raw.toString('utf-8') : null;
+  if (text === null) return null;
+
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null; // plain text or malformed JSON → generic fallback
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+
+  const { ok, error } = parsed as { ok?: unknown; error?: unknown };
+  if (ok !== false) return null;
+  if (typeof error !== 'string' || !error.trim()) return null;
+  return error.trim();
+}
+
+/** Absolute filesystem paths: UNC, Windows (either separator), POSIX (2+ segments). */
+const ABSOLUTE_PATH_PATTERN = /\\\\[^\s'"]+|[A-Za-z]:[\\/][^\s'"]*|(?<![\w.])\/[^\s'"/]+(?:\/[^\s'"/]*)+/g;
+
+/**
+ * Replaces absolute filesystem paths with `[path]` so server-side layout is never
+ * echoed back to API callers. The patterns never span whitespace, so line breaks,
+ * Arabic text, ordinary filenames and accounting values are left untouched; the
+ * POSIX branch also requires two segments and a non-word lead-in, keeping relative
+ * fragments such as "and/or" intact.
+ */
+export function redactFilesystemPaths(message: string): string {
+  return message.replace(ABSOLUTE_PATH_PATTERN, '[path]');
+}
+
 /**
  * جسر الـ Parser: يستدعي المعالج البايثوني المُختبر (قرار موثق — لا إعادة كتابة
  * لمنطق تحليل تم اختباره على 18,569 صفًا حقيقيًا بمطابقة أرصدة 100%).
@@ -189,6 +245,18 @@ export class ParserService {
       return result;
     } catch (e) {
       if (e instanceof BadRequestException) throw e;
+
+      // The parser exits non-zero for unsupported layouts but still describes the
+      // problem on stdout; surface that instead of the generic message. Only the
+      // parser's own text is logged — never the process object, which carries the
+      // full command line and inherited environment.
+      const parserError = extractParserError(e);
+      if (parserError) {
+        const safeError = redactFilesystemPaths(parserError);
+        this.logger.error(`الملف غير قابل للتحليل: ${safeError}`);
+        throw new BadRequestException(`الملف غير قابل للتحليل: ${safeError}`);
+      }
+
       this.logger.error(`فشل تشغيل الـ Parser: ${e instanceof Error ? e.message : e}`);
       throw new BadRequestException('تعذّر تحليل الملف — تأكد أنه ملف Excel سليم بالبنية المتوقعة');
     }
