@@ -25,6 +25,7 @@ import { CollectorsModule } from './collectors/collectors.module';
 import { MobileModule } from './mobile/mobile.module';
 import { RiskModule } from './risk/risk.module';
 import { ReservationsModule } from './reservations/reservations.module';
+import { AnalyticalAccountsModule } from './analytical-accounts/analytical-accounts.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -57,6 +58,7 @@ import { IdempotencyInterceptor } from './common/interceptors/idempotency.interc
     MobileModule,
     RiskModule,
     ReservationsModule,
+    AnalyticalAccountsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },         // 1) Rate limiting

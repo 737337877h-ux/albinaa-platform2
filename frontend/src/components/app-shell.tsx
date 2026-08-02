@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   Banknote, CalendarClock, FileSpreadsheet, HandCoins, LayoutDashboard,
   ListTodo, PhoneCall, Users, Settings, Shield, UserCog, GitBranch,
-  CircleDollarSign, ScrollText, ArrowRightLeft, ShieldCheck,
+  CircleDollarSign, ScrollText, ArrowRightLeft, ShieldCheck, Landmark,
 } from 'lucide-react';
 import { useMe, useCan } from '@/lib/auth';
 import { ApiError, tokenStore } from '@/lib/api';
@@ -31,6 +31,12 @@ const ADMIN_NAV = [
   { href: '/admin/collectors', label: 'المحصلين', icon: Users, perm: 'users.manage' },
   { href: '/admin/assignments', label: 'الإسناد الجماعي', icon: ArrowRightLeft, perm: 'customers.transfer' },
   { href: '/admin/data-quality', label: 'Data Quality', icon: ShieldCheck, perm: 'duplicates.review' },
+  {
+    href: '/admin/analytical-accounts',
+    label: 'الحسابات التحليلية',
+    icon: Landmark,
+    perm: 'analytical_accounts.read',
+  },
   { href: '/admin/branches', label: 'الفروع', icon: GitBranch, perm: 'settings.manage' },
   { href: '/admin/currencies', label: 'العملات', icon: CircleDollarSign, perm: 'settings.manage' },
   { href: '/admin/settings', label: 'الإعدادات', icon: Settings, perm: 'settings.manage' },
