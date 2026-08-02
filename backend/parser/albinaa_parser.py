@@ -32,6 +32,12 @@ from openpyxl import load_workbook
 # ثوابت بنية الملف (كما اكتُشفت من التحليل الفعلي — لا افتراضات)
 # ----------------------------------------------------------------------------
 LBL_CUSTOMER = 'رقم العميل'
+# تنويع تصدير ثانٍ: الكتلة تُفتح بـ'رقم الحساب' (حساب أب في دليل الحسابات)
+# ثم يليها 'الحساب التحليلي' الذي يحمل هوية العميل الحقيقية (الكود والاسم).
+LBL_GL_PARENT = 'رقم الحساب'
+LBL_ANALYTIC = 'الحساب التحليلي'
+# كل ما يفتح كتلة — يُستخدم أيضًا لإنهاء كتلة سابقة.
+BLOCK_OPENERS = (LBL_CUSTOMER, LBL_GL_PARENT)
 LBL_CURRENCY = 'العملة'
 LBL_COL_DATE = 'التاريخ'
 LBL_FOREIGN = 'المبلغ الأجنبي'
@@ -120,6 +126,10 @@ class Account:
     declared_label: str = None
     fragments: int = 0
     parse_warnings: list = field(default_factory=list)
+    # الحساب الأب (GL) — بيانات وصفية فقط، لا تُستخدم كهوية للعميل أبدًا
+    # ولا تُخزَّن في قاعدة البيانات (لا حاجة لأي تعديل على المخطط).
+    parent_account_code: str = None
+    parent_account_name: str = None
 
     @property
     def currency(self):
@@ -143,27 +153,66 @@ class ParseResult:
 # ----------------------------------------------------------------------------
 # المرحلة 1: القارئ الهيكلي (Block Parser)
 # ----------------------------------------------------------------------------
+def _skip_to_next_block(rows, i, n):
+    """يتقدّم إلى بداية الكتلة التالية دون تسجيل أخطاء لصفوف كتلة مستبعدة."""
+    while i < n and rows[i][1][0] not in BLOCK_OPENERS:
+        i += 1
+    return i
+
+
 def parse_workbook(path, sheet_name=None):
     wb = load_workbook(path, read_only=True, data_only=True)
     sn = sheet_name or wb.sheetnames[0]
     ws = wb[sn]
     rows = [(idx + 1, r) for idx, r in enumerate(ws.iter_rows(values_only=True))]
+    # الصفوف مُحمَّلة بالكامل في الذاكرة — نغلق المصنّف لتحرير مقبض الملف
+    # (read_only يُبقيه مفتوحًا وإلا تسرّبت المقابض مع كل استيراد).
+    wb.close()
     n = len(rows)
 
     res = ParseResult()
     order = []
+    # كود تحليلي -> الاسم المُطبَّع، لكشف تعارض الهوية عبر العملات والحسابات الأب
+    identity_by_code = {}
     i = 0
     while i < n:
         rownum, r = rows[i]
-        if r[0] == LBL_CUSTOMER:
-            cust_code, cust_name = r[1], normalize_text(r[3])
+        if r[0] in BLOCK_OPENERS:
+            is_gl_variant = r[0] == LBL_GL_PARENT
+            gl_code = gl_name = None
+            identity_row = r
+            if is_gl_variant:
+                # 'رقم الحساب' حساب أب فقط — الهوية من 'الحساب التحليلي' التالي.
+                gl_code, gl_name = r[1], normalize_text(r[3])
+                if i + 1 >= n or rows[i + 1][1][0] != LBL_ANALYTIC:
+                    res.errors.append(
+                        (rownum, 'سطر الحساب التحليلي مفقود — الكتلة مستبعدة', r))
+                    i = _skip_to_next_block(rows, i + 1, n)
+                    continue
+                identity_row = rows[i + 1][1]
+                i += 1
+            cust_code, cust_name = identity_row[1], normalize_text(identity_row[3])
             # بعض الصادرات لا تحوي اسم العميل (يُكتب الترويسة 'العميل' فقط)
             # — نستخدم الكود كاسم مؤقت لئلا يُعرض اسم الترويسة كاسم العميل.
             name_fallback = False
             if cust_name in ('العميل', 'اسم العميل') or not cust_name:
                 cust_name = str(cust_code)
                 name_fallback = True
-            # رصيد افتتاحي على سطر "رقم العميل" نفسه (تنويع تصدير حقيقي)
+            if is_gl_variant:
+                # تعارض هوية: نفس الكود التحليلي باسم مختلف — لا دمج صامت.
+                # اختلاف العملة أو الحساب الأب مع نفس الاسم يظل نفس العميل.
+                code_key = normalize_text(cust_code)
+                prev_name = identity_by_code.get(code_key)
+                if prev_name is not None and prev_name != normalize_text(cust_name):
+                    res.errors.append((
+                        rownum,
+                        f'تعارض هوية: الكود {cust_code} مسجل باسم "{prev_name}" '
+                        f'ويظهر باسم "{cust_name}" — الكتلة مستبعدة',
+                        r))
+                    i = _skip_to_next_block(rows, i + 1, n)
+                    continue
+                identity_by_code[code_key] = normalize_text(cust_name)
+            # رصيد افتتاحي على سطر فتح الكتلة نفسه (تنويع تصدير حقيقي)
             marker_od = _num(r[5], None)
             marker_oc = _num(r[6], None)
             has_marker_opening = marker_od is not None or marker_oc is not None
@@ -223,6 +272,9 @@ def parse_workbook(path, sheet_name=None):
                         f'({acc.opening_debit},{acc.opening_credit}) مقابل ({od},{oc})')
                 if normalize_text(cust_name) != normalize_text(acc.customer_name):
                     acc.parse_warnings.append(f'اسم مختلف لنفس الكود في الصف {rownum}: "{cust_name}"')
+            if gl_code is not None and acc.parent_account_code is None:
+                acc.parent_account_code = gl_code
+                acc.parent_account_name = gl_name
             if name_fallback:
                 acc.parse_warnings.append(
                     f'اسم العميل غير متوفر في الملف (الصف {rownum}) — استُخدم الكود كاسم مؤقت')
@@ -262,7 +314,7 @@ def parse_workbook(path, sheet_name=None):
                             acc.declared_label = lbl
                             i += 1
                     break
-                elif rr[0] == LBL_CUSTOMER:
+                elif rr[0] in BLOCK_OPENERS:
                     break
                 elif all(v is None for v in rr):
                     res.skipped_rows.append((rn2, 'صف فارغ'))
