@@ -146,12 +146,20 @@ export default function AnalyticalAccountsPage() {
     "debtor",
   );
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importEmployeeCategory, setImportEmployeeCategory] = useState<
+    "employee_advance" | "employee_custody"
+  >("employee_advance");
   const importMut = useMutation({
     mutationFn: () => {
       const fd = new FormData();
       fd.append("file", importFile as File);
+      const params = new URLSearchParams();
+      params.set("layout", importLayout);
+      if (importLayout === "employee") {
+        params.set("employeeCategory", importEmployeeCategory);
+      }
       return api<ImportResult>(
-        `/analytical-accounts/import?layout=${importLayout}`,
+        `/analytical-accounts/import?${params.toString()}`,
         {
           method: "POST",
           body: fd,
@@ -168,6 +176,7 @@ export default function AnalyticalAccountsPage() {
       );
       setImportOpen(false);
       setImportFile(null);
+      setImportEmployeeCategory("employee_advance");
       qc.invalidateQueries({ queryKey: ["analytical-accounts"] });
     },
     onError: (err: Error) => toast(err.message, "err"),
@@ -437,6 +446,21 @@ export default function AnalyticalAccountsPage() {
               </option>
             </Select>
           </Field>
+          {importLayout === "employee" && (
+            <Field label="نوع حساب الموظف *">
+              <Select
+                value={importEmployeeCategory}
+                onChange={(e) =>
+                  setImportEmployeeCategory(
+                    e.target.value as "employee_advance" | "employee_custody",
+                  )
+                }
+              >
+                <option value="employee_advance">سلفة موظف</option>
+                <option value="employee_custody">عهدة موظف</option>
+              </Select>
+            </Field>
+          )}
           <Field label="الملف *" hint="ملف CSV — UTF-8">
             <input
               type="file"
@@ -450,7 +474,10 @@ export default function AnalyticalAccountsPage() {
               إلغاء
             </Button>
             <Button
-              disabled={!importFile}
+              disabled={
+                !importFile ||
+                (importLayout === "employee" && !importEmployeeCategory)
+              }
               loading={importMut.isPending}
               onClick={() => importMut.mutate()}
             >

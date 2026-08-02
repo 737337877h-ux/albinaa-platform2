@@ -10,7 +10,7 @@ import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { AnalyticalAccountsService } from './analytical-accounts.service';
 import { CreateAnalyticalAccountDto } from './dto/create-analytical-account.dto';
-import { ImportAnalyticalAccountsDto } from './dto/import-analytical-accounts.dto';
+import { EMPLOYEE_IMPORT_CATEGORIES, ImportAnalyticalAccountsDto } from './dto/import-analytical-accounts.dto';
 import { QueryAnalyticalAccountsDto } from './dto/query-analytical-accounts.dto';
 import { AnalyticalStatementQueryDto } from './dto/statement-query.dto';
 
@@ -60,6 +60,12 @@ export class AnalyticalAccountsController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 30 * 1024 * 1024 } }))
   @ApiConsumes('multipart/form-data')
   @ApiQuery({ name: 'layout', enum: ['debtor', 'employee'] })
+  @ApiQuery({
+    name: 'employeeCategory',
+    required: false,
+    enum: EMPLOYEE_IMPORT_CATEGORIES,
+    description: 'Required when layout=employee. One of employee_advance | employee_custody.',
+  })
   @ApiBody({
     schema: {
       type: 'object',
@@ -77,6 +83,6 @@ export class AnalyticalAccountsController {
     @UploadedFile() file: Express.Multer.File,
     @Req() req: Request,
   ) {
-    return this.accounts.importCsv(user, dto.layout, file, req);
+    return this.accounts.importCsv(user, dto.layout, dto.employeeCategory, file, req);
   }
 }

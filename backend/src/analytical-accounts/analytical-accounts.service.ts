@@ -167,8 +167,18 @@ export class AnalyticalAccountsService {
   // append-only and deduped by lineHash; accounts are upserted (created on
   // first sight, name/person/employee fields refreshed on later imports).
   // ---------------------------------------------------------------------
-  async importCsv(actor: AuthUser, layout: 'debtor' | 'employee', file: Express.Multer.File, req?: Request) {
+  async importCsv(
+    actor: AuthUser,
+    layout: 'debtor' | 'employee',
+    employeeCategory: 'employee_advance' | 'employee_custody' | undefined,
+    file: Express.Multer.File,
+    req?: Request,
+  ) {
     if (!file) throw new BadRequestException('File is required');
+    if (layout === 'employee' && !employeeCategory) {
+      throw new BadRequestException('employeeCategory is required for the employee import layout');
+    }
+    const expectedCategory: string = layout === 'debtor' ? 'debtor' : employeeCategory!;
     const text = file.buffer.toString('utf-8');
     const rows = parseCsv(text);
     if (rows.length < 2) throw new BadRequestException('File has no data rows');
@@ -213,6 +223,13 @@ export class AnalyticalAccountsService {
         } as const;
         const existingAccount = await this.prisma.analyticalAccount.findUnique({ where: accountKey });
 
+        if (existingAccount && existingAccount.category !== expectedCategory) {
+          throw new Error(
+            `Account "${parsed.accountNumber}" already exists with category "${existingAccount.category}", `
+            + `which conflicts with the imported category "${expectedCategory}"`,
+          );
+        }
+
         const account = existingAccount
           ? await this.prisma.analyticalAccount.update({
               where: accountKey,
@@ -227,7 +244,7 @@ export class AnalyticalAccountsService {
                 organizationId: actor.organizationId,
                 accountNumber: parsed.accountNumber,
                 accountName: parsed.accountName,
-                category: layout === 'debtor' ? 'debtor' : 'employee_advance',
+                category: expectedCategory,
                 personName: parsed.personName,
                 employeeNumber: parsed.employeeNumber,
                 currencyCode: parsed.currencyCode,
