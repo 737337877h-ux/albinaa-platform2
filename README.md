@@ -21,11 +21,11 @@
 
 | المكوّن | التقنية | الإصدار |
 |---------|---------|---------|
-| Backend | NestJS | 10.x |
+| Backend | NestJS | 11.x |
 | ORM | Prisma | 6.x |
 | Database | PostgreSQL | 16 |
 | Cache | Redis (اختياري) | - |
-| Frontend | Next.js | 14.x |
+| Frontend | Next.js | 15.x |
 | Mobile | React Native + Expo SDK | 57 |
 | Auth | JWT (Access + Refresh) | - |
 | File Upload | Multer (disk) | - |
@@ -102,7 +102,7 @@ npx tsc --noEmit && npx expo-doctor && npx jest
 
 ## الإصدار
 
-- **v1.3.0 RC** (قيد المراجعة) — إدارة المستخدمين والمحصلين، إدارة الأدوار والصلاحيات، الإسناد الجماعي، Dashboard drill-down، جودة البيانات، حجوزات البضاعة، والحسابات التحليلية
+- **v1.3.0 RC** (قيد الاعتماد) — إدارة المستخدمين والمحصلين، الأدوار والصلاحيات، الإسناد الجماعي، Dashboard drill-down، جودة البيانات، حجوزات البضاعة، الحسابات التحليلية، إجراءات التواصل، وتعزيز التقارير والأمان وCI
 - **v1.2.1** (2026-08-01) — صفحة الإشعارات الكاملة (Web Hotfix): قائمة + تعليم كمقروء/الكل + مزامنة جرس الإشعارات
 - **v1.2.0** (2026-08-01) — إدارة المديونية الذكية: Import Profiles + Debt Aging · Risk Score · Daily Work Queue · Customer360 Risk/Tasks · Dashboard KPIs · Customer Assignments · Task Execution + Followup + Promise · Stabilization 122/122
 - **v1.1.0** (2026-07-30) — أدوات التواصل مع العملاء (Call/SMS/WhatsApp، خريطة، إشعارات تفاعلية، عملات ديناميكية)
