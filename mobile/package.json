@@ -43,7 +43,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "eslint src/ App.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "jest"
   },
   "private": true
 }
