@@ -42,6 +42,8 @@ model Organization {
   followupResults    FollowupResult[]
   systemSettings     SystemSetting[]
   analyticalAccounts AnalyticalAccount[]
+  customerAliases    CustomerAlias[]
+  customerMerges     CustomerMerge[]
 
   @@map("organizations")
 }
@@ -87,6 +89,8 @@ model User {
   assignmentsMade           CustomerAssignment[]         @relation("AssignmentMaker")
   creditDecisions           CustomerCreditPolicy[]       @relation("CreditDecider")
   duplicateReviews          PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
+  customerMergesCreated     CustomerMerge[]              @relation("CustomerMergeCreator")
+  customerMergesReversed    CustomerMerge[]              @relation("CustomerMergeReverser")
   importTemplates           ImportTemplate[]
   importJobs                ImportJob[]
   ledgerEntries             OperationalLedger[]
@@ -243,32 +247,89 @@ model Customer {
   createdByImportJob    String?   @map("created_by_import_job") @db.Uuid
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt             DateTime  @default(now()) @map("updated_at") @db.Timestamptz()
+  mergedIntoId          String?   @map("merged_into_id") @db.Uuid
+  mergedAt              DateTime? @map("merged_at") @db.Timestamptz()
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  branch       Branch?      @relation(fields: [branchId], references: [id])
+  organization  Organization @relation(fields: [organizationId], references: [id])
+  branch        Branch?      @relation(fields: [branchId], references: [id])
+  mergedInto    Customer?    @relation("CustomerMergeTarget", fields: [mergedIntoId], references: [id])
+  mergedSources Customer[]   @relation("CustomerMergeTarget")
 
-  balances         CustomerBalance[]
-  creditPolicy     CustomerCreditPolicy?
-  assignments      CustomerAssignment[]
-  importedTxns     ImportedTransaction[]
-  balanceSnapshots BalanceSnapshot[]
-  ledgerEntries    OperationalLedger[]
-  reconciliations  BalanceReconciliation[]
-  followups        Followup[]
-  promises         PaymentPromise[]
-  collections      Collection[]
-  reservations     Reservation[]
-  tasks            Task[]
-  scores           CustomerScore[]
-  duplicatesAsA    PotentialDuplicateCustomer[] @relation("DupCustomerA")
-  duplicatesAsB    PotentialDuplicateCustomer[] @relation("DupCustomerB")
-  agingRows        DebtAgingSummary[]
-  agingDocuments   DebtAgingDetail[]
+  balances                CustomerBalance[]
+  creditPolicy            CustomerCreditPolicy?
+  assignments             CustomerAssignment[]
+  importedTxns            ImportedTransaction[]
+  balanceSnapshots        BalanceSnapshot[]
+  ledgerEntries           OperationalLedger[]
+  reconciliations         BalanceReconciliation[]
+  followups               Followup[]
+  promises                PaymentPromise[]
+  collections             Collection[]
+  reservations            Reservation[]
+  tasks                   Task[]
+  scores                  CustomerScore[]
+  duplicatesAsA           PotentialDuplicateCustomer[] @relation("DupCustomerA")
+  duplicatesAsB           PotentialDuplicateCustomer[] @relation("DupCustomerB")
+  agingRows               DebtAgingSummary[]
+  agingDocuments          DebtAgingDetail[]
+  aliases                 CustomerAlias[]              @relation("CustomerAliasTarget")
+  aliasesFromMerge        CustomerAlias[]              @relation("CustomerAliasSource")
+  mergeOperationsAsMaster CustomerMerge[]              @relation("CustomerMergeMaster")
+  mergeOperationsAsSource CustomerMerge[]              @relation("CustomerMergeSource")
 
   @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
   @@index([organizationId, nameNormalized], map: "idx_customers_name_norm")
   @@index([phonePrimary], map: "idx_customers_phone")
+  @@index([mergedIntoId], map: "idx_customers_merged_into")
   @@map("customers")
+}
+
+model CustomerAlias {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId   String   @map("organization_id") @db.Uuid
+  customerId       String   @map("customer_id") @db.Uuid
+  sourceCustomerId String?  @map("source_customer_id") @db.Uuid
+  mergeId          String?  @map("merge_id") @db.Uuid
+  aliasType        String   @map("alias_type")
+  aliasValue       String   @map("alias_value")
+  aliasNormalized  String   @map("alias_normalized")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  customer       Customer       @relation("CustomerAliasTarget", fields: [customerId], references: [id])
+  sourceCustomer Customer?      @relation("CustomerAliasSource", fields: [sourceCustomerId], references: [id])
+  merge          CustomerMerge? @relation(fields: [mergeId], references: [id])
+
+  @@unique([organizationId, customerId, aliasType, aliasNormalized], map: "uq_customer_alias_org_customer_type_value")
+  @@index([customerId], map: "idx_customer_alias_customer")
+  @@index([sourceCustomerId], map: "idx_customer_alias_source")
+  @@map("customer_aliases")
+}
+
+model CustomerMerge {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId   String    @map("organization_id") @db.Uuid
+  masterCustomerId String    @map("master_customer_id") @db.Uuid
+  sourceCustomerId String    @map("source_customer_id") @db.Uuid
+  pairId           String?   @map("pair_id") @db.Uuid
+  status           String    @default("active")
+  restorePayload   Json      @map("restore_payload") @db.JsonB
+  mergedBy         String    @map("merged_by") @db.Uuid
+  mergedAt         DateTime  @default(now()) @map("merged_at") @db.Timestamptz()
+  reversibleUntil  DateTime  @map("reversible_until") @db.Timestamptz()
+  reversedBy       String?   @map("reversed_by") @db.Uuid
+  reversedAt       DateTime? @map("reversed_at") @db.Timestamptz()
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  master       Customer        @relation("CustomerMergeMaster", fields: [masterCustomerId], references: [id])
+  source       Customer        @relation("CustomerMergeSource", fields: [sourceCustomerId], references: [id])
+  creator      User            @relation("CustomerMergeCreator", fields: [mergedBy], references: [id])
+  reverser     User?           @relation("CustomerMergeReverser", fields: [reversedBy], references: [id])
+  aliases      CustomerAlias[]
+
+  @@index([organizationId, mergedAt], map: "idx_customer_merges_org_date")
+  @@index([sourceCustomerId, status], map: "idx_customer_merges_source_status")
+  @@map("customer_merges")
 }
 
 model CustomerAssignment {

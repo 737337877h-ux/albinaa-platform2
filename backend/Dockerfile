@@ -12,6 +12,7 @@ WORKDIR /app
 COPY --from=deps /app/backend/node_modules ./backend/node_modules
 COPY backend/ ./backend/
 COPY prisma/ ./prisma/
+ENV PRISMA_GENERATE_SKIP_AUTOINSTALL=true
 RUN cd /app/backend && npx prisma generate --schema=../prisma/schema.prisma && npm run build
 
 FROM node:22-alpine AS runtime

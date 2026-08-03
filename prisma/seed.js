@@ -6,7 +6,15 @@
 // - الأدوار الخمسة من مستند المتطلبات + صلاحيات أساسية
 // تشغيل: npx prisma db seed   (idempotent — آمن لإعادة التشغيل)
 // ============================================================================
-const { PrismaClient } = require('@prisma/client');
+let PrismaClient;
+try {
+  ({ PrismaClient } = require('@prisma/client'));
+} catch (error) {
+  // The schema intentionally generates the client beside the backend package.
+  // Keep root-level `npm run db:seed` working in clean installations as well.
+  if (error?.code !== 'MODULE_NOT_FOUND') throw error;
+  ({ PrismaClient } = require('../backend/node_modules/.prisma/client'));
+}
 const crypto = require('crypto');
 
 const prisma = new PrismaClient();
@@ -124,6 +132,7 @@ async function main() {
     ['settings.manage', 'إدارة الإعدادات'],
     ['audit.read', 'عرض سجل التدقيق'],
     ['duplicates.review', 'مراجعة حالات تشابه العملاء'],
+    ['duplicates.merge', 'دمج العملاء المكررين والتراجع عن الدمج'],
     ['risk.read', 'عرض درجة المخاطر'],
     ['risk.recalculate', 'إعادة احتساب درجات المخاطر'],
     ['reservations.manage', 'إدارة حجوزات البضاعة'],
@@ -146,7 +155,7 @@ async function main() {
     'مدير النظام': allPerms.map((p) => p.code), // كل الصلاحيات
     'مدير المديونية': [
       'customers.read', 'customers.read_all', 'customers.transfer', 'balances.read', 'followups.create',
-      'promises.create', 'tasks.manage', 'reports.read', 'reports.export', 'duplicates.review',
+      'promises.create', 'tasks.manage', 'reports.read', 'reports.export', 'duplicates.review', 'duplicates.merge',
       'risk.read', 'risk.recalculate', 'reservations.manage', 'reservations.read',
       'reservations.create', 'reservations.deliver', 'reservations.cancel', 'reservations.extend',
       'analytical_accounts.manage', 'analytical_accounts.read',

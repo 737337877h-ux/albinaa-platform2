@@ -11,6 +11,8 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
+import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
 
 /**
  * شكل استجابة GET /customers/:id/balances — تعريف صريح (بدل مصفوفة فارغة
@@ -35,6 +37,10 @@ function normalizeName(s: string): string {
     .replace(/ة/g, 'ه')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizeAlias(s: string): string {
+  return normalizeName(s).toLowerCase().replace(/[\s()+-]/g, '');
 }
 
 @Injectable()
@@ -67,6 +73,9 @@ export class CustomersService {
     const where = await this.scopeWhere(user);
     const found = await this.prisma.customer.findFirst({ where: { ...where, id: customerId } });
     if (!found) throw new NotFoundException('العميل غير موجود أو خارج نطاق صلاحيتك');
+    if (found.mergedIntoId) {
+      throw new ConflictException(`تم دمج هذا السجل. استخدم العميل الأساسي: ${found.mergedIntoId}`);
+    }
     return found;
   }
 
@@ -86,11 +95,13 @@ export class CustomersService {
         { phonePrimary: { contains: s } },
         { phoneSecondary: { contains: s } },
         { whatsapp: { contains: s } },
+        { aliases: { some: { aliasNormalized: { contains: normalizeAlias(s) } } } },
       ];
     }
     if (q.region) where.region = q.region;
     if (q.branchId) where.branchId = q.branchId;
     if (q.status) where.status = q.status;
+    else where.status = { not: 'merged' };
     if (q.collectorId) {
       where.assignments = { some: { collectorId: q.collectorId, effectiveTo: null } };
     }
@@ -713,20 +724,38 @@ export class CustomersService {
       where: {
         reviewStatus: 'pending',
         customerA: { organizationId: actor.organizationId },
+        customerB: { organizationId: actor.organizationId },
       },
       include: {
         customerA: {
           select: {
-            id: true, externalCustomerCode: true, name: true,
+            id: true, externalCustomerCode: true, name: true, phonePrimary: true, whatsapp: true,
             balances: { select: { currencyCode: true, accountingBalance: true } },
+            _count: { select: { importedTxns: true, followups: true, promises: true, collections: true, reservations: true, tasks: true } },
           },
         },
         customerB: {
           select: {
-            id: true, externalCustomerCode: true, name: true,
+            id: true, externalCustomerCode: true, name: true, phonePrimary: true, whatsapp: true,
             balances: { select: { currencyCode: true, accountingBalance: true } },
+            _count: { select: { importedTxns: true, followups: true, promises: true, collections: true, reservations: true, tasks: true } },
           },
         },
+      },
+    });
+  }
+
+  async listMerges(actor: AuthUser) {
+    return this.prisma.customerMerge.findMany({
+      where: { organizationId: actor.organizationId },
+      orderBy: { mergedAt: 'desc' },
+      take: 50,
+      select: {
+        id: true, status: true, mergedAt: true, reversibleUntil: true, reversedAt: true,
+        master: { select: { id: true, name: true, externalCustomerCode: true } },
+        source: { select: { id: true, name: true, externalCustomerCode: true } },
+        creator: { select: { fullName: true } },
+        reverser: { select: { fullName: true } },
       },
     });
   }
@@ -797,5 +826,375 @@ export class CustomersService {
       entityId: pairId, newValue: { decision }, req,
     });
     return updated;
+  }
+
+  async mergeDuplicate(actor: AuthUser, pairId: string, dto: MergeDuplicateDto, req?: Request) {
+    const now = new Date();
+    const reversibleUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+    return this.prisma.$transaction(async (tx) => {
+      const pair = await tx.potentialDuplicateCustomer.findFirst({
+        where: { id: pairId, reviewStatus: 'pending', customerA: { organizationId: actor.organizationId } },
+      });
+      if (!pair) throw new NotFoundException('حالة التشابه غير موجودة أو تمت مراجعتها');
+      if (![pair.customerAId, pair.customerBId].includes(dto.masterCustomerId)) {
+        throw new BadRequestException('العميل الأساسي يجب أن يكون أحد طرفي حالة التشابه');
+      }
+
+      const sourceCustomerId = pair.customerAId === dto.masterCustomerId
+        ? pair.customerBId
+        : pair.customerAId;
+      const [master, source] = await Promise.all([
+        tx.customer.findFirst({
+          where: { id: dto.masterCustomerId, organizationId: actor.organizationId },
+          include: { balances: true, creditPolicy: true },
+        }),
+        tx.customer.findFirst({
+          where: { id: sourceCustomerId, organizationId: actor.organizationId },
+          include: { balances: true, creditPolicy: true },
+        }),
+      ]);
+      if (!master || !source) throw new NotFoundException('أحد سجلي العميل غير موجود');
+      if (master.mergedIntoId || source.mergedIntoId || master.status === 'merged' || source.status === 'merged') {
+        throw new ConflictException('لا يمكن دمج سجل مؤرشف أو مدمج مسبقًا');
+      }
+      if (master.creditPolicy && source.creditPolicy) {
+        throw new ConflictException('لكلا العميلين سياسة ائتمانية. راجع السياسة واختر واحدة قبل الدمج');
+      }
+
+      const sourceReconciliations = await tx.balanceReconciliation.findMany({
+        where: { customerId: source.id },
+        select: { importJobId: true, currencyCode: true },
+      });
+      if (sourceReconciliations.length) {
+        const collision = await tx.balanceReconciliation.findFirst({
+          where: {
+            customerId: master.id,
+            OR: sourceReconciliations.map((r) => ({ importJobId: r.importJobId, currencyCode: r.currencyCode })),
+          },
+        });
+        if (collision) {
+          throw new ConflictException('يوجد تعارض تسوية لنفس دفعة الاستيراد والعملة؛ يجب مراجعته قبل الدمج');
+        }
+      }
+
+      const [
+        importedTransactions, balanceSnapshots, ledgerEntries, reconciliations, collections,
+        followups, promises, tasks, reservations, scores, agingRows, agingDocuments,
+        assignments, attachments, gpsLogs, duplicatePairs,
+      ] = await Promise.all([
+        tx.importedTransaction.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.balanceSnapshot.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.operationalLedger.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.balanceReconciliation.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.collection.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.followup.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.paymentPromise.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.task.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.reservation.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.customerScore.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.debtAgingSummary.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.debtAgingDetail.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.customerAssignment.findMany({ where: { customerId: source.id }, select: { id: true, effectiveTo: true } }),
+        tx.attachment.findMany({ where: { entityTable: 'customers', entityId: source.id }, select: { id: true } }),
+        tx.gpsLog.findMany({ where: { entityTable: 'customers', entityId: source.id }, select: { id: true } }),
+        tx.potentialDuplicateCustomer.findMany({
+          where: {
+            reviewStatus: 'pending',
+            OR: [{ customerAId: source.id }, { customerBId: source.id }],
+          },
+          select: { id: true },
+        }),
+      ]);
+
+      const ids = <T extends { id: string }>(rows: T[]) => rows.map((row) => row.id);
+      const movedIds = {
+        importedTransactions: ids(importedTransactions), balanceSnapshots: ids(balanceSnapshots),
+        ledgerEntriesPreserved: ids(ledgerEntries), reconciliations: ids(reconciliations), collections: ids(collections),
+        followups: ids(followups), promises: ids(promises), tasks: ids(tasks), reservations: ids(reservations),
+        scores: ids(scores), agingRows: ids(agingRows), agingDocuments: ids(agingDocuments),
+        assignments: ids(assignments), attachments: ids(attachments), gpsLogs: ids(gpsLogs),
+      };
+
+      const masterBalanceBefore = master.balances.map((b) => ({
+        id: b.id, openingDebit: b.openingDebit.toString(), openingCredit: b.openingCredit.toString(),
+        accountingBalance: b.accountingBalance.toString(),
+        declaredBalance: b.declaredBalance?.toString() ?? null,
+        declaredLabel: b.declaredLabel, lastImportJobId: b.lastImportJobId,
+        updatedAt: b.updatedAt.toISOString(), currencyCode: b.currencyCode,
+      }));
+      const movedBalanceIds: string[] = [];
+      const mergedBalanceExpected: Array<{ id: string; accountingBalance: string; openingDebit: string; openingCredit: string }> = [];
+      const ledgerTransferByCurrency: Array<{ currencyCode: string; amount: string }> = [];
+      const masterByCurrency = new Map(master.balances.map((b) => [b.currencyCode, b]));
+      for (const sourceBalance of source.balances) {
+        if (sourceBalance.lastImportJobId) {
+          const sourceImport = await tx.importJob.findUnique({
+            where: { id: sourceBalance.lastImportJobId }, select: { importedAt: true },
+          });
+          if (sourceImport) {
+            const delta = await tx.operationalLedger.aggregate({
+              where: {
+                customerId: source.id, currencyCode: sourceBalance.currencyCode,
+                createdAt: { gt: sourceImport.importedAt },
+              },
+              _sum: { amountSigned: true },
+            });
+            if (delta._sum.amountSigned && !delta._sum.amountSigned.isZero()) {
+              ledgerTransferByCurrency.push({
+                currencyCode: sourceBalance.currencyCode, amount: delta._sum.amountSigned.toString(),
+              });
+            }
+          }
+        }
+        const masterBalance = masterByCurrency.get(sourceBalance.currencyCode);
+        if (!masterBalance) {
+          await tx.customerBalance.update({ where: { id: sourceBalance.id }, data: { customerId: master.id } });
+          movedBalanceIds.push(sourceBalance.id);
+          mergedBalanceExpected.push({
+            id: sourceBalance.id, accountingBalance: sourceBalance.accountingBalance.toString(),
+            openingDebit: sourceBalance.openingDebit.toString(), openingCredit: sourceBalance.openingCredit.toString(),
+          });
+          continue;
+        }
+        const openingDebit = masterBalance.openingDebit.plus(sourceBalance.openingDebit);
+        const openingCredit = masterBalance.openingCredit.plus(sourceBalance.openingCredit);
+        const accountingBalance = masterBalance.accountingBalance.plus(sourceBalance.accountingBalance);
+        const declaredBalance = masterBalance.declaredBalance === null && sourceBalance.declaredBalance === null
+          ? null
+          : (masterBalance.declaredBalance ?? new Prisma.Decimal(0))
+              .plus(sourceBalance.declaredBalance ?? new Prisma.Decimal(0));
+        await tx.customerBalance.update({
+          where: { id: masterBalance.id },
+          data: {
+            openingDebit, openingCredit, accountingBalance, declaredBalance,
+            declaredLabel: masterBalance.declaredLabel ?? sourceBalance.declaredLabel,
+            // Keep the master's accounting cut-off. Source post-import ledger delta is
+            // transferred below as an append-only entry, so no historical row is mutated.
+            lastImportJobId: masterBalance.lastImportJobId,
+            updatedAt: now,
+          },
+        });
+        mergedBalanceExpected.push({
+          id: masterBalance.id, accountingBalance: accountingBalance.toString(),
+          openingDebit: openingDebit.toString(), openingCredit: openingCredit.toString(),
+        });
+      }
+
+      const masterOpenAssignment = await tx.customerAssignment.findFirst({
+        where: { customerId: master.id, effectiveTo: null }, select: { id: true },
+      });
+      const sourceOpenAssignment = assignments.find((a) => a.effectiveTo === null) ?? null;
+      if (masterOpenAssignment && sourceOpenAssignment) {
+        await tx.customerAssignment.update({
+          where: { id: sourceOpenAssignment.id }, data: { effectiveTo: now },
+        });
+      }
+
+      const move = async (model: any, rowIds: string[]) => {
+        if (rowIds.length) await model.updateMany({ where: { id: { in: rowIds } }, data: { customerId: master.id } });
+      };
+      await move(tx.importedTransaction, movedIds.importedTransactions);
+      await move(tx.balanceSnapshot, movedIds.balanceSnapshots);
+      await move(tx.balanceReconciliation, movedIds.reconciliations);
+      await move(tx.collection, movedIds.collections);
+      await move(tx.followup, movedIds.followups);
+      await move(tx.paymentPromise, movedIds.promises);
+      await move(tx.task, movedIds.tasks);
+      await move(tx.reservation, movedIds.reservations);
+      await move(tx.customerScore, movedIds.scores);
+      await move(tx.debtAgingSummary, movedIds.agingRows);
+      await move(tx.debtAgingDetail, movedIds.agingDocuments);
+      await move(tx.customerAssignment, movedIds.assignments);
+      if (movedIds.attachments.length) {
+        await tx.attachment.updateMany({ where: { id: { in: movedIds.attachments } }, data: { entityId: master.id } });
+      }
+      if (movedIds.gpsLogs.length) {
+        await tx.gpsLog.updateMany({ where: { id: { in: movedIds.gpsLogs } }, data: { entityId: master.id } });
+      }
+
+      const movedCreditPolicy = Boolean(source.creditPolicy && !master.creditPolicy);
+      const movedCreditPolicyExpected = movedCreditPolicy
+        ? JSON.parse(JSON.stringify({ ...source.creditPolicy, customerId: master.id }))
+        : null;
+      if (movedCreditPolicy) {
+        await tx.customerCreditPolicy.update({ where: { customerId: source.id }, data: { customerId: master.id } });
+      }
+
+      const restorePayload = JSON.parse(JSON.stringify({
+        sourceBefore: { status: source.status, mergedIntoId: source.mergedIntoId, mergedAt: source.mergedAt },
+        movedIds, movedBalanceIds, masterBalanceBefore, mergedBalanceExpected, movedCreditPolicy,
+        ledgerTransferByCurrency, movedCreditPolicyExpected,
+        sourceOpenAssignmentId: masterOpenAssignment ? sourceOpenAssignment?.id ?? null : null,
+        duplicatePairIds: ids(duplicatePairs),
+      })) as Prisma.InputJsonValue;
+      const merge = await tx.customerMerge.create({
+        data: {
+          organizationId: actor.organizationId, masterCustomerId: master.id, sourceCustomerId: source.id,
+          pairId, restorePayload, mergedBy: actor.id, mergedAt: now, reversibleUntil,
+        },
+      });
+      for (const transfer of ledgerTransferByCurrency) {
+        await tx.operationalLedger.create({
+          data: {
+            customerId: master.id, currencyCode: transfer.currencyCode,
+            entryType: 'customer_merge_transfer',
+            amountSigned: transfer.amount, sourceTable: `customer_merges:${transfer.currencyCode}`, sourceId: merge.id,
+            createdBy: actor.id,
+          },
+        });
+      }
+
+      const aliasCandidates = [
+        ['external_code', source.externalCustomerCode], ['name', source.name],
+        ['phone', source.phonePrimary], ['phone', source.phoneSecondary], ['whatsapp', source.whatsapp],
+      ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+      if (aliasCandidates.length) {
+        await tx.customerAlias.createMany({
+          data: aliasCandidates.map(([aliasType, aliasValue]) => ({
+            organizationId: actor.organizationId, customerId: master.id, sourceCustomerId: source.id,
+            mergeId: merge.id, aliasType, aliasValue, aliasNormalized: normalizeAlias(aliasValue),
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      await tx.potentialDuplicateCustomer.updateMany({
+        where: { id: { in: ids(duplicatePairs) } },
+        data: { reviewStatus: 'merged', reviewedBy: actor.id, reviewedAt: now },
+      });
+      await tx.customer.update({
+        where: { id: source.id }, data: { status: 'merged', mergedIntoId: master.id, mergedAt: now },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: actor.id, action: 'customer_merged', entityTable: 'customer_merges', entityId: merge.id,
+          oldValue: { masterCustomerId: master.id, sourceCustomerId: source.id },
+          newValue: { movedCounts: Object.fromEntries(Object.entries(movedIds).map(([k, v]) => [k, v.length])), reversibleUntil },
+          reason: dto.reason ?? null, ipAddress: req?.ip ?? null,
+          userAgent: (req?.headers['user-agent'] as string) ?? null,
+        },
+      });
+
+      return {
+        mergeId: merge.id, masterCustomerId: master.id, sourceCustomerId: source.id,
+        reversibleUntil, movedCounts: Object.fromEntries(Object.entries(movedIds).map(([k, v]) => [k, v.length])),
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
+  }
+
+  async reverseMerge(actor: AuthUser, mergeId: string, dto: ReverseCustomerMergeDto, req?: Request) {
+    return this.prisma.$transaction(async (tx) => {
+      const merge = await tx.customerMerge.findFirst({
+        where: { id: mergeId, organizationId: actor.organizationId },
+      });
+      if (!merge) throw new NotFoundException('عملية الدمج غير موجودة');
+      if (merge.status !== 'active') throw new ConflictException('تم التراجع عن هذه العملية مسبقًا');
+      if (merge.reversibleUntil.getTime() < Date.now()) {
+        throw new ConflictException('انتهت مهلة التراجع البالغة 24 ساعة');
+      }
+
+      const payload = merge.restorePayload as any;
+      for (const expected of payload.mergedBalanceExpected ?? []) {
+        const current = await tx.customerBalance.findUnique({ where: { id: expected.id } });
+        if (!current
+          || current.accountingBalance.toString() !== expected.accountingBalance
+          || current.openingDebit.toString() !== expected.openingDebit
+          || current.openingCredit.toString() !== expected.openingCredit) {
+          throw new ConflictException('تغير رصيد العميل الأساسي بعد الدمج؛ أوقف التراجع وراجعه محاسبيًا');
+        }
+      }
+      if (payload.movedCreditPolicyExpected) {
+        const currentPolicy = await tx.customerCreditPolicy.findUnique({
+          where: { customerId: merge.masterCustomerId },
+        });
+        if (JSON.stringify(currentPolicy) !== JSON.stringify(payload.movedCreditPolicyExpected)) {
+          throw new ConflictException('تغيرت السياسة الائتمانية بعد الدمج؛ أوقف التراجع وراجعها يدويًا');
+        }
+      }
+
+      const moved = payload.movedIds as Record<string, string[]>;
+      const restore = async (model: any, rowIds: string[] = []) => {
+        if (rowIds.length) await model.updateMany({ where: { id: { in: rowIds } }, data: { customerId: merge.sourceCustomerId } });
+      };
+      await restore(tx.importedTransaction, moved.importedTransactions);
+      await restore(tx.balanceSnapshot, moved.balanceSnapshots);
+      await restore(tx.balanceReconciliation, moved.reconciliations);
+      await restore(tx.collection, moved.collections);
+      await restore(tx.followup, moved.followups);
+      await restore(tx.paymentPromise, moved.promises);
+      await restore(tx.task, moved.tasks);
+      await restore(tx.reservation, moved.reservations);
+      await restore(tx.customerScore, moved.scores);
+      await restore(tx.debtAgingSummary, moved.agingRows);
+      await restore(tx.debtAgingDetail, moved.agingDocuments);
+      await restore(tx.customerAssignment, moved.assignments);
+      if (payload.sourceOpenAssignmentId) {
+        await tx.customerAssignment.update({ where: { id: payload.sourceOpenAssignmentId }, data: { effectiveTo: null } });
+      }
+      if ((payload.movedBalanceIds as string[]).length) {
+        await tx.customerBalance.updateMany({
+          where: { id: { in: payload.movedBalanceIds } }, data: { customerId: merge.sourceCustomerId },
+        });
+      }
+      for (const balance of payload.masterBalanceBefore ?? []) {
+        await tx.customerBalance.update({
+          where: { id: balance.id },
+          data: {
+            openingDebit: balance.openingDebit, openingCredit: balance.openingCredit,
+            accountingBalance: balance.accountingBalance, declaredBalance: balance.declaredBalance,
+            declaredLabel: balance.declaredLabel, lastImportJobId: balance.lastImportJobId,
+            updatedAt: new Date(balance.updatedAt),
+          },
+        });
+      }
+      if (payload.movedCreditPolicy) {
+        await tx.customerCreditPolicy.update({
+          where: { customerId: merge.masterCustomerId }, data: { customerId: merge.sourceCustomerId },
+        });
+      }
+      for (const transfer of payload.ledgerTransferByCurrency ?? []) {
+        await tx.operationalLedger.create({
+          data: {
+            customerId: merge.masterCustomerId, currencyCode: transfer.currencyCode,
+            entryType: 'customer_merge_reversal',
+            amountSigned: new Prisma.Decimal(transfer.amount).negated(),
+            sourceTable: `customer_merge_reversals:${transfer.currencyCode}`, sourceId: merge.id, createdBy: actor.id,
+          },
+        });
+      }
+      if (moved.attachments?.length) {
+        await tx.attachment.updateMany({ where: { id: { in: moved.attachments } }, data: { entityId: merge.sourceCustomerId } });
+      }
+      if (moved.gpsLogs?.length) {
+        await tx.gpsLog.updateMany({ where: { id: { in: moved.gpsLogs } }, data: { entityId: merge.sourceCustomerId } });
+      }
+      if (payload.duplicatePairIds?.length) {
+        await tx.potentialDuplicateCustomer.updateMany({
+          where: { id: { in: payload.duplicatePairIds } },
+          data: { reviewStatus: 'pending', reviewedBy: null, reviewedAt: null },
+        });
+      }
+      await tx.customerAlias.deleteMany({ where: { mergeId } });
+      await tx.customer.update({
+        where: { id: merge.sourceCustomerId },
+        data: {
+          status: payload.sourceBefore.status,
+          mergedIntoId: payload.sourceBefore.mergedIntoId,
+          mergedAt: payload.sourceBefore.mergedAt ? new Date(payload.sourceBefore.mergedAt) : null,
+        },
+      });
+      await tx.customerMerge.update({
+        where: { id: mergeId }, data: { status: 'reversed', reversedBy: actor.id, reversedAt: new Date() },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: actor.id, action: 'customer_merge_reversed', entityTable: 'customer_merges', entityId: mergeId,
+          oldValue: { status: 'active' }, newValue: { status: 'reversed' }, reason: dto.reason ?? null,
+          ipAddress: req?.ip ?? null, userAgent: (req?.headers['user-agent'] as string) ?? null,
+        },
+      });
+      return { mergeId, reversed: true, masterCustomerId: merge.masterCustomerId, sourceCustomerId: merge.sourceCustomerId };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
   }
 }

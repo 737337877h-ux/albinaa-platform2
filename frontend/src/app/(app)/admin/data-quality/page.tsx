@@ -1,12 +1,14 @@
 'use client';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
+import { Dialog } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
-import { Button, Card } from '@/components/ui/primitives';
+import { Button, Card, Field, Input, Money } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
 
 interface DataQuality {
@@ -21,7 +23,21 @@ interface DuplicateCustomerRef {
   id: string;
   externalCustomerCode: string | null;
   name: string;
+  phonePrimary: string | null;
+  whatsapp: string | null;
   balances: { currencyCode: string; accountingBalance: string | number }[];
+  _count: { importedTxns: number; followups: number; promises: number; collections: number; reservations: number; tasks: number };
+}
+
+interface CustomerMerge {
+  id: string;
+  status: 'active' | 'reversed';
+  mergedAt: string;
+  reversibleUntil: string;
+  master: { id: string; name: string; externalCustomerCode: string };
+  source: { id: string; name: string; externalCustomerCode: string };
+  creator: { fullName: string };
+  reverser: { fullName: string } | null;
 }
 
 interface DuplicatePair {
@@ -37,7 +53,12 @@ interface DuplicatePair {
 export default function DataQualityPage() {
   const can = useCan();
   const canView = can('duplicates.review');
+  const canMerge = can('duplicates.merge');
   const qc = useQueryClient();
+  const [mergeChoice, setMergeChoice] = useState<{ pair: DuplicatePair; masterId: string } | null>(null);
+  const [mergeConfirm, setMergeConfirm] = useState('');
+  const [reverseChoice, setReverseChoice] = useState<CustomerMerge | null>(null);
+  const [reverseConfirm, setReverseConfirm] = useState('');
 
   const summary = useQuery<DataQuality>({
     queryKey: ['data-quality-summary'],
@@ -51,6 +72,12 @@ export default function DataQualityPage() {
     enabled: canView,
   });
 
+  const merges = useQuery<CustomerMerge[]>({
+    queryKey: ['customer-merges'],
+    queryFn: () => api<CustomerMerge[]>('/customers/duplicates/merges'),
+    enabled: canMerge,
+  });
+
   const reviewMut = useMutation({
     mutationFn: (pairId: string) =>
       api(`/customers/duplicates/${pairId}`, {
@@ -61,6 +88,42 @@ export default function DataQualityPage() {
       toast('تم تسجيل المراجعة', 'ok');
       qc.invalidateQueries({ queryKey: ['data-quality-duplicates'] });
       qc.invalidateQueries({ queryKey: ['data-quality-summary'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const mergeMut = useMutation({
+    mutationFn: ({ pairId, masterId }: { pairId: string; masterId: string }) =>
+      api(`/customers/duplicates/${pairId}/merge`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({ masterCustomerId: masterId, confirmText: 'دمج' }),
+      }),
+    onSuccess: () => {
+      toast('تم دمج العميلين ويمكن التراجع خلال 24 ساعة', 'ok');
+      setMergeChoice(null);
+      setMergeConfirm('');
+      qc.invalidateQueries({ queryKey: ['data-quality-duplicates'] });
+      qc.invalidateQueries({ queryKey: ['data-quality-summary'] });
+      qc.invalidateQueries({ queryKey: ['customer-merges'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const reverseMut = useMutation({
+    mutationFn: (mergeId: string) =>
+      api(`/customers/duplicates/merges/${mergeId}/reverse`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({ confirmText: 'تراجع' }),
+      }),
+    onSuccess: () => {
+      toast('تم التراجع وإعادة السجلات إلى العميل السابق', 'ok');
+      setReverseChoice(null);
+      setReverseConfirm('');
+      qc.invalidateQueries({ queryKey: ['data-quality-duplicates'] });
+      qc.invalidateQueries({ queryKey: ['data-quality-summary'] });
+      qc.invalidateQueries({ queryKey: ['customer-merges'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
   });
@@ -130,32 +193,35 @@ export default function DataQualityPage() {
               {(duplicates.data ?? []).map((p) => (
                 <TRow key={p.id}>
                   <TD>
-                    <Link className="font-medium text-pine-700 hover:underline dark:text-pine-100" href={`/customers/${p.customerA.id}`}>
-                      {p.customerA.name}
-                    </Link>
-                    {p.customerA.externalCustomerCode && (
-                      <p className="text-xs text-concrete-500" dir="ltr">{p.customerA.externalCustomerCode}</p>
-                    )}
+                    <CustomerComparison customer={p.customerA} />
                   </TD>
                   <TD>
-                    <Link className="font-medium text-pine-700 hover:underline dark:text-pine-100" href={`/customers/${p.customerB.id}`}>
-                      {p.customerB.name}
-                    </Link>
-                    {p.customerB.externalCustomerCode && (
-                      <p className="text-xs text-concrete-500" dir="ltr">{p.customerB.externalCustomerCode}</p>
-                    )}
+                    <CustomerComparison customer={p.customerB} />
                   </TD>
                   <TD className="max-w-[260px] text-xs text-concrete-600 dark:text-concrete-400">
                     {p.matchReason}
                   </TD>
                   <TD>
-                    <Button
-                      variant="secondary"
-                      loading={reviewMut.isPending}
-                      onClick={() => reviewMut.mutate(p.id)}
-                    >
-                      ليس تكرارًا
-                    </Button>
+                    <div className="flex min-w-[170px] flex-col gap-2">
+                      {canMerge && (
+                        <>
+                          <Button className="text-xs" onClick={() => setMergeChoice({ pair: p, masterId: p.customerA.id })}>
+                            دمج — الأول أساسي
+                          </Button>
+                          <Button className="text-xs" variant="secondary" onClick={() => setMergeChoice({ pair: p, masterId: p.customerB.id })}>
+                            دمج — الثاني أساسي
+                          </Button>
+                        </>
+                      )}
+                      <Button
+                        className="text-xs"
+                        variant="ghost"
+                        loading={reviewMut.isPending}
+                        onClick={() => reviewMut.mutate(p.id)}
+                      >
+                        ليس تكرارًا
+                      </Button>
+                    </div>
                   </TD>
                 </TRow>
               ))}
@@ -163,6 +229,105 @@ export default function DataQualityPage() {
           </Table>
         </DataState>
       </Card>
+
+      {canMerge && (
+        <Card className="p-4">
+          <h2 className="font-display text-sm font-semibold">عمليات الدمج الحديثة</h2>
+          <p className="mt-1 text-xs text-concrete-500">يمكن التراجع خلال 24 ساعة ما لم يتغير الرصيد بعد الدمج.</p>
+          <div className="mt-4 space-y-2">
+            {(merges.data ?? []).length === 0 && <p className="text-sm text-concrete-500">لا توجد عمليات دمج.</p>}
+            {(merges.data ?? []).map((merge) => {
+              const reversible = merge.status === 'active' && new Date(merge.reversibleUntil).getTime() > Date.now();
+              return (
+                <div key={merge.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-concrete-100 p-3 dark:border-white/10">
+                  <div>
+                    <p className="text-sm"><strong>{merge.source.name}</strong> ← <strong>{merge.master.name}</strong></p>
+                    <p className="mt-1 text-xs text-concrete-500">
+                      بواسطة {merge.creator.fullName} · {new Date(merge.mergedAt).toLocaleString('ar-YE')}
+                    </p>
+                  </div>
+                  {reversible ? (
+                    <Button variant="danger" onClick={() => setReverseChoice(merge)}>تراجع</Button>
+                  ) : (
+                    <span className="text-xs text-concrete-500">{merge.status === 'reversed' ? 'تم التراجع' : 'انتهت المهلة'}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      <Dialog open={Boolean(mergeChoice)} onClose={() => { setMergeChoice(null); setMergeConfirm(''); }} title="تأكيد دمج العميلين">
+        {mergeChoice && (
+          <div className="space-y-4">
+            <div className="rounded-lg bg-hazard-50 p-3 text-sm text-hazard-700 dark:bg-hazard-700/20 dark:text-hazard-100">
+              سيبقى <strong>{mergeChoice.masterId === mergeChoice.pair.customerA.id ? mergeChoice.pair.customerA.name : mergeChoice.pair.customerB.name}</strong> كسجل أساسي،
+              ويؤرشف السجل الآخر بعد نقل حركاته. لا تُخلط العملات، ويمكن التراجع خلال 24 ساعة.
+            </div>
+            <Field label='اكتب كلمة "دمج" للتأكيد'>
+              <Input value={mergeConfirm} onChange={(e) => setMergeConfirm(e.target.value)} autoFocus />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setMergeChoice(null)}>إلغاء</Button>
+              <Button
+                variant="danger"
+                loading={mergeMut.isPending}
+                disabled={mergeConfirm !== 'دمج'}
+                onClick={() => mergeMut.mutate({ pairId: mergeChoice.pair.id, masterId: mergeChoice.masterId })}
+              >
+                تنفيذ الدمج
+              </Button>
+            </div>
+          </div>
+        )}
+      </Dialog>
+
+      <Dialog open={Boolean(reverseChoice)} onClose={() => { setReverseChoice(null); setReverseConfirm(''); }} title="التراجع عن الدمج">
+        {reverseChoice && (
+          <div className="space-y-4">
+            <p className="text-sm text-concrete-600 dark:text-concrete-300">
+              ستُعاد السجلات المنقولة من <strong>{reverseChoice.master.name}</strong> إلى <strong>{reverseChoice.source.name}</strong>.
+            </p>
+            <Field label='اكتب كلمة "تراجع" للتأكيد'>
+              <Input value={reverseConfirm} onChange={(e) => setReverseConfirm(e.target.value)} autoFocus />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setReverseChoice(null)}>إلغاء</Button>
+              <Button
+                variant="danger"
+                loading={reverseMut.isPending}
+                disabled={reverseConfirm !== 'تراجع'}
+                onClick={() => reverseMut.mutate(reverseChoice.id)}
+              >
+                تنفيذ التراجع
+              </Button>
+            </div>
+          </div>
+        )}
+      </Dialog>
+    </div>
+  );
+}
+
+function CustomerComparison({ customer }: { customer: DuplicateCustomerRef }) {
+  const activity = customer._count.importedTxns + customer._count.followups + customer._count.promises
+    + customer._count.collections + customer._count.reservations + customer._count.tasks;
+  return (
+    <div className="min-w-[180px] space-y-1.5">
+      <Link className="font-medium text-pine-700 hover:underline dark:text-pine-100" href={`/customers/${customer.id}`}>
+        {customer.name}
+      </Link>
+      <p className="text-xs text-concrete-500" dir="ltr">{customer.externalCustomerCode ?? '—'}</p>
+      {(customer.phonePrimary || customer.whatsapp) && (
+        <p className="text-xs text-concrete-500" dir="ltr">{customer.phonePrimary ?? customer.whatsapp}</p>
+      )}
+      <div className="space-y-1">
+        {customer.balances.map((balance) => (
+          <div key={balance.currencyCode}><Money value={balance.accountingBalance} currency={balance.currencyCode} signed /></div>
+        ))}
+      </div>
+      <p className="text-xs text-concrete-500">{activity} حركة ومتابعة مرتبطة</p>
     </div>
   );
 }

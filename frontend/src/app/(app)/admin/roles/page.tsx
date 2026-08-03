@@ -88,6 +88,7 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   ]},
   { label: 'المكررات', prefix: 'duplicates.', items: [
     { code: 'duplicates.review', label: 'مراجعة المكررات' },
+    { code: 'duplicates.merge', label: 'دمج العملاء والتراجع' },
   ]},
 ];
 

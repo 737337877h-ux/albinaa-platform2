@@ -18,6 +18,12 @@ export async function cleanupTestCustomers(prisma: PrismaService) {
   await prisma.$executeRawUnsafe(`ALTER TABLE operational_ledger DISABLE TRIGGER trg_ledger_immutable`);
 
   try {
+    await prisma.customerAlias.deleteMany({
+      where: { OR: [{ customerId: { in: ids } }, { sourceCustomerId: { in: ids } }] },
+    });
+    await prisma.customerMerge.deleteMany({
+      where: { OR: [{ masterCustomerId: { in: ids } }, { sourceCustomerId: { in: ids } }] },
+    });
     await prisma.balanceSnapshot.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.importedTransaction.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customerBalance.deleteMany({ where: { customerId: { in: ids } } });

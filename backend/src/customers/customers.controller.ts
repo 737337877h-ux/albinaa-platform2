@@ -4,6 +4,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { AssignCollectorDto } from './dto/assign-collector.dto';
@@ -11,6 +12,8 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { CustomerStatusDto } from './dto/customer-status.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
 import { ReviewDuplicateDto } from './dto/review-duplicate.dto';
+import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
+import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { CustomersService } from './customers.service';
@@ -37,6 +40,13 @@ export class CustomersController {
     return this.customers.listDuplicates(user);
   }
 
+  @Get('duplicates/merges')
+  @RequirePermissions('duplicates.merge')
+  @ApiOperation({ summary: 'عمليات دمج العملاء الحديثة وحالة مهلة التراجع' })
+  duplicateMerges(@CurrentUser() user: AuthUser) {
+    return this.customers.listMerges(user);
+  }
+
   @Get('data-quality')
   @RequirePermissions('duplicates.review')
   @ApiOperation({ summary: 'Data quality KPIs: missing phone, pending duplicates, multi-currency, suspicious balances (read-only)' })
@@ -54,6 +64,32 @@ export class CustomersController {
     @Req() req: Request,
   ) {
     return this.customers.reviewDuplicate(user, pairId, dto.decision, req);
+  }
+
+  @Post('duplicates/:pairId/merge')
+  @Idempotent()
+  @RequirePermissions('duplicates.merge')
+  @ApiOperation({ summary: 'دمج عميلين بعد تأكيد بشري، مع إمكانية التراجع خلال 24 ساعة' })
+  mergeDuplicate(
+    @CurrentUser() user: AuthUser,
+    @Param('pairId', ParseUUIDPipe) pairId: string,
+    @Body() dto: MergeDuplicateDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.mergeDuplicate(user, pairId, dto, req);
+  }
+
+  @Post('duplicates/merges/:mergeId/reverse')
+  @Idempotent()
+  @RequirePermissions('duplicates.merge')
+  @ApiOperation({ summary: 'التراجع عن دمج عميل خلال المهلة المحددة' })
+  reverseMerge(
+    @CurrentUser() user: AuthUser,
+    @Param('mergeId', ParseUUIDPipe) mergeId: string,
+    @Body() dto: ReverseCustomerMergeDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.reverseMerge(user, mergeId, dto, req);
   }
 
   @Get(':id')
