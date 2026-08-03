@@ -9,7 +9,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/ ./
 RUN mkdir -p public
 ARG NEXT_PUBLIC_API_URL=http://localhost:3000
+ARG NEXT_PUBLIC_APP_VERSION=1.3.0-rc.1
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION
 RUN npm run build
 
 FROM node:22-alpine AS runtime

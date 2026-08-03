@@ -17,7 +17,7 @@ export class HealthController {
   health() {
     return {
       status: 'ok',
-      version: process.env.APP_VERSION ?? '0.2.0',
+      version: process.env.APP_VERSION ?? '1.3.0-rc.1',
       environment: process.env.NODE_ENV ?? 'development',
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
       timestamp: new Date().toISOString(),
