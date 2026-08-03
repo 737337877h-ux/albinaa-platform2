@@ -113,6 +113,15 @@ describe('Import Engine — Milestone 3 (e2e)', () => {
                      'customersUpdated','transactionsNew','transactionsDuplicate','durationMs']) {
       expect(res.body[k]).toBeDefined();
     }
+    const importedCustomer = await prisma.customer.findFirstOrThrow({
+      where: { externalCustomerCode: '90001' },
+    });
+    expect(await prisma.customerScore.count({ where: { customerId: importedCustomer.id } })).toBe(1);
+    const riskAudit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'risk_recalculated' }, orderBy: { createdAt: 'desc' },
+    });
+    expect((riskAudit.newValue as any).source).toBe('import_completed');
+    expect((riskAudit.newValue as any).targetedCustomerIds).toContain(importedCustomer.id);
   });
 
   // ===== السيناريو 5: العملات المتعددة =====

@@ -234,6 +234,11 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
     // البند يظهر في عمل اليوم بأولوية التصعيد
     expect(today.body.items.some((i: any) => i.reason.includes('تصعيد'))).toBe(true);
     expect(today.body.summary.tasksToday).toBeGreaterThanOrEqual(1);
+    const promiseRiskAudit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'risk_recalculated' }, orderBy: { createdAt: 'desc' },
+    });
+    expect((promiseRiskAudit.newValue as any).source).toBe('promise_broken');
+    expect((promiseRiskAudit.newValue as any).targetedCustomerIds).toContain(customerId);
   });
 
   // ===== 5+6) تسجيل تحصيل + تحديث الرصيد التشغيلي =====
@@ -271,6 +276,11 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
     // أمين الصندوق (صلاحية cash.receive) استلم إشعار تحصيل جديد — للمدير هنا
     const notif = await prisma.notification.findFirst({ where: { kind: 'collection_created' } });
     expect(notif).not.toBeNull();
+    const collectionRiskAudit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'risk_recalculated' }, orderBy: { createdAt: 'desc' },
+    });
+    expect((collectionRiskAudit.newValue as any).source).toBe('collection_created');
+    expect((collectionRiskAudit.newValue as any).targetedCustomerIds).toContain(customerId);
   });
 
   it('تنفيذ الوعد يغلق مهمته، والتحصيل يظهر في Timeline', async () => {

@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
-import { RiskService } from './risk.service';
+import { RiskRefreshService } from './risk-refresh.service';
 
 export function nextDailyRun(now: Date, hour: number): Date {
   const next = new Date(now);
@@ -18,7 +18,7 @@ export class RiskScheduler implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly risk: RiskService,
+    private readonly refresh: RiskRefreshService,
   ) {}
 
   onModuleInit() {
@@ -81,7 +81,7 @@ export class RiskScheduler implements OnModuleInit, OnModuleDestroy {
         }
         const actor: AuthUser = { ...user, roles: [], permissions: [] };
         try {
-          await this.risk.recalculate(actor, undefined, 'scheduled');
+          await this.refresh.refreshAll(actor, 'scheduled');
         } catch (error) {
           this.logger.error(
             `فشل تحديث المخاطر التلقائي للمنظمة ${organization.id}`,

@@ -1,16 +1,18 @@
 import {
-  BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
+  BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { RiskRefreshService } from '../risk/risk-refresh.service';
 import { AssignCollectorDto } from './dto/assign-collector.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
 import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
 
@@ -48,6 +50,7 @@ export class CustomersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    @Optional() private readonly riskRefresh?: RiskRefreshService,
   ) {}
 
   // --------------------------------------------------------------------------
@@ -743,6 +746,62 @@ export class CustomersService {
         },
       },
     });
+  }
+
+  async updateCreditPolicy(
+    actor: AuthUser, id: string, dto: UpdateCreditPolicyDto, req?: Request,
+  ) {
+    await this.assertAccess(actor, id);
+    if (!actor.permissions.includes('customers.write')) {
+      throw new ForbiddenException('تعديل السياسة الائتمانية يتطلب صلاحية customers.write');
+    }
+    const before = await this.prisma.customerCreditPolicy.findUnique({ where: { customerId: id } });
+    const currencyCode = dto.creditLimitCurrency ?? before?.creditLimitCurrency ?? null;
+    const amount = dto.creditLimitAmount === undefined
+      ? before?.creditLimitAmount ?? null
+      : dto.creditLimitAmount;
+    if (amount != null && !currencyCode) {
+      throw new BadRequestException('حدد عملة حد الائتمان عند إدخال قيمة الحد');
+    }
+    if (currencyCode) {
+      const currency = await this.prisma.currency.findFirst({
+        where: { code: currencyCode, active: true },
+      });
+      if (!currency) throw new BadRequestException('عملة حد الائتمان غير معروفة أو معطلة');
+    }
+    const data = {
+      ...dto,
+      ...(dto.creditLimitAmount === null ? { creditLimitCurrency: null } : {}),
+      decidedBy: actor.id,
+      decidedAt: new Date(),
+    };
+    const policy = await this.prisma.customerCreditPolicy.upsert({
+      where: { customerId: id },
+      update: data,
+      create: {
+        customerId: id,
+        allowCreditSale: dto.allowCreditSale ?? false,
+        allowPurchaseWithDebt: dto.allowPurchaseWithDebt ?? false,
+        defaultPaymentDays: dto.defaultPaymentDays ?? null,
+        creditLimitAmount: dto.creditLimitAmount ?? null,
+        creditLimitCurrency: dto.creditLimitAmount == null ? null : dto.creditLimitCurrency,
+        creditStatus: dto.creditStatus ?? 'open',
+        restrictionReason: dto.restrictionReason ?? null,
+        decidedBy: actor.id,
+        decidedAt: new Date(),
+      },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'credit_policy_updated',
+      entityTable: 'customer_credit_policies',
+      entityId: id,
+      oldValue: before ? JSON.parse(JSON.stringify(before)) : null,
+      newValue: JSON.parse(JSON.stringify(policy)),
+      req,
+    });
+    await this.riskRefresh?.trigger(actor, [id], 'credit_policy_changed', req);
+    return policy;
   }
 
   async listMerges(actor: AuthUser) {

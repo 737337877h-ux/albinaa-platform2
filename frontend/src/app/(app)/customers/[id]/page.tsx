@@ -52,7 +52,7 @@ interface Customer360 {
     since: string;
   } | null;
   assignmentHistoryCount: number;
-  creditPolicy: Record<string, unknown> | null;
+  creditPolicy: CreditPolicy | null;
   latestScore: Record<string, unknown> | null;
   pendingDuplicateAlerts: number;
   counts: {
@@ -170,6 +170,16 @@ interface ReservationItem {
   expiresAt: string | null;
 }
 
+interface CreditPolicy {
+  allowCreditSale: boolean;
+  allowPurchaseWithDebt: boolean;
+  defaultPaymentDays: number | null;
+  creditLimitAmount: number | string | null;
+  creditLimitCurrency: string | null;
+  creditStatus: string;
+  restrictionReason: string | null;
+}
+
 interface ReservationUnit {
   id: string;
   code: string;
@@ -281,6 +291,7 @@ export default function Customer360Page() {
   const canRisk = can('risk.read');
   const canTasks = can('tasks.manage');
   const canTransfer = can('customers.transfer');
+  const canWrite = can('customers.write');
   const canReservationsRead = can('reservations.read');
   const canReservationsCreate = can('reservations.create');
   const canReservationsDeliver = can('reservations.deliver');
@@ -312,6 +323,51 @@ export default function Customer360Page() {
     ),
     enabled: canRead && canBalances && tab === 'statement',
     retry: false,
+  });
+
+  const [creditOpen, setCreditOpen] = useState(false);
+  const [creditForm, setCreditForm] = useState({
+    allowCreditSale: false,
+    allowPurchaseWithDebt: false,
+    defaultPaymentDays: '',
+    creditLimitAmount: '',
+    creditLimitCurrency: 'YER',
+    creditStatus: 'open',
+    restrictionReason: '',
+  });
+  const openCreditPolicy = () => {
+    const policy = customer.data?.creditPolicy;
+    setCreditForm({
+      allowCreditSale: policy?.allowCreditSale ?? false,
+      allowPurchaseWithDebt: policy?.allowPurchaseWithDebt ?? false,
+      defaultPaymentDays: policy?.defaultPaymentDays == null ? '' : String(policy.defaultPaymentDays),
+      creditLimitAmount: policy?.creditLimitAmount == null ? '' : String(policy.creditLimitAmount),
+      creditLimitCurrency: policy?.creditLimitCurrency ?? 'YER',
+      creditStatus: policy?.creditStatus ?? 'open',
+      restrictionReason: policy?.restrictionReason ?? '',
+    });
+    setCreditOpen(true);
+  };
+  const creditMut = useMutation({
+    mutationFn: () => api(`/customers/${id}/credit-policy`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        allowCreditSale: creditForm.allowCreditSale,
+        allowPurchaseWithDebt: creditForm.allowPurchaseWithDebt,
+        defaultPaymentDays: creditForm.defaultPaymentDays === '' ? null : Number(creditForm.defaultPaymentDays),
+        creditLimitAmount: creditForm.creditLimitAmount === '' ? null : Number(creditForm.creditLimitAmount),
+        creditLimitCurrency: creditForm.creditLimitAmount === '' ? null : creditForm.creditLimitCurrency,
+        creditStatus: creditForm.creditStatus,
+        restrictionReason: creditForm.restrictionReason.trim() || null,
+      }),
+    }),
+    onSuccess: () => {
+      toast('تم تحديث سياسة الائتمان ودرجة المخاطر', 'ok');
+      setCreditOpen(false);
+      qc.invalidateQueries({ queryKey: ['customer360', id] });
+      qc.invalidateQueries({ queryKey: ['customer360-risk', id] });
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
   });
 
   useEffect(() => {
@@ -671,6 +727,68 @@ export default function Customer360Page() {
                     onRetry={() => risk.refetch()}
                   />
                 )}
+
+                <Card className="p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-iron-900 dark:text-concrete-100">السياسة الائتمانية</h3>
+                      {c.creditPolicy ? (
+                        <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-sm text-concrete-600 dark:text-concrete-400">
+                          <span>الحالة: {c.creditPolicy.creditStatus === 'blocked' ? 'محظور' : c.creditPolicy.creditStatus === 'restricted' ? 'مقيّد' : 'مفتوح'}</span>
+                          <span>البيع الآجل: {c.creditPolicy.allowCreditSale ? 'مسموح' : 'غير مسموح'}</span>
+                          <span>أيام السداد: {c.creditPolicy.defaultPaymentDays ?? '—'}</span>
+                          <span>
+                            حد الائتمان:{' '}
+                            {c.creditPolicy.creditLimitAmount == null
+                              ? 'غير محدد'
+                              : <Money value={Number(c.creditPolicy.creditLimitAmount)} currency={c.creditPolicy.creditLimitCurrency ?? undefined} />}
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm text-concrete-500">لم تُحدد سياسة ائتمانية لهذا العميل.</p>
+                      )}
+                    </div>
+                    {canWrite && <Button variant="secondary" onClick={openCreditPolicy}>تعديل السياسة</Button>}
+                  </div>
+                </Card>
+
+                <Dialog open={creditOpen} onClose={() => setCreditOpen(false)} title="تعديل السياسة الائتمانية">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={creditForm.allowCreditSale} onChange={(e) => setCreditForm((v) => ({ ...v, allowCreditSale: e.target.checked }))} />
+                      السماح بالبيع الآجل
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={creditForm.allowPurchaseWithDebt} onChange={(e) => setCreditForm((v) => ({ ...v, allowPurchaseWithDebt: e.target.checked }))} />
+                      السماح بالشراء مع وجود مديونية
+                    </label>
+                    <Field label="حد الائتمان">
+                      <Input type="number" min="0" value={creditForm.creditLimitAmount} onChange={(e) => setCreditForm((v) => ({ ...v, creditLimitAmount: e.target.value }))} />
+                    </Field>
+                    <Field label="عملة الحد">
+                      <Select value={creditForm.creditLimitCurrency} onChange={(e) => setCreditForm((v) => ({ ...v, creditLimitCurrency: e.target.value }))}>
+                        <option value="YER">ريال يمني</option><option value="SAR">ريال سعودي</option><option value="USD">دولار</option>
+                      </Select>
+                    </Field>
+                    <Field label="أيام السداد الافتراضية">
+                      <Input type="number" min="0" max="3650" value={creditForm.defaultPaymentDays} onChange={(e) => setCreditForm((v) => ({ ...v, defaultPaymentDays: e.target.value }))} />
+                    </Field>
+                    <Field label="حالة الائتمان">
+                      <Select value={creditForm.creditStatus} onChange={(e) => setCreditForm((v) => ({ ...v, creditStatus: e.target.value }))}>
+                        <option value="open">مفتوح</option><option value="restricted">مقيّد</option><option value="blocked">محظور</option>
+                      </Select>
+                    </Field>
+                    <div className="sm:col-span-2">
+                      <Field label="سبب التقييد أو ملاحظة القرار">
+                        <Textarea value={creditForm.restrictionReason} onChange={(e) => setCreditForm((v) => ({ ...v, restrictionReason: e.target.value }))} />
+                      </Field>
+                    </div>
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <Button variant="secondary" onClick={() => setCreditOpen(false)}>إلغاء</Button>
+                    <Button loading={creditMut.isPending} onClick={() => creditMut.mutate()}>حفظ وتحديث المخاطر</Button>
+                  </div>
+                </Dialog>
 
                 {/* Open Tasks (PR 5) */}
                 {canTasks && (

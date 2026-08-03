@@ -17,6 +17,9 @@ import { PrismaService } from '../prisma/prisma.service';
  *   - إعادة الحساب idempotent: تحذف درجات المنظمة السابقة وتكتب سطرًا جديدًا لكل عميل.
  */
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
+export type RiskRefreshSource =
+  | 'manual' | 'scheduled' | 'collection_created' | 'collection_reversed'
+  | 'promise_broken' | 'import_completed' | 'import_reversed' | 'credit_policy_changed';
 
 const NO_ANSWER_RESULTS = ['لا يرد', 'الهاتف مغلق', 'مشغول'];
 const GRACE_REQUEST_RESULTS = ['طلب تأجيل'];
@@ -138,13 +141,14 @@ export class RiskService {
   async recalculate(
     actor: AuthUser,
     req?: Request,
-    source: 'manual' | 'scheduled' = 'manual',
+    source: RiskRefreshSource = 'manual',
+    customerIds?: string[],
   ) {
     const orgId = actor.organizationId;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const [customers, balances, agingSummaries, aging, collections, brokenPromises, followups, followupResults, creditTxns] = await Promise.all([
+    const [customers, balances, agingSummaries, aging, collections, brokenPromises, followups, followupResults, creditTxns, creditPolicies] = await Promise.all([
       this.prisma.customer.findMany({
         where: { organizationId: orgId },
         select: { id: true, externalCustomerCode: true, name: true },
@@ -189,7 +193,13 @@ export class RiskService {
         where: { customer: { organizationId: orgId }, credit: { gt: 0 }, reversedAt: null },
         select: { customerId: true, currencyCode: true, txDate: true },
       }),
+      this.prisma.customerCreditPolicy.findMany({
+        where: { customer: { organizationId: orgId }, creditLimitAmount: { not: null } },
+        select: { customerId: true, creditLimitAmount: true, creditLimitCurrency: true },
+      }),
     ]);
+
+    const targetIds = customerIds?.length ? new Set(customerIds) : null;
 
     const noAnswerResultIds = new Set(
       followupResults.filter((r) => NO_ANSWER_RESULTS.includes(r.name)).map((r) => r.id),
@@ -259,6 +269,15 @@ export class RiskService {
       const lower = sorted.reduce((n, v) => (v < value ? n + 1 : n), 0);
       percentileByKey.set(key, sorted.length > 0 ? (lower / sorted.length) * 100 : 0);
     }
+    const creditLimitByKey = new Map<string, number>();
+    for (const policy of creditPolicies) {
+      if (policy.creditLimitCurrency && policy.creditLimitAmount != null) {
+        creditLimitByKey.set(
+          `${policy.customerId}|${policy.creditLimitCurrency}`,
+          Number(policy.creditLimitAmount),
+        );
+      }
+    }
 
     const currenciesOf = new Map<string, Set<string>>();
     for (const key of agingBucketsByKey.keys()) {
@@ -284,6 +303,7 @@ export class RiskService {
     const rows: { customerId: string; score: number; riskLevel: RiskLevel; reasons: unknown }[] = [];
 
     for (const customer of customers) {
+      if (targetIds && !targetIds.has(customer.id)) continue;
       const broken = brokenCount.get(customer.id) ?? 0;
       const noAnswer = noAnswerCount.get(customer.id) ?? 0;
       const grace = graceCount.get(customer.id) ?? 0;
@@ -342,9 +362,14 @@ export class RiskService {
 
         const balance = balanceByKey.get(ageKey) ?? 0;
         const pct = percentileByKey.get(ageKey) ?? 0;
-        const balanceAmount = balance > 0 ? pointsForBalancePercentile(pct) : 0;
+        const creditLimit = creditLimitByKey.get(ageKey) ?? null;
+        const overCreditLimit = creditLimit !== null && balance > creditLimit;
+        const balanceAmount = balance > 0
+          ? overCreditLimit ? 20 : pointsForBalancePercentile(pct)
+          : 0;
         const balanceLabel =
           balance === 0 ? 'لا يوجد رصيد مدين مسجل'
+          : overCreditLimit ? `رصيد (${ccy}) ${fmtAmount(balance)} يتجاوز حد الائتمان ${fmtAmount(creditLimit!)}`
           : pct >= 90 ? `رصيد (${ccy}) ${fmtAmount(balance)} — مرتفع جدًا`
           : pct >= 75 ? `رصيد (${ccy}) ${fmtAmount(balance)} — مرتفع`
           : pct >= 50 ? `رصيد (${ccy}) ${fmtAmount(balance)} — متوسط`
@@ -400,7 +425,11 @@ export class RiskService {
     }));
     await this.prisma.$transaction(
       async (tx) => {
-        await tx.customerScore.deleteMany({ where: { customer: { organizationId: orgId } } });
+        await tx.customerScore.deleteMany({
+          where: targetIds
+            ? { customerId: { in: [...targetIds] }, customer: { organizationId: orgId } }
+            : { customer: { organizationId: orgId } },
+        });
         await tx.customerScore.createMany({ data });
       },
       { timeout: 30_000 },
@@ -413,8 +442,11 @@ export class RiskService {
       userId: actor.id,
       action: 'risk_recalculated',
       entityTable: 'customer_scores',
-      newValue: { totalCustomers: rows.length, byLevel, source },
-      reason: `${source === 'scheduled' ? 'تحديث تلقائي' : 'إعادة احتساب يدوي'} لدرجات المخاطر (${rows.length} عميل)`,
+      newValue: {
+        totalCustomers: rows.length, byLevel, source,
+        targetedCustomerIds: targetIds ? [...targetIds] : null,
+      },
+      reason: `${source === 'scheduled' ? 'تحديث تلقائي مجدول' : source === 'manual' ? 'إعادة احتساب يدوي' : `تحديث فوري: ${source}`} لدرجات المخاطر (${rows.length} عميل)`,
       req,
     });
 

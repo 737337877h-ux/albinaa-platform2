@@ -16,6 +16,7 @@ import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
 import { CustomersService } from './customers.service';
 
 @ApiTags('Customers')
@@ -97,6 +98,18 @@ export class CustomersController {
   @ApiOperation({ summary: 'Customer 360: البيانات + الأرصدة + الإسناد + السياسة + العدادات' })
   find360(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.customers.find360(user, id);
+  }
+
+  @Patch(':id/credit-policy')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'تحديث سياسة وحد الائتمان مع تحديث درجة المخاطر فورًا' })
+  updateCreditPolicy(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCreditPolicyDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.updateCreditPolicy(user, id, dto, req);
   }
 
   @Get(':id/timeline')

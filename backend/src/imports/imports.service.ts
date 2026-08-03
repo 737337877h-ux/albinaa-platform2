@@ -1,5 +1,5 @@
 import {
-  BadRequestException, ConflictException, Injectable, Logger, NotFoundException,
+  BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -9,6 +9,7 @@ import * as path from 'path';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { RiskRefreshService } from '../risk/risk-refresh.service';
 import { ImportProfile, ParseResultJson, ParserService } from './parser.service';
 
 const CHUNK = 500;
@@ -36,6 +37,7 @@ export class ImportsService {
     private readonly prisma: PrismaService,
     private readonly parser: ParserService,
     private readonly audit: AuditService,
+    @Optional() private readonly riskRefresh?: RiskRefreshService,
   ) {}
 
   // --------------------------------------------------------------------------
@@ -443,6 +445,13 @@ export class ImportsService {
           durationMs,
         }, req,
       });
+
+      await this.riskRefresh?.trigger(
+        actor,
+        (rollbackStateComplete.after.customers as Array<{ id: string }>).map((customer) => customer.id),
+        'import_completed',
+        req,
+      );
 
       return this.buildReport(updated);
     } catch (e) {

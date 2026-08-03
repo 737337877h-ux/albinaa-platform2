@@ -1,5 +1,5 @@
 import {
-  BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
+  BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
@@ -8,6 +8,7 @@ import { startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RiskRefreshService } from '../risk/risk-refresh.service';
 import { CreateCollectionDto } from './dto/create-collection.dto';
 import { QueryCollectionsDto } from './dto/query-collections.dto';
 import { ReverseCollectionDto } from './dto/reverse-collection.dto';
@@ -26,6 +27,7 @@ export class CollectionsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly riskRefresh?: RiskRefreshService,
   ) {}
 
   private async collectorOf(user: AuthUser) {
@@ -169,6 +171,7 @@ export class CollectionsService {
       },
       req,
     });
+    await this.riskRefresh?.trigger(actor, [dto.customerId], 'collection_created', req);
     return collection;
   }
 
@@ -311,6 +314,7 @@ export class CollectionsService {
       oldValue: { status: original.status },
       newValue: { reversalId: result.id, reason: dto.reason }, req,
     });
+    await this.riskRefresh?.trigger(actor, [original.customerId], 'collection_reversed', req);
     return { original: id, reversal: result.id, message: 'عُكست العملية بأثر تدقيقي كامل' };
   }
 
