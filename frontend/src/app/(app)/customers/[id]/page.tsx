@@ -3,11 +3,12 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
-import { ArrowDownUp, CheckCircle2, Download, Phone, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
+import { ArrowDownUp, CheckCircle2, Download, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
+import { contactLinks } from '@/lib/contact';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Dialog } from '@/components/ui/dialog';
@@ -502,6 +503,8 @@ export default function Customer360Page() {
   }
 
   const c = customer.data;
+  const links = c ? contactLinks(c.phonePrimary) : null;
+  const whatsappLink = c ? contactLinks(c.whatsapp ?? c.phonePrimary)?.whatsapp : null;
   const isLoading = customer.isLoading;
   const err = customer.error;
 
@@ -556,6 +559,25 @@ export default function Customer360Page() {
               </Badge>
             )}
           </div>
+          {(links || whatsappLink) && (
+            <div className="mt-4 flex flex-wrap gap-2 border-t border-concrete-100 pt-4 dark:border-white/10">
+              {links && (
+                <>
+                  <a href={links.tel} className="inline-flex items-center gap-2 rounded-lg bg-pine-700 px-4 py-2 text-sm font-medium text-white hover:bg-pine-800">
+                    <Phone className="h-4 w-4" aria-hidden /> اتصال
+                  </a>
+                  <a href={links.sms} className="inline-flex items-center gap-2 rounded-lg border border-concrete-200 bg-white px-4 py-2 text-sm font-medium text-iron-900 hover:bg-concrete-100 dark:border-white/10 dark:bg-iron-800 dark:text-concrete-100">
+                    <MessageSquare className="h-4 w-4" aria-hidden /> رسالة نصية
+                  </a>
+                </>
+              )}
+              {whatsappLink && (
+                <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-credit-600 px-4 py-2 text-sm font-medium text-white hover:bg-credit-700">
+                  <MessageCircle className="h-4 w-4" aria-hidden /> واتساب
+                </a>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
