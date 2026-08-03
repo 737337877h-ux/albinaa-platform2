@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Upload,
@@ -290,10 +290,10 @@ export default function ImportsPage() {
 
   /* ──── Execute Mutation ──── */
   const executeMut = useMutation({
-    mutationFn: (jobId: string) =>
+    mutationFn: ({ jobId, force }: { jobId: string; force: boolean }) =>
       api<ReportData>(`/imports/${jobId}/execute`, {
         method: 'POST',
-        body: JSON.stringify({ force: false }),
+        body: JSON.stringify({ force }),
       }),
     onSuccess: (data) => {
       toast('تم تنفيذ الاستيراد بنجاح', 'ok');
@@ -423,7 +423,7 @@ export default function ImportsPage() {
                     <div className="flex items-center gap-1">
                       {row.status === 'dry_run' && canRun && (
                         <button
-                          onClick={() => executeMut.mutate(row.id)}
+                          onClick={() => executeMut.mutate({ jobId: row.id, force: false })}
                           disabled={executeMut.isPending || row.executable === false}
                           className="rounded p-1.5 text-concrete-400 hover:bg-pine-50 hover:text-pine-700 dark:hover:bg-white/10 dark:hover:text-pine-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-concrete-400"
                           aria-label="تنفيذ الاستيراد"
@@ -469,8 +469,8 @@ export default function ImportsPage() {
       <PreviewDialog
         data={previewData}
         onClose={() => setPreviewData(null)}
-        onExecute={() => {
-          if (previewData) executeMut.mutate(previewData.jobId);
+        onExecute={(force) => {
+          if (previewData) executeMut.mutate({ jobId: previewData.jobId, force });
         }}
         executing={executeMut.isPending}
         canRun={canRun}
@@ -615,10 +615,16 @@ function PreviewDialog({
 }: {
   data: UploadResponse | null;
   onClose: () => void;
-  onExecute: () => void;
+  onExecute: (force: boolean) => void;
   executing: boolean;
   canRun: boolean;
 }) {
+  const [duplicateConfirmed, setDuplicateConfirmed] = useState(false);
+
+  useEffect(() => {
+    setDuplicateConfirmed(false);
+  }, [data?.jobId]);
+
   if (!data) return null;
   const { preview } = data;
   const hasErrors = preview.parserErrors > 0 || preview.ruleErrors > 0;
@@ -641,9 +647,24 @@ function PreviewDialog({
 
         {/* ── Previously imported warning ── */}
         {data.previouslyImported && (
-          <div className="flex items-start gap-2 rounded-lg border border-hazard-300 bg-hazard-50 px-3 py-2 text-sm text-hazard-700 dark:border-hazard-600/30 dark:bg-hazard-700/20 dark:text-hazard-100">
-            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            <span>تم استيراد هذا الملف مسبقًا — تأكد من عدم التكرار قبل التنفيذ.</span>
+          <div className="space-y-3 rounded-lg border border-hazard-300 bg-hazard-50 px-3 py-3 text-sm text-hazard-800 dark:border-hazard-600/30 dark:bg-hazard-700/20 dark:text-hazard-100">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span>
+                هذا الملف مطابق تمامًا لملف استُورد بتاريخ{' '}
+                <strong>{fmtDateTime(data.previouslyImported.importedAt)}</strong>.
+                لن تتكرر الحركات المحمية، لكن إعادة التنفيذ ستُسجل كتجاوز صريح.
+              </span>
+            </div>
+            <label className="flex cursor-pointer items-start gap-2 rounded-md border border-hazard-300 bg-white/60 px-3 py-2 dark:border-hazard-500/40 dark:bg-iron-800/40">
+              <input
+                type="checkbox"
+                checked={duplicateConfirmed}
+                onChange={(event) => setDuplicateConfirmed(event.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-pine-700"
+              />
+              <span>أفهم أن الملف مستورد سابقًا وأوافق على إعادة تنفيذه.</span>
+            </label>
           </div>
         )}
 
@@ -917,10 +938,11 @@ function PreviewDialog({
           </Button>
           {canRun && (
             <Button
-              onClick={onExecute}
+              onClick={() => onExecute(Boolean(data.previouslyImported))}
               loading={executing}
               disabled={
                 !preview.executable ||
+                (Boolean(data.previouslyImported) && !duplicateConfirmed) ||
                 (isStatement && hasErrors && preview.importableTransactions === 0)
               }
             >

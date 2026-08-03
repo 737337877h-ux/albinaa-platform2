@@ -215,6 +215,14 @@ describe('Import Engine — Milestone 3 (e2e)', () => {
       where: { customer: { externalCustomerCode: '90001' }, currencyCode: 'YER' },
     });
     expect(Number(b?.accountingBalance)).toBe(12000);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { action: 'import_executed', entityId: firstJobId },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(audit).not.toBeNull();
+    expect((audit?.newValue as any)?.forcedDuplicateImport).toBe(true);
+    expect((audit?.newValue as any)?.previousImportJobId).toEqual(expect.any(String));
   });
 
   it('Snapshot جديد أُنشئ لكل استيراد (تاريخ أرصدة كامل)', async () => {

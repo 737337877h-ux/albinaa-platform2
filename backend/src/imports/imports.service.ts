@@ -428,6 +428,8 @@ export class ImportsService {
       await this.audit.log({
         userId: actor.id, action: 'import_executed', entityTable: 'import_jobs', entityId: jobId,
         newValue: {
+          forcedDuplicateImport: Boolean(previous && force),
+          previousImportJobId: previous?.id ?? null,
           customersNew: result.customersNew, customersUpdated: result.customersUpdated,
           txnsInserted: result.txnsInserted, txnsSkipped: result.txnsSkipped,
           agingRowsWritten: result.agingRowsWritten ?? 0,
