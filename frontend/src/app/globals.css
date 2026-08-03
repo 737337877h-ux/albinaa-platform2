@@ -13,7 +13,7 @@ body {
 }
 
 /* الأرقام المالية: جدولية دائمًا — قرار تصميمي أساسي لقراءة الكشوف */
-.tnum { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+.tnum { font-family: 'Space Grotesk', 'Segoe UI', Arial, sans-serif; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
 
 /* شريط التحذير المائل — يظهر حصريًا على المتأخر والتصعيد (معنى لا زينة) */
 .hazard-strip {

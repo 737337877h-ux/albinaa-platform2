@@ -24,4 +24,11 @@ describe('contactLinks', () => {
       whatsapp: 'https://wa.me/967777123456',
     });
   });
+
+  it('adds an encoded message when provided', () => {
+    expect(contactLinks('777123456', 'مرحبًا يا عميل')?.sms)
+      .toBe(`sms:+967777123456?body=${encodeURIComponent('مرحبًا يا عميل')}`);
+    expect(contactLinks('777123456', 'مرحبًا يا عميل')?.whatsapp)
+      .toBe(`https://wa.me/967777123456?text=${encodeURIComponent('مرحبًا يا عميل')}`);
+  });
 });

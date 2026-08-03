@@ -1,12 +1,12 @@
 'use client';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronLeft, Sparkles } from 'lucide-react';
 import { api, tokenStore } from '@/lib/api';
 import { useCan, useMe } from '@/lib/auth';
 import { todayISO } from '@/lib/errors';
 import { CCY_AR, fmtDateTime, fmtMoney, PROMISE_STATUS_AR, TASK_TYPE_AR } from '@/lib/format';
-import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { HBarChart, StackedBar } from '@/components/ui/charts';
 import { Badge, Card, CardHeader, Money } from '@/components/ui/primitives';
@@ -90,6 +90,7 @@ function notifText(n: NotificationItem): string {
 export default function DashboardPage() {
   const can = useCan();
   const { data: me } = useMe();
+  const qc = useQueryClient();
   const today = todayISO();
 
   const canAdminKpis = can('reports.read');
@@ -97,6 +98,29 @@ export default function DashboardPage() {
   const canPromisesList = can('customers.read');
   const canCollectionsList = can('customers.read');
   const canTasks = can('tasks.manage');
+  const isManagerView = canAdminKpis;
+
+  const settings = useQuery<{ key: string; value: unknown }[]>({
+    queryKey: ['settings'], queryFn: () => api('/settings'), enabled: canTasks && hasToken(), staleTime: 60_000,
+  });
+  const smartTasksEnabledRaw = settings.data?.find((s) => s.key === 'smartTasks.enabled')?.value;
+  const smartTasksEnabled = smartTasksEnabledRaw !== false && String(smartTasksEnabledRaw ?? 'true').toLowerCase() !== 'false';
+  const autoGenerate = useMutation({
+    mutationFn: () => api<{ createdTasks: number; enabled?: boolean }>('/tasks/generate-today', { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks-today'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-kpis'] });
+    },
+  });
+  useEffect(() => {
+    if (!canTasks || !smartTasksEnabled || !settings.isSuccess || autoGenerate.isPending) return;
+    const key = `albinaa-smart-tasks-${today}`;
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+    autoGenerate.mutate();
+    // Runs once per signed-in browser session/day; backend also prevents duplicates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canTasks, smartTasksEnabled, settings.isSuccess, today]);
 
   // ---- المؤشرات الرئيسية: لوحة إدارية أو لوحة محصل، بحسب الصلاحية ----
   const summary = useQuery({
@@ -154,7 +178,19 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title={`مرحبًا${me ? `، ${me.fullName.split(' ')[0]}` : ''}`} />
+      <div className="overflow-hidden rounded-2xl bg-gradient-to-l from-[#06241B] via-[#0B3C2D] to-pine-700 p-5 text-white shadow-card sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-xs text-white/70"><Sparkles className="h-4 w-4 text-[#C59B27]" /> لوحة التحصيل الذكية</div>
+            <h1 className="font-display text-xl font-bold sm:text-2xl">مرحبًا{me ? `، ${me.fullName.split(' ')[0]}` : ''}</h1>
+            <p className="mt-1 text-sm text-white/70">{isManagerView ? 'نظرة المدير: قرارات ومؤشرات المديونية والتحصيل' : 'نظرة المحصّل: أولوياتك وخطة التواصل لليوم'}</p>
+          </div>
+          {canTasks && <div className="rounded-xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm">
+            <div className="flex items-center gap-2 text-sm"><Bot className="h-4 w-4 text-[#C59B27]" /> المهام الذكية</div>
+            <p className="mt-1 text-xs text-white/70">{smartTasksEnabled ? (autoGenerate.isPending ? 'جارٍ تحديث الأولويات…' : 'مفعّلة وتُحدّث يوميًا') : 'متوقفة من الإعدادات'}</p>
+          </div>}
+        </div>
+      </div>
 
       {/* المؤشرات الرئيسية */}
       <section aria-label="المؤشرات الرئيسية">
@@ -249,6 +285,34 @@ export default function DashboardPage() {
           </DataState>
         )}
       </section>
+
+      {canTasks && (
+        <Card className="overflow-hidden border border-[#C59B27]/30">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-[#F9F3E5] px-4 py-3 dark:bg-[#C59B27]/10">
+            <div>
+              <h2 className="font-display text-sm font-bold text-[#0B3C2D] dark:text-pine-100">قرار اليوم — من يجب التواصل معه؟</h2>
+              <p className="mt-0.5 text-xs text-concrete-500">الترتيب يجمع الوعود المتأخرة، المخاطر، كِبر المبلغ، وعمر المديونية بعد أسبوع.</p>
+            </div>
+            <Link href="/tasks" className="inline-flex items-center gap-1 text-xs font-medium text-pine-700 dark:text-pine-100">فتح قائمة العمل <ChevronLeft className="h-4 w-4" /></Link>
+          </div>
+          <div className="grid gap-2 p-3 md:grid-cols-2 xl:grid-cols-3">
+            {(isManagerView ? (kpis.data?.topPriorityTasks ?? []).slice(0, 6).map((t) => ({
+              id: t.taskId, customerId: t.customerId, name: t.customerName, reason: t.priorityReason,
+              amount: t.expectedAmount, currency: t.expectedCurrency, priority: t.priority,
+            })) : (tasksToday.data?.items ?? []).slice(0, 6).map((t, index) => ({
+              id: `${t.customerId}-${index}`, customerId: t.customerId, name: t.customerName, reason: t.reason,
+              amount: t.expectedAmount ?? null, currency: t.currency ?? null, priority: t.priority,
+            }))).map((item, index) => (
+              <Link key={item.id} href={`/customers/${item.customerId}`} className="group rounded-xl border border-concrete-100 bg-white p-3 transition hover:-translate-y-0.5 hover:border-pine-500 hover:shadow-card dark:border-white/10 dark:bg-iron-800">
+                <div className="flex items-start justify-between gap-2"><span className="font-medium text-iron-900 dark:text-concrete-100">{index + 1}. {item.name}</span><Badge tone={item.priority <= 3 ? 'debt' : item.priority <= 6 ? 'hazard' : 'pine'}>أولوية {item.priority}</Badge></div>
+                <p className="mt-2 line-clamp-2 text-xs text-concrete-500">{item.reason}</p>
+                {item.amount != null && item.currency && <p className="mt-2 text-sm font-bold text-debt-600"><Money value={item.amount} currency={item.currency} /></p>}
+              </Link>
+            ))}
+            {((isManagerView ? kpis.data?.topPriorityTasks : tasksToday.data?.items)?.length ?? 0) === 0 && <p className="p-3 text-sm text-concrete-500">لا توجد مهام ذات أولوية الآن.</p>}
+          </div>
+        </Card>
+      )}
 
       {/* KPI Dashboard (PR 7) — بيانات حقيقية: مخاطر، مهام، أعمار */}
       {canAdminKpis && (

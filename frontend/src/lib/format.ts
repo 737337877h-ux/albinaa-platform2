@@ -24,6 +24,7 @@ export const TASK_STATUS_AR: Record<string, string> = {
   open: 'مفتوحة', escalated: 'تصعيد', done: 'منجزة',
 };
 export const TASK_TYPE_AR: Record<string, string> = {
+  large_debt_7plus: 'مديونية كبيرة تجاوزت أسبوعًا',
   promise_due: 'وعد سداد مستحق',
   promise_escalation: 'تصعيد وعد متأخر',
   followup_overdue: 'متابعة متأخرة',

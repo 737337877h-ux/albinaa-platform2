@@ -2,13 +2,14 @@ import { TASK_TYPE_PRIORITY, priorityOfTaskType, queueTaskKey } from './tasks.se
 
 describe('daily work queue helpers (PR 5)', () => {
   describe('TASK_TYPE_PRIORITY', () => {
-    it('ranks queue causes in owner-approved order 1..11', () => {
+    it('ranks queue causes in owner-approved order 1..12', () => {
       const ordered = [
         'promise_overdue',
         'promise_due_today',
         'followup_overdue',
         'risk_critical',
         'risk_high',
+        'large_debt_7plus',
         'debt_120plus',
         'high_balance_no_followup',
         'repeated_no_answer',

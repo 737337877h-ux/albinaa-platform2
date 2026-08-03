@@ -1,20 +1,21 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Save, RotateCcw } from 'lucide-react';
+import { Plus, Save, RotateCcw, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { toast } from '@/components/ui/toast';
-import { Button, Card, Input } from '@/components/ui/primitives';
+import { Button, Card, Input, Select, Textarea } from '@/components/ui/primitives';
+import { DEFAULT_MESSAGE_TEMPLATES, MessageTemplate, parseMessageTemplates } from '@/lib/messaging';
 
 /* ────────────────────────────── Types ────────────────────────────────── */
 
 interface SettingItem {
   key: string;
-  value: string;
+  value: unknown;
 }
 
 interface SettingDef {
@@ -33,6 +34,39 @@ interface SettingsGroup {
 /* ────────────────────────── Setting Definitions ───────────────────────── */
 
 const GROUPS: SettingsGroup[] = [
+  {
+    title: 'المهام الذكية والأولويات',
+    items: [
+      {
+        key: 'smartTasks.enabled',
+        label: 'تشغيل التوليد التلقائي',
+        description: 'إنشاء قائمة عمل ذكية مرة يوميًا عند فتح لوحة المعلومات، مع منع التكرار.',
+        type: 'boolean',
+        defaultValue: 'true',
+      },
+      {
+        key: 'smartTasks.minDebtAgeDays',
+        label: 'الحد الأدنى لعمر المديونية',
+        description: 'إعطاء أولوية للمديونيات الكبيرة التي مر عليها هذا العدد من الأيام.',
+        type: 'number',
+        defaultValue: '7',
+      },
+      {
+        key: 'smartTasks.highBalanceTopPercent',
+        label: 'نسبة أعلى الأرصدة',
+        description: 'اعتبار أعلى نسبة من أرصدة كل عملة مديونيات كبيرة ذات أولوية.',
+        type: 'number',
+        defaultValue: '10',
+      },
+      {
+        key: 'smartTasks.followupStaleDays',
+        label: 'أيام انقطاع المتابعة',
+        description: 'عدد الأيام قبل اعتبار العميل بحاجة إلى متابعة جديدة.',
+        type: 'number',
+        defaultValue: '7',
+      },
+    ],
+  },
   {
     title: 'مدة الجلسة',
     items: [
@@ -139,7 +173,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (query.data) {
       const map: Record<string, string> = {};
-      for (const s of query.data) map[s.key] = s.value;
+      for (const s of query.data) map[s.key] = typeof s.value === 'string' ? s.value : String(s.value);
       setValues((prev) => {
         const merged = { ...map };
         for (const k of Object.keys(prev)) {
@@ -326,9 +360,66 @@ export default function SettingsPage() {
               </Card>
             );
           })}
+          <MessageTemplatesSettings initial={query.data?.find((s) => s.key === 'communication.templates')?.value} />
         </div>
       </DataState>
     </div>
+  );
+}
+
+function MessageTemplatesSettings({ initial }: { initial: unknown }) {
+  const qc = useQueryClient();
+  const [templates, setTemplates] = useState<MessageTemplate[]>(DEFAULT_MESSAGE_TEMPLATES);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setTemplates(parseMessageTemplates(initial)), [initial]);
+
+  const update = (id: string, patch: Partial<MessageTemplate>) =>
+    setTemplates((items) => items.map((item) => item.id === id ? { ...item, ...patch } : item));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api('/settings/communication.templates', {
+        method: 'PUT', body: JSON.stringify({ key: 'communication.templates', value: templates }),
+      });
+      await qc.invalidateQueries({ queryKey: ['settings'] });
+      toast('تم حفظ قوالب التواصل', 'ok');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'تعذر حفظ القوالب', 'err');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+        <div>
+          <h3 className="font-display text-sm font-semibold">قوالب واتساب والرسائل النصية</h3>
+          <p className="mt-1 text-xs text-concrete-500">المتغيرات: {'{customerName}'}، {'{customerCode}'}، {'{balance}'}، {'{currency}'}، {'{debtAgeDays}'}، {'{companyName}'}</p>
+        </div>
+        <Button type="button" variant="secondary" onClick={() => setTemplates((items) => [...items, {
+          id: `template-${Date.now()}`, name: 'قالب جديد', channel: 'both', body: 'مرحبًا {customerName}،', active: true,
+        }])}><Plus className="h-4 w-4" /> إضافة قالب</Button>
+      </div>
+      <div className="space-y-4 p-4">
+        {templates.map((template) => (
+          <div key={template.id} className="rounded-xl border border-concrete-100 p-3 dark:border-white/10">
+            <div className="grid gap-3 md:grid-cols-[1fr_160px_auto_auto]">
+              <Input value={template.name} onChange={(e) => update(template.id, { name: e.target.value })} aria-label="اسم القالب" />
+              <Select value={template.channel} onChange={(e) => update(template.id, { channel: e.target.value as MessageTemplate['channel'] })}>
+                <option value="both">واتساب وSMS</option><option value="whatsapp">واتساب</option><option value="sms">SMS</option>
+              </Select>
+              <ToggleSwitch checked={template.active} onChange={(active) => update(template.id, { active })} />
+              <button type="button" className="rounded-lg p-2 text-debt-600 hover:bg-debt-50" aria-label="حذف القالب" onClick={() => setTemplates((items) => items.filter((item) => item.id !== template.id))}>
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+            <Textarea className="mt-3" rows={3} value={template.body} onChange={(e) => update(template.id, { body: e.target.value })} aria-label="نص القالب" />
+          </div>
+        ))}
+        <div className="flex justify-end"><Button onClick={save} loading={saving}><Save className="h-4 w-4" /> حفظ القوالب</Button></div>
+      </div>
+    </Card>
   );
 }
 
