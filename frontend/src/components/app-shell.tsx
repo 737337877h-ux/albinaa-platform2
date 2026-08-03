@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   Banknote, CalendarClock, FileSpreadsheet, HandCoins, LayoutDashboard,
   ListTodo, PhoneCall, Users, Settings, Shield, UserCog, GitBranch,
-  CircleDollarSign, ScrollText, ArrowRightLeft, ShieldCheck, Landmark,
+  CircleDollarSign, ScrollText, ArrowRightLeft, ShieldCheck, Landmark, PackageCheck,
 } from 'lucide-react';
 import { useMe, useCan } from '@/lib/auth';
 import { ApiError, tokenStore } from '@/lib/api';
@@ -23,6 +23,7 @@ const NAV = [
   { href: '/promises', label: 'وعود السداد', icon: CalendarClock, perm: 'customers.read' },
   { href: '/collections', label: 'التحصيلات', icon: HandCoins, perm: 'customers.read' },
   { href: '/imports', label: 'استيراد Excel', icon: FileSpreadsheet, perm: 'imports.read' },
+  { href: '/reservations', label: 'حجوزات البضاعة', icon: PackageCheck, perm: 'reservations.read' },
 ] as const;
 
 const ADMIN_NAV = [

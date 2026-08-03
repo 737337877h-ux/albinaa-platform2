@@ -13,8 +13,8 @@
 // ============================================================================
 
 generator client {
-  provider      = "prisma-client-js"
-  output        = "../backend/node_modules/.prisma/client"
+  provider = "prisma-client-js"
+  output   = "../backend/node_modules/.prisma/client"
 }
 
 datasource db {
@@ -30,17 +30,17 @@ model Organization {
   name      String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  branches          Branch[]
-  users             User[]
-  roles             Role[]
-  documentTypes     DocumentType[]
-  customers         Customer[]
-  importTemplates   ImportTemplate[]
-  importJobs        ImportJob[]
-  collectionMethods CollectionMethod[]
-  followupTypes     FollowupType[]
-  followupResults   FollowupResult[]
-  systemSettings    SystemSetting[]
+  branches           Branch[]
+  users              User[]
+  roles              Role[]
+  documentTypes      DocumentType[]
+  customers          Customer[]
+  importTemplates    ImportTemplate[]
+  importJobs         ImportJob[]
+  collectionMethods  CollectionMethod[]
+  followupTypes      FollowupType[]
+  followupResults    FollowupResult[]
+  systemSettings     SystemSetting[]
   analyticalAccounts AnalyticalAccount[]
 
   @@map("organizations")
@@ -81,26 +81,26 @@ model User {
   organization Organization @relation(fields: [organizationId], references: [id])
   branch       Branch?      @relation(fields: [branchId], references: [id])
 
-  collector            Collector?
-  userRoles            UserRole[]              @relation("UserOwnRoles")
-  rolesGranted         UserRole[]              @relation("RoleGranter")
-  assignmentsMade      CustomerAssignment[]    @relation("AssignmentMaker")
-  creditDecisions      CustomerCreditPolicy[]  @relation("CreditDecider")
-  duplicateReviews     PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
-  importTemplates      ImportTemplate[]
-  importJobs           ImportJob[]
-  ledgerEntries        OperationalLedger[]
-  reconciliationsDone  BalanceReconciliation[] @relation("ReconReviewer")
-  cashReceived         CashHandover[]
-  followups            Followup[]
-  tasksCreated         Task[]                  @relation("TaskCreator")
-  reservationsCreated  Reservation[]           @relation("ReservationCreator")
-  analyticalAccountsCreated AnalyticalAccount[] @relation("AnalyticalAccountCreator")
-  attachments          Attachment[]
-  gpsLogs              GpsLog[]
-  notifications        Notification[]
-  auditLogs            AuditLog[]
-  authSessions         AuthSession[]
+  collector                 Collector?
+  userRoles                 UserRole[]                   @relation("UserOwnRoles")
+  rolesGranted              UserRole[]                   @relation("RoleGranter")
+  assignmentsMade           CustomerAssignment[]         @relation("AssignmentMaker")
+  creditDecisions           CustomerCreditPolicy[]       @relation("CreditDecider")
+  duplicateReviews          PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
+  importTemplates           ImportTemplate[]
+  importJobs                ImportJob[]
+  ledgerEntries             OperationalLedger[]
+  reconciliationsDone       BalanceReconciliation[]      @relation("ReconReviewer")
+  cashReceived              CashHandover[]
+  followups                 Followup[]
+  tasksCreated              Task[]                       @relation("TaskCreator")
+  reservationsCreated       Reservation[]                @relation("ReservationCreator")
+  analyticalAccountsCreated AnalyticalAccount[]          @relation("AnalyticalAccountCreator")
+  attachments               Attachment[]
+  gpsLogs                   GpsLog[]
+  notifications             Notification[]
+  auditLogs                 AuditLog[]
+  authSessions              AuthSession[]
 
   @@unique([organizationId, username], map: "uq_users_org_username")
   @@map("users")
@@ -281,9 +281,9 @@ model CustomerAssignment {
   assignedBy    String?   @map("assigned_by") @db.Uuid
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
 
-  customer Customer  @relation(fields: [customerId], references: [id])
+  customer  Customer  @relation(fields: [customerId], references: [id])
   collector Collector @relation(fields: [collectorId], references: [id])
-  assigner User?     @relation("AssignmentMaker", fields: [assignedBy], references: [id])
+  assigner  User?     @relation("AssignmentMaker", fields: [assignedBy], references: [id])
 
   // ملاحظة: الفهرس الفريد الجزئي uq_current_assignment (WHERE effective_to IS NULL)
   // معرّف في migration SQL — يضمن إسنادًا حاليًا واحدًا فقط لكل عميل.
@@ -346,38 +346,38 @@ model ImportTemplate {
 }
 
 model ImportJob {
-  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId       String   @map("organization_id") @db.Uuid
-  templateId           String?  @map("template_id") @db.Uuid
-  fileName             String   @map("file_name")
-  fileHash             String   @map("file_hash")
-  uploadedBy           String   @map("uploaded_by") @db.Uuid
-  importedAt           DateTime @default(now()) @map("imported_at") @db.Timestamptz()
-  status               String   @default("completed")
-  rowsTotal            Int?     @map("rows_total")
-  txnsInFile           Int?     @map("txns_in_file")
-  customersNew         Int?     @map("customers_new")
-  customersUpdated     Int?     @map("customers_updated")
-  txnsInserted         Int?     @map("txns_inserted")
-  txnsSkippedDuplicate Int?     @map("txns_skipped_duplicate")
-  errorsCount          Int?     @map("errors_count")
-  totalBalanceBefore   Json?    @map("total_balance_before") @db.JsonB
-  totalBalanceAfter    Json?    @map("total_balance_after") @db.JsonB
-  errorReport          Json?    @map("error_report") @db.JsonB
-  agingRowsWritten      Int? @map("aging_rows_written")
-  agingDocumentsWritten Int? @map("aging_documents_written")
-  agingSkippedDuplicate Int? @map("aging_skipped_duplicate")
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId        String   @map("organization_id") @db.Uuid
+  templateId            String?  @map("template_id") @db.Uuid
+  fileName              String   @map("file_name")
+  fileHash              String   @map("file_hash")
+  uploadedBy            String   @map("uploaded_by") @db.Uuid
+  importedAt            DateTime @default(now()) @map("imported_at") @db.Timestamptz()
+  status                String   @default("completed")
+  rowsTotal             Int?     @map("rows_total")
+  txnsInFile            Int?     @map("txns_in_file")
+  customersNew          Int?     @map("customers_new")
+  customersUpdated      Int?     @map("customers_updated")
+  txnsInserted          Int?     @map("txns_inserted")
+  txnsSkippedDuplicate  Int?     @map("txns_skipped_duplicate")
+  errorsCount           Int?     @map("errors_count")
+  totalBalanceBefore    Json?    @map("total_balance_before") @db.JsonB
+  totalBalanceAfter     Json?    @map("total_balance_after") @db.JsonB
+  errorReport           Json?    @map("error_report") @db.JsonB
+  agingRowsWritten      Int?     @map("aging_rows_written")
+  agingDocumentsWritten Int?     @map("aging_documents_written")
+  agingSkippedDuplicate Int?     @map("aging_skipped_duplicate")
 
   organization Organization    @relation(fields: [organizationId], references: [id])
   template     ImportTemplate? @relation(fields: [templateId], references: [id])
   uploader     User            @relation(fields: [uploadedBy], references: [id])
 
-  transactions     ImportedTransaction[]
-  balancesUpdated  CustomerBalance[]
-  snapshots        BalanceSnapshot[]
-  reconciliations  BalanceReconciliation[]
-  agingRows        DebtAgingSummary[]
-  agingDocuments   DebtAgingDetail[]
+  transactions        ImportedTransaction[]
+  balancesUpdated     CustomerBalance[]
+  snapshots           BalanceSnapshot[]
+  reconciliations     BalanceReconciliation[]
+  agingRows           DebtAgingSummary[]
+  agingDocuments      DebtAgingDetail[]
   analyticalMovements AnalyticalMovement[]
 
   @@index([organizationId, fileHash], map: "idx_import_jobs_hash")
@@ -731,27 +731,28 @@ model Task {
 // 9) الحجوزات
 // ---------------------------------------------------------------------------
 model Reservation {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customerId     String    @map("customer_id") @db.Uuid
-  currencyCode   String    @map("currency_code")
+  id           String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId   String @map("customer_id") @db.Uuid
+  currencyCode String @map("currency_code")
 
   // --- Legacy fields (pre-PR-F credit-reservation shape) — kept as-is, not dropped, not used by app code ---
-  creditAmount   Decimal   @map("credit_amount") @db.Decimal(18, 4)
-  usedAmount     Decimal   @default(0) @map("used_amount") @db.Decimal(18, 4)
-  paymentDate    DateTime? @map("payment_date") @db.Date
+  creditAmount Decimal   @map("credit_amount") @db.Decimal(18, 4)
+  usedAmount   Decimal   @default(0) @map("used_amount") @db.Decimal(18, 4)
+  paymentDate  DateTime? @map("payment_date") @db.Date
 
   // --- Goods reservation fields (PR-F) — nullable so this ADD COLUMN stays non-destructive ---
-  itemName       String?   @map("item_name")
-  itemType       String?   @map("item_type")
-  quantity       Decimal?  @db.Decimal(18, 4)
-  unit           String?
-  unitPrice      Decimal?  @map("unit_price") @db.Decimal(18, 4)
-  totalAmount    Decimal?  @map("total_amount") @db.Decimal(18, 4)
-  issuedQty      Decimal   @default(0) @map("issued_qty") @db.Decimal(18, 4)
-  remainingQty   Decimal?  @map("remaining_qty") @db.Decimal(18, 4)
-  createdBy      String?   @map("created_by") @db.Uuid
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  itemName     String?  @map("item_name")
+  itemType     String?  @map("item_type")
+  quantity     Decimal? @db.Decimal(18, 4)
+  unit         String?
+  unitId       String?  @map("unit_id") @db.Uuid
+  unitPrice    Decimal? @map("unit_price") @db.Decimal(18, 4)
+  totalAmount  Decimal? @map("total_amount") @db.Decimal(18, 4)
+  issuedQty    Decimal  @default(0) @map("issued_qty") @db.Decimal(18, 4)
+  remainingQty Decimal? @map("remaining_qty") @db.Decimal(18, 4)
+  createdBy    String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
   documentNumber String?   @map("document_number")
   warehouse      String?
@@ -760,13 +761,29 @@ model Reservation {
   status         String    @default("open")
   notes          String?
 
-  customer Customer          @relation(fields: [customerId], references: [id])
-  currency Currency          @relation(fields: [currencyCode], references: [code])
-  creator  User?             @relation("ReservationCreator", fields: [createdBy], references: [id])
-  items    ReservationItem[]
+  customer    Customer          @relation(fields: [customerId], references: [id])
+  currency    Currency          @relation(fields: [currencyCode], references: [code])
+  creator     User?             @relation("ReservationCreator", fields: [createdBy], references: [id])
+  measureUnit Unit?             @relation(fields: [unitId], references: [id])
+  items       ReservationItem[]
 
   @@index([customerId], map: "idx_reservations_customer")
+  @@index([status, expiresAt], map: "idx_reservations_status_expiry")
   @@map("reservations")
+}
+
+model Unit {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code      String   @unique
+  nameAr    String   @map("name_ar")
+  weightKg  Decimal? @map("weight_kg") @db.Decimal(14, 4)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  reservations Reservation[]
+
+  @@map("units")
 }
 
 model ReservationItem {
@@ -880,9 +897,9 @@ model SystemSetting {
 // Milestone 8: Idempotency keys (منع تكرار العمليات من تطبيق المحصل)
 // ---------------------------------------------------------------------------
 model IdempotencyKey {
-  key         String   @id
-  response    Json     @db.JsonB
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  key       String   @id
+  response  Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
   @@index([createdAt], map: "idx_idempotency_created")
   @@map("idempotency_keys")
@@ -922,7 +939,7 @@ model AnalyticalAccount {
   organizationId String   @map("organization_id") @db.Uuid
   accountNumber  String   @map("account_number")
   accountName    String   @map("account_name")
-  category       String   // debtor | employee_advance | employee_custody | other
+  category       String // debtor | employee_advance | employee_custody | other
   personName     String?  @map("person_name")
   employeeNumber String?  @map("employee_number")
   currencyCode   String   @map("currency_code")

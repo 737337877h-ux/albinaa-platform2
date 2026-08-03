@@ -738,7 +738,7 @@ export class CustomersService {
   async dataQuality(actor: AuthUser) {
     const orgId = actor.organizationId;
 
-    const [missingPhone, pendingDuplicatePairs, currencyGroups, balances] = await Promise.all([
+    const [missingPhone, pendingDuplicatePairs, currencyGroups, balances, unclassifiedReservationUnits] = await Promise.all([
       this.prisma.customer.count({
         where: { organizationId: orgId, OR: [{ phonePrimary: null }, { phonePrimary: '' }] },
       }),
@@ -757,6 +757,13 @@ export class CustomersService {
         },
         select: { accountingBalance: true, declaredBalance: true },
       }),
+      this.prisma.reservation.count({
+        where: {
+          customer: { organizationId: orgId },
+          unit: { not: null },
+          unitId: null,
+        },
+      }),
     ]);
 
     const multiCurrencyCustomers = currencyGroups.filter((g) => g._count.currencyCode > 1).length;
@@ -764,7 +771,13 @@ export class CustomersService {
       (b) => b.declaredBalance !== null && Number(b.declaredBalance) !== Number(b.accountingBalance),
     ).length;
 
-    return { missingPhone, pendingDuplicatePairs, multiCurrencyCustomers, suspiciousBalances };
+    return {
+      missingPhone,
+      pendingDuplicatePairs,
+      multiCurrencyCustomers,
+      suspiciousBalances,
+      unclassifiedReservationUnits,
+    };
   }
 
   async reviewDuplicate(actor: AuthUser, pairId: string, decision: string, req?: Request) {

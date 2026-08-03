@@ -20,6 +20,17 @@ function hashPassword(plain) {
 }
 
 async function main() {
+  const units = [
+    { code: 'TON', nameAr: 'طن', weightKg: 1000 },
+    { code: 'BAG50', nameAr: 'كيس 50كجم', weightKg: 50 },
+    { code: 'BAG25', nameAr: 'كيس 25كجم', weightKg: 25 },
+    { code: 'PCS', nameAr: 'حبة', weightKg: null },
+    { code: 'ROLL', nameAr: 'لفة', weightKg: null },
+  ];
+  for (const unit of units) {
+    await prisma.unit.upsert({ where: { code: unit.code }, update: {}, create: unit });
+  }
+
   // ------------------------------------------------------------------ العملات
   const currencies = [
     { code: 'YER', sourceCode: 'YR', nameAr: 'ريال يمني', decimals: 2 },
@@ -116,6 +127,11 @@ async function main() {
     ['risk.read', 'عرض درجة المخاطر'],
     ['risk.recalculate', 'إعادة احتساب درجات المخاطر'],
     ['reservations.manage', 'إدارة حجوزات البضاعة'],
+    ['reservations.read', 'عرض حجوزات البضاعة'],
+    ['reservations.create', 'إنشاء حجوزات البضاعة'],
+    ['reservations.deliver', 'تسليم حجوزات البضاعة'],
+    ['reservations.cancel', 'إلغاء حجوزات البضاعة'],
+    ['reservations.extend', 'تمديد حجوزات البضاعة'],
     ['analytical_accounts.manage', 'إدارة الحسابات التحليلية'],
     ['analytical_accounts.read', 'عرض الحسابات التحليلية'],
   ];
@@ -131,16 +147,19 @@ async function main() {
     'مدير المديونية': [
       'customers.read', 'customers.read_all', 'customers.transfer', 'balances.read', 'followups.create',
       'promises.create', 'tasks.manage', 'reports.read', 'reports.export', 'duplicates.review',
-      'risk.read', 'risk.recalculate', 'reservations.manage',
+      'risk.read', 'risk.recalculate', 'reservations.manage', 'reservations.read',
+      'reservations.create', 'reservations.deliver', 'reservations.cancel', 'reservations.extend',
       'analytical_accounts.manage', 'analytical_accounts.read',
     ],
     'المحصل': [
       'customers.read', 'balances.read', 'followups.create', 'promises.create',
-      'collections.create', 'tasks.manage',
+      'collections.create', 'tasks.manage', 'reservations.read', 'reservations.create',
+      'reservations.deliver', 'reservations.extend',
     ],
     'المحاسب': [
       'customers.read', 'customers.read_all', 'balances.read', 'collections.approve', 'imports.run',
       'imports.read', 'reconciliation.review', 'reports.read', 'reports.export', 'risk.read',
+      'reservations.read',
     ],
     'أمين الصندوق': ['cash.receive', 'collections.approve', 'balances.read'],
   };
@@ -180,7 +199,7 @@ async function main() {
     create: { userId: admin.id, roleId: adminRole.id },
   });
 
-  console.log('✅ Seed اكتمل: 3 عملات، 9 أنواع مستندات، 5 أدوار، 20 صلاحية، منشأة + فرع + admin');
+  console.log(`✅ Seed اكتمل: 3 عملات، 9 أنواع مستندات، 5 أدوار، ${permissions.length} صلاحية، منشأة + فرع + admin`);
   console.log('⚠️  غيّر كلمة مرور admin فور أول دخول (ADMIN_INITIAL_PASSWORD في .env)');
 }
 

@@ -170,6 +170,13 @@ interface ReservationItem {
   expiresAt: string | null;
 }
 
+interface ReservationUnit {
+  id: string;
+  code: string;
+  nameAr: string;
+  weightKg: number | null;
+}
+
 interface RiskFactor {
   label: string;
   points: number;
@@ -274,7 +281,10 @@ export default function Customer360Page() {
   const canRisk = can('risk.read');
   const canTasks = can('tasks.manage');
   const canTransfer = can('customers.transfer');
-  const canReservationsManage = can('reservations.manage');
+  const canReservationsRead = can('reservations.read');
+  const canReservationsCreate = can('reservations.create');
+  const canReservationsDeliver = can('reservations.deliver');
+  const canReservationsCancel = can('reservations.cancel');
   const qc = useQueryClient();
 
   const [tab, setTab] = useState(searchParams.get('tab') ?? 'overview');
@@ -354,11 +364,17 @@ export default function Customer360Page() {
   const reservations = useQuery<ReservationItem[]>({
     queryKey: ['reservations', id],
     queryFn: () => api<ReservationItem[]>(`/reservations?customerId=${id}`),
-    enabled: canRead && tab === 'reservations',
+    enabled: canReservationsRead && tab === 'reservations',
   });
 
   const [createResOpen, setCreateResOpen] = useState(false);
   const [issueRes, setIssueRes] = useState<ReservationItem | null>(null);
+  const reservationUnits = useQuery<ReservationUnit[]>({
+    queryKey: ['reservation-units'],
+    queryFn: () => api<ReservationUnit[]>('/reservations/units'),
+    enabled: canReservationsCreate && createResOpen,
+    staleTime: 5 * 60_000,
+  });
 
   const createResMut = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
@@ -367,6 +383,7 @@ export default function Customer360Page() {
       toast('تم إنشاء الحجز بنجاح', 'ok');
       setCreateResOpen(false);
       qc.invalidateQueries({ queryKey: ['reservations', id] });
+      qc.invalidateQueries({ queryKey: ['reservations-summary'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
   });
@@ -378,6 +395,7 @@ export default function Customer360Page() {
       toast('تم صرف الكمية بنجاح', 'ok');
       setIssueRes(null);
       qc.invalidateQueries({ queryKey: ['reservations', id] });
+      qc.invalidateQueries({ queryKey: ['reservations-summary'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
   });
@@ -387,15 +405,16 @@ export default function Customer360Page() {
     onSuccess: () => {
       toast('تم إلغاء الحجز', 'ok');
       qc.invalidateQueries({ queryKey: ['reservations', id] });
+      qc.invalidateQueries({ queryKey: ['reservations-summary'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
   });
 
   const [resForm, setResForm] = useState({
-    itemName: '', itemType: '', quantity: '', unit: '', unitPrice: '',
+    itemName: '', itemType: '', quantity: '', unitId: '', unitPrice: '',
     currencyCode: 'YER', warehouse: '', documentNumber: '', notes: '', expiresAt: '',
   });
-  const resFormValid = resForm.itemName.trim() !== '' && resForm.unit.trim() !== ''
+  const resFormValid = resForm.itemName.trim() !== '' && resForm.unitId !== ''
     && Number(resForm.quantity) > 0 && Number(resForm.unitPrice) > 0;
 
   const [issueQty, setIssueQty] = useState('');
@@ -616,7 +635,7 @@ export default function Customer360Page() {
           <TabsTrigger value="followups" badge={c?.counts.followups}>المتابعات</TabsTrigger>
           <TabsTrigger value="promises" badge={c?.counts.promises}>الوعود</TabsTrigger>
           <TabsTrigger value="collections" badge={c?.counts.collections}>التحصيلات</TabsTrigger>
-          <TabsTrigger value="reservations" badge={reservations.data?.length}>حجوزات البضاعة</TabsTrigger>
+          {canReservationsRead && <TabsTrigger value="reservations" badge={reservations.data?.length}>حجوزات البضاعة</TabsTrigger>}
         </TabsList>
 
         {/* ──────────────── Overview Tab ──────────────── */}
@@ -1025,7 +1044,7 @@ export default function Customer360Page() {
         {/* حجوزات تشغيلية فقط ولا تؤثر على الرصيد المالي. */}
         <TabsPanel value="reservations">
           <Card>
-            {canReservationsManage && (
+            {canReservationsCreate && (
               <div className="flex justify-end border-b border-concrete-100 px-4 py-2.5 dark:border-white/10">
                 <Button onClick={() => setCreateResOpen(true)}>حجز جديد</Button>
               </div>
@@ -1062,12 +1081,10 @@ export default function Customer360Page() {
                       </TD>
                       <TD>{fmtDate(r.reservedAt)}</TD>
                       <TD>
-                        {canReservationsManage && r.status !== 'completed' && r.status !== 'cancelled' && (
+                        {(canReservationsDeliver || canReservationsCancel) && r.status !== 'completed' && r.status !== 'cancelled' && (
                           <div className="flex gap-2">
-                            <Button variant="secondary" onClick={() => setIssueRes(r)}>صرف</Button>
-                            <Button variant="danger" onClick={() => cancelResMut.mutate(r.id)} loading={cancelResMut.isPending}>
-                              إلغاء الحجز
-                            </Button>
+                            {canReservationsDeliver && <Button variant="secondary" onClick={() => setIssueRes(r)}>صرف</Button>}
+                            {canReservationsCancel && <Button variant="danger" onClick={() => cancelResMut.mutate(r.id)} loading={cancelResMut.isPending}>إلغاء الحجز</Button>}
                           </div>
                         )}
                       </TD>
@@ -1109,11 +1126,17 @@ export default function Customer360Page() {
               />
             </Field>
             <Field label="الوحدة *">
-              <Input
-                value={resForm.unit}
-                onChange={(e) => setResForm(f => ({ ...f, unit: e.target.value }))}
-                placeholder="طن، حبة..."
-              />
+              <Select
+                value={resForm.unitId}
+                onChange={(e) => setResForm(f => ({ ...f, unitId: e.target.value }))}
+              >
+                <option value="">اختر الوحدة</option>
+                {(reservationUnits.data ?? []).map((unit) => (
+                  <option key={unit.id} value={unit.id}>
+                    {unit.nameAr}{unit.weightKg === null ? ' — بلا وزن' : ` — ${unit.weightKg} كجم`}
+                  </option>
+                ))}
+              </Select>
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1171,7 +1194,7 @@ export default function Customer360Page() {
                 itemName: resForm.itemName,
                 itemType: resForm.itemType || undefined,
                 quantity: Number(resForm.quantity),
-                unit: resForm.unit,
+                unitId: resForm.unitId,
                 unitPrice: Number(resForm.unitPrice),
                 currencyCode: resForm.currencyCode,
                 warehouse: resForm.warehouse || undefined,

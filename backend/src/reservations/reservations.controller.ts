@@ -19,8 +19,22 @@ import { ReservationsService } from './reservations.service';
 export class ReservationsController {
   constructor(private readonly reservations: ReservationsService) {}
 
+  @Get('units')
+  @RequirePermissions('reservations.read')
+  @ApiOperation({ summary: 'Active normalized units used by goods reservations' })
+  units() {
+    return this.reservations.listUnits();
+  }
+
+  @Get('summary')
+  @RequirePermissions('reservations.read')
+  @ApiOperation({ summary: 'Aggregated active-reservations dashboard summary, separated by currency' })
+  summary(@CurrentUser() user: AuthUser) {
+    return this.reservations.summary(user);
+  }
+
   @Get()
-  @RequirePermissions('customers.read')
+  @RequirePermissions('reservations.read')
   @ApiQuery({ name: 'customerId', required: false })
   @ApiOperation({ summary: 'List goods reservations, optionally filtered by customer' })
   findAll(@CurrentUser() user: AuthUser, @Query('customerId') customerId?: string) {
@@ -28,21 +42,21 @@ export class ReservationsController {
   }
 
   @Get(':id')
-  @RequirePermissions('customers.read')
+  @RequirePermissions('reservations.read')
   @ApiOperation({ summary: 'Reservation detail' })
   findOne(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.reservations.findOne(user, id);
   }
 
   @Post()
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('reservations.create')
   @ApiOperation({ summary: 'Create a goods reservation for a customer (no balance impact)' })
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateReservationDto, @Req() req: Request) {
     return this.reservations.create(user, dto, req);
   }
 
   @Patch(':id')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('reservations.extend')
   @ApiOperation({ summary: 'Update reservation operational fields (warehouse/document/notes/expiry)' })
   update(
     @CurrentUser() user: AuthUser,
@@ -54,7 +68,7 @@ export class ReservationsController {
   }
 
   @Post(':id/issue')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('reservations.deliver')
   @ApiOperation({ summary: 'Issue reserved goods (reduces remaining quantity only)' })
   issue(
     @CurrentUser() user: AuthUser,
@@ -66,7 +80,7 @@ export class ReservationsController {
   }
 
   @Post(':id/cancel')
-  @RequirePermissions('reservations.manage')
+  @RequirePermissions('reservations.cancel')
   @ApiOperation({ summary: 'Cancel a reservation (not allowed once completed)' })
   cancel(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Req() req: Request) {
     return this.reservations.cancel(user, id, req);

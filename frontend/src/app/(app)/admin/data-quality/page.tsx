@@ -14,6 +14,7 @@ interface DataQuality {
   pendingDuplicatePairs: number;
   multiCurrencyCustomers: number;
   suspiciousBalances: number;
+  unclassifiedReservationUnits: number;
 }
 
 interface DuplicateCustomerRef {
@@ -87,7 +88,7 @@ export default function DataQualityPage() {
         skeletonClassName="h-28"
       >
         {summary.data && (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <Card className="p-4">
               <p className="text-xs text-concrete-500">عملاء بلا هاتف</p>
               <p className="tnum mt-1 font-display text-2xl font-bold">{summary.data.missingPhone}</p>
@@ -103,6 +104,10 @@ export default function DataQualityPage() {
             <Card className="p-4">
               <p className="text-xs text-concrete-500">أرصدة مشكوك فيها (مصرّح ≠ محاسبي)</p>
               <p className="tnum mt-1 font-display text-2xl font-bold">{summary.data.suspiciousBalances}</p>
+            </Card>
+            <Card className={summary.data.unclassifiedReservationUnits ? 'border-r-4 border-r-hazard-500 p-4' : 'p-4'}>
+              <p className="text-xs text-concrete-500">وحدات حجوزات بانتظار التصنيف</p>
+              <p className="tnum mt-1 font-display text-2xl font-bold">{summary.data.unclassifiedReservationUnits}</p>
             </Card>
           </div>
         )}
