@@ -1,6 +1,9 @@
 # البناء الراقي — AlBinaa Platform
 
-نظام إدارة المديونية والتحصيل — الإصدار 1.2.1 (Web Hotfix)
+نظام إدارة المديونية والتحصيل — مرشح v1.3.0
+
+> الإصدار المعلن في الحزم ما زال `1.2.1` إلى أن تكتمل مراجعة وإصدار v1.3 رسميًا،
+> لكن `main` يتضمن بالفعل وحدات v1.3 المدمجة حتى الحسابات التحليلية.
 
 ## الوصف
 
@@ -10,7 +13,7 @@
 - **Mobile App** (React Native + Expo)
 - **Mobile Sync** مع دعم العمل دون اتصال
 - **Import Pipeline** لاستيراد البيانات من ملفات Excel/CSV
-- **Push Notifications** (داخلية)
+- **In-app Notifications** (داخلية؛ FCM/APNS ما زال ضمن العمل المتبقي)
 - **JWT Authentication** مع Refresh Token
 - **Role-Based Access Control** (RBAC) مع 30+ صلاحية
 
@@ -18,11 +21,11 @@
 
 | المكوّن | التقنية | الإصدار |
 |---------|---------|---------|
-| Backend | NestJS | 10.x |
-| ORM | Prisma | 5.x |
+| Backend | NestJS | 11.x |
+| ORM | Prisma | 6.x |
 | Database | PostgreSQL | 16 |
 | Cache | Redis (اختياري) | - |
-| Frontend | Next.js | 14.x |
+| Frontend | Next.js | 15.x |
 | Mobile | React Native + Expo SDK | 57 |
 | Auth | JWT (Access + Refresh) | - |
 | File Upload | Multer (disk) | - |
@@ -99,6 +102,7 @@ npx tsc --noEmit && npx expo-doctor && npx jest
 
 ## الإصدار
 
+- **v1.3.0 RC** (قيد الاعتماد) — إدارة المستخدمين والمحصلين، الأدوار والصلاحيات، الإسناد الجماعي، Dashboard drill-down، جودة البيانات، حجوزات البضاعة، الحسابات التحليلية، إجراءات التواصل، وتعزيز التقارير والأمان وCI
 - **v1.2.1** (2026-08-01) — صفحة الإشعارات الكاملة (Web Hotfix): قائمة + تعليم كمقروء/الكل + مزامنة جرس الإشعارات
 - **v1.2.0** (2026-08-01) — إدارة المديونية الذكية: Import Profiles + Debt Aging · Risk Score · Daily Work Queue · Customer360 Risk/Tasks · Dashboard KPIs · Customer Assignments · Task Execution + Followup + Promise · Stabilization 122/122
 - **v1.1.0** (2026-07-30) — أدوات التواصل مع العملاء (Call/SMS/WhatsApp، خريطة، إشعارات تفاعلية، عملات ديناميكية)

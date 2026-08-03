@@ -1,27 +1,40 @@
-# Project State — v1.2.1 Released
+# Project State — v1.3.0 Release Candidate
 
 ## Current Version
-**v1.2.1** — صفحة الإشعارات الكاملة (Web Hotfix) (2026-08-01)
+**الحزمة المنشورة:** v1.2.1
+
+**الكود على `main`:** مرشح v1.3.0 بعد دمج محاور التنفيذ السبعة. لم يُنشأ tag أو إصدار v1.3 رسمي بعد.
 
 ## Release Summary
 | Area | Status |
 |------|--------|
-| Notifications page | ✅ full list + kind/detail + read state + customer link |
-| Mark as read | ✅ per-notification (PATCH `/notifications/:id/read`) |
-| Mark all as read | ✅ header action (PATCH `/notifications/read-all`) |
-| Unread-only filter | ✅ with unread counter |
-| Pagination | ✅ 25/page via `GET /notifications` |
-| Bell sync | ✅ badge refreshes after any read action |
-| Tests | ✅ no schema/migration/dependency changes |
-| TypeScript / ESLint | ✅ 0 errors (Backend + Frontend) |
+| v1.2 smart debt management | ✅ imports, aging, risk, daily queue, Customer 360, assignments |
+| Users & collectors administration | ✅ merged |
+| RBAC roles & permissions | ✅ merged |
+| Bulk assignment | ✅ merged |
+| Dashboard drill-down & charts | ✅ merged |
+| Data-quality dashboard | ✅ merged |
+| Goods reservations | ✅ backend/domain and Arabic Customer 360 workflow merged |
+| Analytical accounts | ✅ merged |
+| Parser variants and structured errors | ✅ merged and covered by Python CI tests |
+| In-app notifications | ✅ list, read state, links and unread counter |
+| Push notifications (FCM/APNS) | ⏳ not implemented |
+| Collection report filters & Excel-compatible export | ✅ branch/collector/date/status/currency filters and CSV export merged |
+| Native PDF/XLSX exports | ⏳ not implemented |
 
-## Key Files
-- **Backend:** `backend/src/notifications/` (unchanged — v1.2.1 uses existing endpoints)
-- **Frontend:** `frontend/src/app/(app)/notifications/`, `frontend/src/components/notifications-menu.tsx`
-- **Docs:** `RELEASE_NOTES_v1.2.1.md`, `RELEASE_NOTES_v1.2.0.md`, `CHANGELOG.md`, `ROADMAP.md`
+## Recently merged delivery pull requests
 
-## Next (Planned — v1.3.0)
-- Push notifications (FCM/APNS)
-- UI/UX improvements
-- Advanced financial reports
-- (راجع ROADMAP.md للتفاصيل)
+- PR #23: mandatory CI quality gates and mobile checks
+- PR #24: frontend production dependency security upgrade
+- PR #25: web/mobile call, SMS and WhatsApp contact actions
+- PR #27: backend production dependency security upgrade
+- PR #28: Arabic goods-reservations workflow
+- PR #29: collection filters and Excel-compatible export
+
+## Remaining before the official v1.3.0 release
+
+- Add PostgreSQL-backed E2E coverage to CI.
+- Complete native PDF/XLSX exports and remaining advanced analytics.
+- Complete FCM/APNS device registration and delivery.
+- Run full staging acceptance testing for reservations, contact actions and exports.
+- Update changelog, release notes, versions and tag only after owner approval.
