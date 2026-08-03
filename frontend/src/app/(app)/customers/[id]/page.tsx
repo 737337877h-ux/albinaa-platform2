@@ -3,11 +3,12 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
-import { ArrowDownUp, CheckCircle2, Download, Phone, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
+import { ArrowDownUp, CheckCircle2, Download, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
+import { contactLinks } from '@/lib/contact';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Dialog } from '@/components/ui/dialog';
@@ -502,6 +503,8 @@ export default function Customer360Page() {
   }
 
   const c = customer.data;
+  const links = c ? contactLinks(c.phonePrimary) : null;
+  const whatsappLink = c ? contactLinks(c.whatsapp ?? c.phonePrimary)?.whatsapp : null;
   const isLoading = customer.isLoading;
   const err = customer.error;
 
@@ -556,6 +559,25 @@ export default function Customer360Page() {
               </Badge>
             )}
           </div>
+          {(links || whatsappLink) && (
+            <div className="mt-4 flex flex-wrap gap-2 border-t border-concrete-100 pt-4 dark:border-white/10">
+              {links && (
+                <>
+                  <a href={links.tel} className="inline-flex items-center gap-2 rounded-lg bg-pine-700 px-4 py-2 text-sm font-medium text-white hover:bg-pine-800">
+                    <Phone className="h-4 w-4" aria-hidden /> اتصال
+                  </a>
+                  <a href={links.sms} className="inline-flex items-center gap-2 rounded-lg border border-concrete-200 bg-white px-4 py-2 text-sm font-medium text-iron-900 hover:bg-concrete-100 dark:border-white/10 dark:bg-iron-800 dark:text-concrete-100">
+                    <MessageSquare className="h-4 w-4" aria-hidden /> رسالة نصية
+                  </a>
+                </>
+              )}
+              {whatsappLink && (
+                <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-credit-600 px-4 py-2 text-sm font-medium text-white hover:bg-credit-700">
+                  <MessageCircle className="h-4 w-4" aria-hidden /> واتساب
+                </a>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
@@ -568,7 +590,7 @@ export default function Customer360Page() {
           <TabsTrigger value="followups" badge={c?.counts.followups}>المتابعات</TabsTrigger>
           <TabsTrigger value="promises" badge={c?.counts.promises}>الوعود</TabsTrigger>
           <TabsTrigger value="collections" badge={c?.counts.collections}>التحصيلات</TabsTrigger>
-          <TabsTrigger value="reservations" badge={reservations.data?.length}>Reservations</TabsTrigger>
+          <TabsTrigger value="reservations" badge={reservations.data?.length}>حجوزات البضاعة</TabsTrigger>
         </TabsList>
 
         {/* ──────────────── Overview Tab ──────────────── */}
@@ -970,12 +992,12 @@ export default function Customer360Page() {
           </Card>
         </TabsPanel>
 
-        {/* Reservations tab (PR-F) — operational tracking only, no balance impact. English labels here to avoid RTL corruption. */}
+        {/* حجوزات تشغيلية فقط ولا تؤثر على الرصيد المالي. */}
         <TabsPanel value="reservations">
           <Card>
             {canReservationsManage && (
               <div className="flex justify-end border-b border-concrete-100 px-4 py-2.5 dark:border-white/10">
-                <Button onClick={() => setCreateResOpen(true)}>New Reservation</Button>
+                <Button onClick={() => setCreateResOpen(true)}>حجز جديد</Button>
               </div>
             )}
             <DataState
@@ -985,11 +1007,11 @@ export default function Customer360Page() {
               onRetry={() => reservations.refetch()}
               isFetching={reservations.isFetching}
               isEmpty={!reservations.data?.length}
-              emptyTitle="No goods reservations"
+              emptyTitle="لا توجد حجوزات بضاعة"
               skeletonClassName="h-48"
             >
               <Table>
-                <THead cols={['Item', 'Quantity', 'Unit', 'Unit price', 'Total', 'Issued', 'Remaining', 'Status', 'Reserved date', '']} />
+                <THead cols={['الصنف', 'الكمية', 'الوحدة', 'سعر الوحدة', 'الإجمالي', 'المصروف', 'المتبقي', 'الحالة', 'تاريخ الحجز', '']} />
                 <tbody>
                   {(reservations.data ?? []).map(r => (
                     <TRow key={r.id}>
@@ -1005,16 +1027,16 @@ export default function Customer360Page() {
                       <TD className="tnum">{r.remainingQty ?? '—'}</TD>
                       <TD>
                         <Badge tone={reservationStatusBadge(r.status) as any}>
-                          {{ open: 'Open', partial: 'Partial', completed: 'Completed', cancelled: 'Cancelled' }[r.status] ?? r.status}
+                          {{ open: 'مفتوح', partial: 'مصروف جزئيًا', completed: 'مكتمل', cancelled: 'ملغي' }[r.status] ?? r.status}
                         </Badge>
                       </TD>
                       <TD>{fmtDate(r.reservedAt)}</TD>
                       <TD>
                         {canReservationsManage && r.status !== 'completed' && r.status !== 'cancelled' && (
                           <div className="flex gap-2">
-                            <Button variant="secondary" onClick={() => setIssueRes(r)}>Issue</Button>
+                            <Button variant="secondary" onClick={() => setIssueRes(r)}>صرف</Button>
                             <Button variant="danger" onClick={() => cancelResMut.mutate(r.id)} loading={cancelResMut.isPending}>
-                              Cancel
+                              إلغاء الحجز
                             </Button>
                           </div>
                         )}
@@ -1028,51 +1050,51 @@ export default function Customer360Page() {
         </TabsPanel>
       </Tabs>
 
-      {/* Reservations dialogs (PR-F) — English labels to avoid RTL corruption. */}
+      {/* نوافذ حجوزات البضاعة. */}
       <Dialog
         open={createResOpen}
         onClose={() => setCreateResOpen(false)}
-        title="New Reservation"
+        title="حجز بضاعة جديد"
       >
         <div className="space-y-4">
-          <Field label="Item *">
+          <Field label="الصنف *">
             <Input
               value={resForm.itemName}
               onChange={(e) => setResForm(f => ({ ...f, itemName: e.target.value }))}
-              placeholder="e.g. Iron rebar 12mm"
+              placeholder="مثال: حديد تسليح 12 ملم"
             />
           </Field>
-          <Field label="Item type" hint="Optional">
+          <Field label="نوع الصنف" hint="اختياري">
             <Input
               value={resForm.itemType}
               onChange={(e) => setResForm(f => ({ ...f, itemType: e.target.value }))}
             />
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Quantity *">
+            <Field label="الكمية *">
               <Input
                 type="number" min="0" step="any"
                 value={resForm.quantity}
                 onChange={(e) => setResForm(f => ({ ...f, quantity: e.target.value }))}
               />
             </Field>
-            <Field label="Unit *">
+            <Field label="الوحدة *">
               <Input
                 value={resForm.unit}
                 onChange={(e) => setResForm(f => ({ ...f, unit: e.target.value }))}
-                placeholder="ton, piece..."
+                placeholder="طن، حبة..."
               />
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Unit price *">
+            <Field label="سعر الوحدة *">
               <Input
                 type="number" min="0" step="any"
                 value={resForm.unitPrice}
                 onChange={(e) => setResForm(f => ({ ...f, unitPrice: e.target.value }))}
               />
             </Field>
-            <Field label="Currency *">
+            <Field label="العملة *">
               <Select
                 value={resForm.currencyCode}
                 onChange={(e) => setResForm(f => ({ ...f, currencyCode: e.target.value }))}
@@ -1083,26 +1105,26 @@ export default function Customer360Page() {
               </Select>
             </Field>
           </div>
-          <Field label="Warehouse" hint="Optional">
+          <Field label="المخزن" hint="اختياري">
             <Input
               value={resForm.warehouse}
               onChange={(e) => setResForm(f => ({ ...f, warehouse: e.target.value }))}
             />
           </Field>
-          <Field label="Document number" hint="Optional">
+          <Field label="رقم المستند" hint="اختياري">
             <Input
               value={resForm.documentNumber}
               onChange={(e) => setResForm(f => ({ ...f, documentNumber: e.target.value }))}
             />
           </Field>
-          <Field label="Notes" hint="Optional">
+          <Field label="ملاحظات" hint="اختياري">
             <Textarea
               value={resForm.notes}
               onChange={(e) => setResForm(f => ({ ...f, notes: e.target.value }))}
               rows={2}
             />
           </Field>
-          <Field label="Expiry date" hint="Optional">
+          <Field label="تاريخ الانتهاء" hint="اختياري">
             <Input
               type="date"
               value={resForm.expiresAt}
@@ -1110,7 +1132,7 @@ export default function Customer360Page() {
             />
           </Field>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setCreateResOpen(false)}>Cancel</Button>
+            <Button variant="secondary" onClick={() => setCreateResOpen(false)}>إلغاء</Button>
             <Button
               disabled={!resFormValid}
               loading={createResMut.isPending}
@@ -1128,7 +1150,7 @@ export default function Customer360Page() {
                 expiresAt: resForm.expiresAt || undefined,
               })}
             >
-              Create Reservation
+              إنشاء الحجز
             </Button>
           </div>
         </div>
@@ -1137,14 +1159,14 @@ export default function Customer360Page() {
       <Dialog
         open={!!issueRes}
         onClose={() => setIssueRes(null)}
-        title="Issue Reserved Goods"
+        title="صرف البضاعة المحجوزة"
       >
         {issueRes && (
           <div className="space-y-4">
             <p className="text-sm text-concrete-600 dark:text-concrete-400">
-              {issueRes.itemName} — Remaining: <span className="tnum font-medium">{issueRes.remainingQty}</span> {issueRes.unit}
+              {issueRes.itemName} — المتبقي: <span className="tnum font-medium">{issueRes.remainingQty}</span> {issueRes.unit}
             </p>
-            <Field label="Quantity to issue *">
+            <Field label="الكمية المراد صرفها *">
               <Input
                 type="number" min="0" step="any"
                 value={issueQty}
@@ -1152,13 +1174,13 @@ export default function Customer360Page() {
               />
             </Field>
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="secondary" onClick={() => setIssueRes(null)}>Cancel</Button>
+              <Button variant="secondary" onClick={() => setIssueRes(null)}>إلغاء</Button>
               <Button
                 disabled={!(Number(issueQty) > 0 && Number(issueQty) <= Number(issueRes.remainingQty ?? 0))}
                 loading={issueResMut.isPending}
                 onClick={() => issueResMut.mutate({ resId: issueRes.id, qty: Number(issueQty) })}
               >
-                Issue
+                صرف
               </Button>
             </div>
           </div>
