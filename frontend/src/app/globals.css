@@ -27,3 +27,10 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+@media print {
+  body { background: #fff !important; color: #0f1a1c !important; }
+  header, nav, .print\:hidden { display: none !important; }
+  main { padding: 0 !important; margin: 0 !important; }
+  * { box-shadow: none !important; }
+}

@@ -419,7 +419,6 @@ export class CustomersService {
     const balance = await this.prisma.customerBalance.findUnique({
       where: { customerId_currencyCode: { customerId: id, currencyCode: q.currency } },
     });
-    if (!balance) throw new NotFoundException(`لا يوجد حساب بعملة ${q.currency} لهذا العميل`);
 
     const baseWhere: Prisma.ImportedTransactionWhereInput = {
       customerId: id, currencyCode: q.currency,
@@ -432,7 +431,7 @@ export class CustomersService {
     }
 
     // رصيد بداية الفترة = الافتتاحي + كل الحركات السابقة لبداية الفترة
-    const opening = Number(balance.openingDebit) - Number(balance.openingCredit);
+    const opening = balance ? Number(balance.openingDebit) - Number(balance.openingCredit) : 0;
     let startBalance = opening;
     if (q.fromDate) {
       const prior = await this.prisma.importedTransaction.aggregate({
@@ -442,7 +441,16 @@ export class CustomersService {
       startBalance += Number(prior._sum.debit ?? 0) - Number(prior._sum.credit ?? 0);
     }
 
-    const total = await this.prisma.importedTransaction.count({ where: rangeWhere });
+    const [total, periodTotals] = await Promise.all([
+      this.prisma.importedTransaction.count({ where: rangeWhere }),
+      this.prisma.importedTransaction.aggregate({
+        _sum: { debit: true, credit: true },
+        where: rangeWhere,
+      }),
+    ]);
+    const periodEndBalance = startBalance
+      + Number(periodTotals._sum.debit ?? 0)
+      - Number(periodTotals._sum.credit ?? 0);
     // الرصيد الجاري يتطلب معرفة مجموع ما قبل الصفحة الحالية داخل الفترة
     const beforePage = await this.prisma.importedTransaction.findMany({
       where: rangeWhere,
@@ -479,7 +487,11 @@ export class CustomersService {
       currency: q.currency,
       openingBalance: opening,
       periodStartBalance: startBalance,
-      currentBalance: Number(balance.accountingBalance),
+      periodEndBalance,
+      currentBalance: balance ? Number(balance.accountingBalance) : periodEndBalance,
+      equationClosed: q.fromDate || q.toDate || !balance
+        ? true
+        : Math.abs(periodEndBalance - Number(balance.accountingBalance)) < 0.005,
       page, limit, total, totalPages: Math.ceil(total / limit),
       items,
     };

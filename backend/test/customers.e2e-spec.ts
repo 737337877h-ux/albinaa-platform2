@@ -174,6 +174,12 @@ describe('Customer Domain — Milestone 4 (e2e)', () => {
       .expect(200);
     expect(res.body.openingBalance).toBe(10000);
     expect(res.body.items.map((i: any) => i.runningBalance)).toEqual([15000, 12000]);
+    expect(
+      res.body.periodStartBalance
+      + res.body.items.reduce((sum: number, i: any) => sum + i.debit - i.credit, 0),
+    ).toBe(res.body.periodEndBalance);
+    expect(res.body.periodEndBalance).toBe(12000);
+    expect(res.body.equationClosed).toBe(true);
     expect(res.body.currentBalance).toBe(12000);
   });
 
@@ -187,11 +193,16 @@ describe('Customer Domain — Milestone 4 (e2e)', () => {
     expect(res.body.items[0].runningBalance).toBe(12000);
   });
 
-  it('كشف حساب بعملة لا يملكها العميل → 404', async () => {
-    await request(app.getHttpServer())
+  it('كشف حساب بعملة لا يملكها العميل يعيد حالة فارغة بلا 404', async () => {
+    const res = await request(app.getHttpServer())
       .get(`/customers/${cust90001Id}/statement?currency=USD`)
       .set('Authorization', `Bearer ${adminToken}`)
-      .expect(404);
+      .expect(200);
+    expect(res.body.items).toEqual([]);
+    expect(res.body.total).toBe(0);
+    expect(res.body.periodStartBalance).toBe(0);
+    expect(res.body.periodEndBalance).toBe(0);
+    expect(res.body.equationClosed).toBe(true);
   });
 
   // ==========================================================================

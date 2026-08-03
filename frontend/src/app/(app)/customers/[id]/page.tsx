@@ -69,6 +69,8 @@ interface StatementResponse {
   openingBalance: number;
   periodStartBalance: number;
   currentBalance: number;
+  periodEndBalance: number;
+  equationClosed: boolean;
   page: number;
   limit: number;
   total: number;
@@ -301,6 +303,14 @@ export default function Customer360Page() {
     enabled: canRead && canBalances && tab === 'statement',
     retry: false,
   });
+
+  useEffect(() => {
+    if (!customer.data?.balances.length) return;
+    if (!customer.data.balances.some((b) => b.currency === stmtCurrency)) {
+      setStmtCurrency(customer.data.balances[0].currency);
+      setStmtPage(1);
+    }
+  }, [customer.data, stmtCurrency]);
 
   /* ──────── Timeline queries ──────── */
   const [tlPage, setTlPage] = useState(1);
@@ -623,12 +633,12 @@ export default function Customer360Page() {
                     label="الرصيد الحالي"
                     value={
                       c.balances.length > 0
-                        ? c.balances.map(b => <Money key={b.currency} value={b.accountingBalance} currency={b.currency} signed />)
-                        : <span className="text-concrete-400">—</span>
+                        ? <div className="space-y-1">{c.balances.map(b => <div key={b.currency}><Money value={b.accountingBalance} currency={b.currency} signed /></div>)}</div>
+                        : <span className="text-xs font-normal text-concrete-400">لا توجد أرصدة لهذا السجل</span>
                     }
                   />
                   <StatCard label="نوع العميل" value={c.customerType ?? '—'} />
-                  <StatCard label="تاريخRelationship" value={c.relationshipStartDate ? fmtDate(c.relationshipStartDate) : '—'} />
+                  <StatCard label="تاريخ بدء العلاقة" value={c.relationshipStartDate ? fmtDate(c.relationshipStartDate) : '—'} />
                   <StatCard label="تاريخ الإنشاء" value={fmtDateTime(c.createdAt)} />
                 </div>
 
@@ -781,6 +791,9 @@ export default function Customer360Page() {
                 >
                   <Download className="h-4 w-4" /> تصدير CSV
                 </Button>
+                <Button variant="secondary" onClick={() => window.print()} className="print:hidden">
+                  <Download className="h-4 w-4" /> تصدير PDF / طباعة
+                </Button>
               </div>
 
               <DataState
@@ -800,6 +813,7 @@ export default function Customer360Page() {
                     <div className="flex flex-wrap gap-4 border-b border-concrete-100 px-4 py-2 text-xs dark:border-white/10">
                       <span className="text-concrete-500">الرصيد الافتتاحي: <Money value={statement.data.openingBalance} signed /></span>
                       <span className="text-concrete-500">رصيد بداية الفترة: <Money value={statement.data.periodStartBalance} signed /></span>
+                      <span className="text-concrete-500">رصيد نهاية الفترة: <Money value={statement.data.periodEndBalance} signed /></span>
                       <span className="font-semibold text-iron-900 dark:text-concrete-100">
                         الرصيد الحالي: <Money value={statement.data.currentBalance} currency={stmtCurrency} signed />
                       </span>

@@ -134,9 +134,25 @@ export function Money({ value, currency, signed = false }: {
     : num < 0 ? 'text-credit-600 dark:text-credit-400'
     : 'text-concrete-500';
   return (
-    <span className={cn('tnum font-medium', tone)} dir="ltr">
-      {fmtMoney(Math.abs(num))}{currency ? ` ${currency}` : ''}
-      {signed && num !== 0 && (num > 0 ? ' مدين' : ' دائن')}
+    <span
+      className={cn('inline-flex items-center gap-1 whitespace-nowrap font-medium', tone)}
+      dir="ltr"
+      style={{ unicodeBidi: 'isolate' }}
+    >
+      <span className="tnum">{fmtMoney(Math.abs(num))}</span>
+      {currency && (
+        <span className="rounded bg-concrete-100 px-1.5 py-0.5 text-[10px] font-semibold text-concrete-700 dark:bg-white/10 dark:text-concrete-200">
+          {currency}
+        </span>
+      )}
+      {signed && num !== 0 && (
+        <span dir="rtl" className={cn(
+          'rounded px-1.5 py-0.5 text-[10px] font-semibold',
+          num > 0 ? 'bg-debt-50 text-debt-700 dark:bg-debt-700/30 dark:text-debt-50' : 'bg-credit-50 text-credit-700 dark:bg-credit-700/30 dark:text-credit-50',
+        )}>
+          {num > 0 ? 'مدين' : 'دائن'}
+        </span>
+      )}
     </span>
   );
 }
