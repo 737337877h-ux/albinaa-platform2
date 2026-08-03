@@ -28,7 +28,11 @@ COPY prisma/ ./prisma/
 COPY backend/parser/ ./parser/
 COPY backend/docker-entrypoint.sh ./
 RUN mkdir -p /data/uploads && chown -R app:app /data
-RUN chmod +x docker-entrypoint.sh && chown -R app:app /app
+# Git may check shell scripts out with CRLF on Windows. Normalize inside the
+# Linux image so the shebang always resolves to /bin/sh.
+RUN sed -i 's/\r$//' docker-entrypoint.sh \
+    && chmod +x docker-entrypoint.sh \
+    && chown -R app:app /app
 ENV PARSER_DIR=/app/parser UPLOAD_DIR=/data/uploads
 USER app
 EXPOSE 3000
