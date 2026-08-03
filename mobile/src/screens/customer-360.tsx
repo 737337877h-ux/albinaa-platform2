@@ -6,13 +6,7 @@ import { getById } from '../db/database';
 import { useFocusEffect } from '@react-navigation/native';
 import Loading from '../components/loading';
 import { apiErrorMessage, parseJsonField } from '../utils/errors';
-
-function cleanPhone(raw: string): string {
-  let digits = raw.replace(/\D/g, '');
-  if (digits.length === 9 && !digits.startsWith('967')) digits = '967' + digits;
-  if (digits.startsWith('00')) digits = digits.slice(2);
-  return digits;
-}
+import { contactLinks } from '../utils/contact';
 
 async function openLink(url: string, fallbackMsg: string) {
   try {
@@ -76,6 +70,7 @@ export default function Customer360Screen({ route, navigation }: any) {
   const timeline = Array.isArray(customer.timeline) ? customer.timeline : [];
   const fullName = customer.fullName || customer.name || 'عميل';
   const phone = customer.phonePrimary || customer.phone || '';
+  const links = contactLinks(phone);
   const address = customer.address || '';
 
   return (
@@ -86,14 +81,11 @@ export default function Customer360Screen({ route, navigation }: any) {
         {!!address && <Text style={styles.address}>{address}</Text>}
       </View>
 
-      {!!phone && (
+      {!!links && (
         <View style={styles.contactRow}>
-          <ContactBtn label="اتصال" color="#1a73e8" onPress={() => openLink(`tel:${phone}`, 'لا يوجد تطبيق اتصال')} />
-          <ContactBtn label="رسالة" color="#34a853" onPress={() => openLink(`sms:${phone}`, 'لا يوجد تطبيق رسائل')} />
-          <ContactBtn label="واتساب" color="#25D366" onPress={() => {
-            const cleaned = cleanPhone(phone);
-            openLink(`https://wa.me/${cleaned}`, 'لا يوجد واتساب');
-          }} />
+          <ContactBtn label="اتصال" color="#1a73e8" onPress={() => openLink(links.tel, 'لا يوجد تطبيق اتصال')} />
+          <ContactBtn label="رسالة" color="#34a853" onPress={() => openLink(links.sms, 'لا يوجد تطبيق رسائل')} />
+          <ContactBtn label="واتساب" color="#25D366" onPress={() => openLink(links.whatsapp, 'لا يوجد واتساب')} />
         </View>
       )}
 
