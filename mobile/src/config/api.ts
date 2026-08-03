@@ -83,14 +83,13 @@ export async function pingServer(url: string, timeoutMs = 5000): Promise<ServerH
     return { ok: false, error: 'العنوان غير صالح (يجب أن يبدأ بـ http:// أو https://)' };
   }
   const t0 = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(`${trimmed}/health`, {
       method: 'GET',
       signal: controller.signal,
     });
-    clearTimeout(timeout);
     const latency = Date.now() - t0;
     if (res.ok) {
       let body: any = {};
@@ -116,5 +115,7 @@ export async function pingServer(url: string, timeoutMs = 5000): Promise<ServerH
     let msg = e?.message || 'فشل الاتصال';
     if (e?.name === 'AbortError') msg = `انتهت المهلة بعد ${timeoutMs} مللي ثانية`;
     return { ok: false, latencyMs: latency, error: msg };
+  } finally {
+    clearTimeout(timeout);
   }
 }
