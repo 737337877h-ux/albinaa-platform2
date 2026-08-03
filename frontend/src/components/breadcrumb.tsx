@@ -11,6 +11,7 @@ const LABELS: Record<string, string> = {
   promises: 'وعود السداد',
   collections: 'التحصيلات',
   imports: 'استيراد Excel',
+  reservations: 'حجوزات البضاعة',
   tasks: 'عمل اليوم',
   notifications: 'الإشعارات',
   admin: 'الإدارة',
