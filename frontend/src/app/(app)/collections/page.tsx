@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { Plus, RotateCcw, HandCoins } from 'lucide-react';
+import { Download, Plus, RotateCcw, HandCoins } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, COLLECTION_STATUS_AR } from '@/lib/format';
@@ -66,6 +66,11 @@ interface NameId {
   name: string;
 }
 
+interface CollectorOption {
+  id: string;
+  user: { fullName: string };
+}
+
 interface CustomerSearchItem {
   id: string;
   name: string;
@@ -81,6 +86,11 @@ function useDebounced<T>(value: T, delay: number): T {
     return () => clearTimeout(t);
   }, [value, delay]);
   return debounced;
+}
+
+function csvCell(value: unknown): string {
+  const text = value == null ? '' : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 /* ────────────────────────────── Validation ────────────────────────────── */
@@ -130,6 +140,8 @@ export default function CollectionsPage() {
   const canCreate = can('collections.create');
   const canReverse = can('collections.reverse');
   const canHandover = can('cash.receive');
+  const canExport = can('reports.export');
+  const canListCollectors = can('users.manage');
   const qc = useQueryClient();
 
   /* ──── Filter State ──── */
@@ -139,7 +151,10 @@ export default function CollectionsPage() {
   const [toDate, setToDate] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [currencyFilter, setCurrencyFilter] = useState('');
+  const [branchFilter, setBranchFilter] = useState('');
+  const [collectorFilter, setCollectorFilter] = useState('');
   const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
 
   /* ──── Dialog State ──── */
   const [createOpen, setCreateOpen] = useState(false);
@@ -148,7 +163,7 @@ export default function CollectionsPage() {
 
   /* ──── Queries ──── */
   const query = useQuery<CollectionsResponse>({
-    queryKey: ['collections', debouncedSearch, fromDate, toDate, statusFilter, currencyFilter, page],
+    queryKey: ['collections', debouncedSearch, fromDate, toDate, statusFilter, currencyFilter, branchFilter, collectorFilter, page],
     queryFn: () => {
       const p = new URLSearchParams();
       p.set('page', String(page));
@@ -157,6 +172,8 @@ export default function CollectionsPage() {
       if (toDate) p.set('toDate', toDate);
       if (statusFilter) p.set('status', statusFilter);
       if (currencyFilter) p.set('currency', currencyFilter);
+      if (branchFilter) p.set('branchId', branchFilter);
+      if (collectorFilter) p.set('collectorId', collectorFilter);
       return api<CollectionsResponse>(`/collections?${p.toString()}`);
     },
     enabled: canRead,
@@ -173,6 +190,59 @@ export default function CollectionsPage() {
     queryFn: () => api<NameId[]>('/branches'),
     enabled: canRead,
   });
+
+  const collectorsQuery = useQuery<CollectorOption[]>({
+    queryKey: ['collectors', 'collection-report-options'],
+    queryFn: () => api<CollectorOption[]>('/collectors'),
+    enabled: canRead && canListCollectors,
+  });
+
+  function reportParams(pageNumber: number) {
+    const p = new URLSearchParams({ page: String(pageNumber), limit: '100' });
+    if (fromDate) p.set('fromDate', fromDate);
+    if (toDate) p.set('toDate', toDate);
+    if (statusFilter) p.set('status', statusFilter);
+    if (currencyFilter) p.set('currency', currencyFilter);
+    if (branchFilter) p.set('branchId', branchFilter);
+    if (collectorFilter) p.set('collectorId', collectorFilter);
+    return p;
+  }
+
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      const first = await api<CollectionsResponse>(`/collections?${reportParams(1).toString()}`);
+      const rows = [...first.items];
+      const pages = Math.min(first.totalPages, 100);
+      for (let current = 2; current <= pages; current += 1) {
+        const result = await api<CollectionsResponse>(`/collections?${reportParams(current).toString()}`);
+        rows.push(...result.items);
+      }
+      const needle = debouncedSearch.trim().toLowerCase();
+      const exported = needle
+        ? rows.filter((row) => [row.customer.name, row.customer.externalCustomerCode, row.receiptNumber, row.referenceNumber]
+          .some((value) => value?.toLowerCase().includes(needle)))
+        : rows;
+      const header = ['التاريخ', 'العميل', 'كود العميل', 'المبلغ', 'العملة', 'الطريقة', 'الفرع', 'المحصل', 'الحالة', 'المرجع', 'ملاحظات'];
+      const lines = exported.map((row) => [
+        row.collectedAt, row.customer.name, row.customer.externalCustomerCode, row.amount,
+        row.currencyCode, row.method?.name, row.branch?.name, row.collector?.user?.fullName,
+        COLLECTION_STATUS_AR[row.status] ?? row.status, row.receiptNumber ?? row.referenceNumber, row.notes,
+      ].map(csvCell).join(','));
+      const blob = new Blob([`\uFEFF${header.map(csvCell).join(',')}\n${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `collections-report-${fromDate || 'all'}-${toDate || 'all'}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast(`تم تصدير ${exported.length} عملية تحصيل`, 'ok');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'تعذر تصدير التقرير', 'err');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   /* ──── Client-side search ──── */
   const items = query.data?.items ?? [];
@@ -258,11 +328,20 @@ export default function CollectionsPage() {
     <div className="space-y-5">
       <PageHeader
         title="التحصيلات"
-        action={canCreate && (
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" aria-hidden />
-            تحصيل جديد
-          </Button>
+        action={(
+          <div className="flex flex-wrap gap-2">
+            {canExport && (
+              <Button variant="secondary" loading={exporting} onClick={exportCsv}>
+                <Download className="h-4 w-4" aria-hidden /> تصدير CSV/Excel
+              </Button>
+            )}
+            {canCreate && (
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus className="h-4 w-4" aria-hidden />
+                تحصيل جديد
+              </Button>
+            )}
+          </div>
         )}
       />
 
@@ -326,6 +405,22 @@ export default function CollectionsPage() {
                 onChange={(e) => { setToDate(e.target.value); setPage(1); }}
               />
             </label>
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-concrete-500">الفرع</span>
+              <Select value={branchFilter} onChange={(e) => { setBranchFilter(e.target.value); setPage(1); }}>
+                <option value="">كل الفروع</option>
+                {(branchesQuery.data ?? []).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+              </Select>
+            </label>
+            {canListCollectors && (
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-concrete-500">المحصل</span>
+                <Select value={collectorFilter} onChange={(e) => { setCollectorFilter(e.target.value); setPage(1); }}>
+                  <option value="">كل المحصلين</option>
+                  {(collectorsQuery.data ?? []).map((collector) => <option key={collector.id} value={collector.id}>{collector.user.fullName}</option>)}
+                </Select>
+              </label>
+            )}
           </div>
         </div>
 

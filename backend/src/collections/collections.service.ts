@@ -177,6 +177,10 @@ export class CollectionsService {
     const limit = q.limit ?? 25;
     const where = await this.scope(user);
     if (q.customerId) where.customerId = q.customerId;
+    // A collector-scoped user must never replace the collectorId installed by
+    // scope(); cross-collector reporting requires the reporting permission.
+    if (q.collectorId && user.permissions.includes('reports.read')) where.collectorId = q.collectorId;
+    if (q.branchId) where.branchId = q.branchId;
     if (q.currency) where.currencyCode = q.currency;
     if (q.status) where.status = q.status;
     if (q.fromDate || q.toDate) {
