@@ -69,6 +69,7 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   { label: 'الاستيراد', prefix: 'imports.', items: [
     { code: 'imports.run', label: 'تشغيل استيراد' },
     { code: 'imports.read', label: 'عرض الاستيرادات' },
+    { code: 'imports.reverse', label: 'التراجع عن استيراد' },
   ]},
   { label: 'التسويات', prefix: 'reconciliation.', items: [
     { code: 'reconciliation.review', label: 'مراجعة التسويات' },

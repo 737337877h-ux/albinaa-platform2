@@ -281,7 +281,7 @@ export class CustomersService {
     const [snapshots, assignments, audits, customer, followups, promises, collections] =
       await Promise.all([
         this.prisma.balanceSnapshot.findMany({
-          where: { customerId: id },
+          where: { customerId: id, reversedAt: null },
           include: { importJob: { select: { fileName: true } } },
         }),
         this.prisma.customerAssignment.findMany({
@@ -432,7 +432,7 @@ export class CustomersService {
     });
 
     const baseWhere: Prisma.ImportedTransactionWhereInput = {
-      customerId: id, currencyCode: q.currency,
+      customerId: id, currencyCode: q.currency, reversedAt: null,
     };
     const rangeWhere: Prisma.ImportedTransactionWhereInput = { ...baseWhere };
     if (q.fromDate || q.toDate) {

@@ -11,6 +11,7 @@ import {
   Play,
   History,
   Clock,
+  RotateCcw,
 } from 'lucide-react';
 import { API, api, tokenStore } from '@/lib/api';
 import { useCan } from '@/lib/auth';
@@ -27,7 +28,7 @@ import { Table, TRow, TD } from '@/components/ui/table';
 interface ImportRow {
   id: string;
   fileName: string;
-  status: 'dry_run' | 'running' | 'completed' | 'failed';
+  status: 'dry_run' | 'running' | 'completed' | 'failed' | 'reversed';
   importedAt: string | null;
   txnsInFile: number | null;
   txnsInserted: number | null;
@@ -37,6 +38,9 @@ interface ImportRow {
   errorsCount: number;
   profile?: string;
   executable?: boolean;
+  canReverse?: boolean;
+  reversedAt?: string | null;
+  reversalReason?: string | null;
   uploader: { id: string; fullName: string };
 }
 
@@ -182,6 +186,7 @@ const STATUS_BADGE: Record<ImportRow['status'], 'pine' | 'hazard' | 'neutral' | 
   dry_run: 'hazard',
   running: 'neutral',
   failed: 'debt',
+  reversed: 'neutral',
 };
 
 /* ────────────────────────────── Helpers ──────────────────────────────── */
@@ -229,6 +234,7 @@ export default function ImportsPage() {
   const can = useCan();
   const canRead = can('imports.read');
   const canRun = can('imports.run');
+  const canReverse = can('imports.reverse');
   const qc = useQueryClient();
 
   /* ──── Dialog State ──── */
@@ -237,6 +243,9 @@ export default function ImportsPage() {
   const [reportJobId, setReportJobId] = useState<string | null>(null);
   const [errorOpen, setErrorOpen] = useState(false);
   const [errorImportId, setErrorImportId] = useState<string | null>(null);
+  const [reverseImport, setReverseImport] = useState<ImportRow | null>(null);
+  const [reverseConfirm, setReverseConfirm] = useState('');
+  const [reverseReason, setReverseReason] = useState('');
 
   /* ──── Queries ──── */
   const listQuery = useQuery<ImportRow[]>({
@@ -278,6 +287,12 @@ export default function ImportsPage() {
     setErrorImportId(null);
   };
 
+  const closeReverse = () => {
+    setReverseImport(null);
+    setReverseConfirm('');
+    setReverseReason('');
+  };
+
   /* ──── Upload Mutation ──── */
   const uploadMut = useMutation({
     mutationFn: (file: File) => uploadFile(file),
@@ -299,6 +314,21 @@ export default function ImportsPage() {
       toast('تم تنفيذ الاستيراد بنجاح', 'ok');
       setPreviewData(null);
       openReport(data.jobId);
+      qc.invalidateQueries({ queryKey: ['imports'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const reverseMut = useMutation({
+    mutationFn: ({ jobId, reason }: { jobId: string; reason: string }) =>
+      api(`/imports/${jobId}/reverse`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': `import-reverse-${jobId}` },
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: () => {
+      toast('تم التراجع عن دفعة الاستيراد بأمان', 'ok');
+      closeReverse();
       qc.invalidateQueries({ queryKey: ['imports'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
@@ -446,6 +476,16 @@ export default function ImportsPage() {
                           <Eye className="h-3.5 w-3.5" />
                         </button>
                       )}
+                      {row.status === 'completed' && row.canReverse && canReverse && (
+                        <button
+                          onClick={() => setReverseImport(row)}
+                          className="rounded p-1.5 text-concrete-400 hover:bg-debt-50 hover:text-debt-700 dark:hover:bg-debt-700/20 dark:hover:text-debt-300"
+                          aria-label="التراجع عن هذا الاستيراد"
+                          title="التراجع عن هذا الاستيراد"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       {row.status === 'failed' && (
                         <button
                           onClick={() => openErrors(row.id)}
@@ -493,6 +533,62 @@ export default function ImportsPage() {
         onClose={closeErrors}
         open={errorOpen}
       />
+
+      <Dialog
+        open={Boolean(reverseImport)}
+        onClose={closeReverse}
+        title="التراجع عن دفعة الاستيراد"
+      >
+        {reverseImport && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-debt-200 bg-debt-50 p-4 text-sm text-debt-900 dark:border-debt-700/40 dark:bg-debt-700/10 dark:text-debt-100">
+              سيُعاد الرصيد وبيانات العملاء إلى الحالة السابقة، وتبقى سجلات المصدر محفوظة
+              ومعلّمة كمُعكوسة. لا تُحذف الحركات المالية.
+            </div>
+            <div className="rounded-lg bg-concrete-50 p-3 text-sm dark:bg-white/5">
+              <span className="font-semibold">الملف:</span> {reverseImport.fileName}
+            </div>
+            <label className="block space-y-1.5 text-sm">
+              <span className="font-medium">سبب التراجع</span>
+              <textarea
+                value={reverseReason}
+                onChange={(event) => setReverseReason(event.target.value)}
+                rows={3}
+                className="w-full rounded-lg border border-concrete-200 bg-white px-3 py-2 outline-none focus:border-pine-500 dark:border-white/15 dark:bg-white/5"
+                placeholder="مثال: تم اختيار ملف غير صحيح"
+              />
+            </label>
+            <label className="block space-y-1.5 text-sm">
+              <span className="font-medium">اكتب «تراجع» للتأكيد</span>
+              <input
+                value={reverseConfirm}
+                onChange={(event) => setReverseConfirm(event.target.value)}
+                className="w-full rounded-lg border border-concrete-200 bg-white px-3 py-2 outline-none focus:border-pine-500 dark:border-white/15 dark:bg-white/5"
+                autoFocus
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                onClick={closeReverse}
+              >
+                إلغاء
+              </Button>
+              <Button
+                disabled={reverseConfirm !== 'تراجع' || reverseReason.trim().length < 3}
+                loading={reverseMut.isPending}
+                onClick={() => reverseMut.mutate({
+                  jobId: reverseImport.id,
+                  reason: reverseReason.trim(),
+                })}
+              >
+                <RotateCcw className="h-4 w-4" />
+                تأكيد التراجع
+              </Button>
+            </div>
+          </div>
+        )}
+      </Dialog>
     </div>
   );
 }

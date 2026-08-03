@@ -93,6 +93,7 @@ model User {
   customerMergesReversed    CustomerMerge[]              @relation("CustomerMergeReverser")
   importTemplates           ImportTemplate[]
   importJobs                ImportJob[]
+  importJobsReversed        ImportJob[]                  @relation("ImportJobReverser")
   ledgerEntries             OperationalLedger[]
   reconciliationsDone       BalanceReconciliation[]      @relation("ReconReviewer")
   cashReceived              CashHandover[]
@@ -407,31 +408,36 @@ model ImportTemplate {
 }
 
 model ImportJob {
-  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId        String   @map("organization_id") @db.Uuid
-  templateId            String?  @map("template_id") @db.Uuid
-  fileName              String   @map("file_name")
-  fileHash              String   @map("file_hash")
-  uploadedBy            String   @map("uploaded_by") @db.Uuid
-  importedAt            DateTime @default(now()) @map("imported_at") @db.Timestamptz()
-  status                String   @default("completed")
-  rowsTotal             Int?     @map("rows_total")
-  txnsInFile            Int?     @map("txns_in_file")
-  customersNew          Int?     @map("customers_new")
-  customersUpdated      Int?     @map("customers_updated")
-  txnsInserted          Int?     @map("txns_inserted")
-  txnsSkippedDuplicate  Int?     @map("txns_skipped_duplicate")
-  errorsCount           Int?     @map("errors_count")
-  totalBalanceBefore    Json?    @map("total_balance_before") @db.JsonB
-  totalBalanceAfter     Json?    @map("total_balance_after") @db.JsonB
-  errorReport           Json?    @map("error_report") @db.JsonB
-  agingRowsWritten      Int?     @map("aging_rows_written")
-  agingDocumentsWritten Int?     @map("aging_documents_written")
-  agingSkippedDuplicate Int?     @map("aging_skipped_duplicate")
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId        String    @map("organization_id") @db.Uuid
+  templateId            String?   @map("template_id") @db.Uuid
+  fileName              String    @map("file_name")
+  fileHash              String    @map("file_hash")
+  uploadedBy            String    @map("uploaded_by") @db.Uuid
+  importedAt            DateTime  @default(now()) @map("imported_at") @db.Timestamptz()
+  status                String    @default("completed")
+  rowsTotal             Int?      @map("rows_total")
+  txnsInFile            Int?      @map("txns_in_file")
+  customersNew          Int?      @map("customers_new")
+  customersUpdated      Int?      @map("customers_updated")
+  txnsInserted          Int?      @map("txns_inserted")
+  txnsSkippedDuplicate  Int?      @map("txns_skipped_duplicate")
+  errorsCount           Int?      @map("errors_count")
+  totalBalanceBefore    Json?     @map("total_balance_before") @db.JsonB
+  totalBalanceAfter     Json?     @map("total_balance_after") @db.JsonB
+  errorReport           Json?     @map("error_report") @db.JsonB
+  agingRowsWritten      Int?      @map("aging_rows_written")
+  agingDocumentsWritten Int?      @map("aging_documents_written")
+  agingSkippedDuplicate Int?      @map("aging_skipped_duplicate")
+  rollbackState         Json?     @map("rollback_state") @db.JsonB
+  reversedBy            String?   @map("reversed_by") @db.Uuid
+  reversedAt            DateTime? @map("reversed_at") @db.Timestamptz()
+  reversalReason        String?   @map("reversal_reason")
 
   organization Organization    @relation(fields: [organizationId], references: [id])
   template     ImportTemplate? @relation(fields: [templateId], references: [id])
   uploader     User            @relation(fields: [uploadedBy], references: [id])
+  reverser     User?           @relation("ImportJobReverser", fields: [reversedBy], references: [id])
 
   transactions        ImportedTransaction[]
   balancesUpdated     CustomerBalance[]
@@ -446,19 +452,20 @@ model ImportJob {
 }
 
 model ImportedTransaction {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customerId      String   @map("customer_id") @db.Uuid
-  currencyCode    String   @map("currency_code")
-  documentTypeId  String   @map("document_type_id") @db.Uuid
-  txDate          DateTime @map("tx_date") @db.Date
-  documentNumber  String?  @map("document_number")
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId      String    @map("customer_id") @db.Uuid
+  currencyCode    String    @map("currency_code")
+  documentTypeId  String    @map("document_type_id") @db.Uuid
+  txDate          DateTime  @map("tx_date") @db.Date
+  documentNumber  String?   @map("document_number")
   description     String?
-  referenceNumber String?  @map("reference_number")
-  debit           Decimal  @default(0) @db.Decimal(18, 4)
-  credit          Decimal  @default(0) @db.Decimal(18, 4)
-  lineHash        String   @unique @map("line_hash")
-  sourceRowNumber Int?     @map("source_row_number")
-  importJobId     String   @map("import_job_id") @db.Uuid
+  referenceNumber String?   @map("reference_number")
+  debit           Decimal   @default(0) @db.Decimal(18, 4)
+  credit          Decimal   @default(0) @db.Decimal(18, 4)
+  lineHash        String    @map("line_hash")
+  sourceRowNumber Int?      @map("source_row_number")
+  importJobId     String    @map("import_job_id") @db.Uuid
+  reversedAt      DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer     Customer     @relation(fields: [customerId], references: [id])
   currency     Currency     @relation(fields: [currencyCode], references: [code])
@@ -492,12 +499,13 @@ model CustomerBalance {
 }
 
 model BalanceSnapshot {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customerId   String   @map("customer_id") @db.Uuid
-  currencyCode String   @map("currency_code")
-  balance      Decimal  @db.Decimal(18, 4)
-  importJobId  String   @map("import_job_id") @db.Uuid
-  snapshotAt   DateTime @default(now()) @map("snapshot_at") @db.Timestamptz()
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId   String    @map("customer_id") @db.Uuid
+  currencyCode String    @map("currency_code")
+  balance      Decimal   @db.Decimal(18, 4)
+  importJobId  String    @map("import_job_id") @db.Uuid
+  snapshotAt   DateTime  @default(now()) @map("snapshot_at") @db.Timestamptz()
+  reversedAt   DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer  Customer  @relation(fields: [customerId], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
@@ -514,20 +522,21 @@ model BalanceSnapshot {
 //    - idempotent بحكم line_hash الفريد (تعاد الاستيراد لا تكرر البيانات)
 // ---------------------------------------------------------------------------
 model DebtAgingSummary {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  importJobId     String   @map("import_job_id") @db.Uuid
-  customerId      String   @map("customer_id") @db.Uuid
-  customerCode    String   @map("customer_code")
-  currencyCode    String   @map("currency_code")
-  bucket_0_30     Decimal  @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
-  bucket_31_60    Decimal  @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
-  bucket_61_90    Decimal  @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
-  bucket_91_120   Decimal  @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
-  bucket_120_plus Decimal  @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
-  totalDue        Decimal  @map("total_due") @db.Decimal(18, 4)
-  sourceRowNumber Int      @map("source_row_number")
-  lineHash        String   @unique @map("line_hash")
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  importJobId     String    @map("import_job_id") @db.Uuid
+  customerId      String    @map("customer_id") @db.Uuid
+  customerCode    String    @map("customer_code")
+  currencyCode    String    @map("currency_code")
+  bucket_0_30     Decimal   @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
+  bucket_31_60    Decimal   @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
+  bucket_61_90    Decimal   @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
+  bucket_91_120   Decimal   @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
+  bucket_120_plus Decimal   @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
+  totalDue        Decimal   @map("total_due") @db.Decimal(18, 4)
+  sourceRowNumber Int       @map("source_row_number")
+  lineHash        String    @map("line_hash")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reversedAt      DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer  Customer  @relation(fields: [customerId], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
@@ -554,8 +563,9 @@ model DebtAgingDetail {
   bucket_91_120   Decimal   @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
   bucket_120_plus Decimal   @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
   sourceRowNumber Int       @map("source_row_number")
-  lineHash        String    @unique @map("line_hash")
+  lineHash        String    @map("line_hash")
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reversedAt      DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer  Customer  @relation(fields: [customerId], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
@@ -605,6 +615,7 @@ model BalanceReconciliation {
   reviewedBy         String?   @map("reviewed_by") @db.Uuid
   reviewedAt         DateTime? @map("reviewed_at") @db.Timestamptz()
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reversedAt         DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer  Customer  @relation(fields: [customerId], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
@@ -1021,19 +1032,20 @@ model AnalyticalAccount {
 }
 
 model AnalyticalMovement {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  accountId         String   @map("account_id") @db.Uuid
-  currencyCode      String   @map("currency_code")
-  txDate            DateTime @map("tx_date") @db.Date
-  documentType      String?  @map("document_type")
-  documentNumber    String?  @map("document_number")
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId         String    @map("account_id") @db.Uuid
+  currencyCode      String    @map("currency_code")
+  txDate            DateTime  @map("tx_date") @db.Date
+  documentType      String?   @map("document_type")
+  documentNumber    String?   @map("document_number")
   description       String?
-  debit             Decimal  @default(0) @db.Decimal(18, 4)
-  credit            Decimal  @default(0) @db.Decimal(18, 4)
-  sourceImportJobId String?  @map("source_import_job_id") @db.Uuid
-  sourceRowNumber   Int?     @map("source_row_number")
-  lineHash          String   @unique @map("line_hash")
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  debit             Decimal   @default(0) @db.Decimal(18, 4)
+  credit            Decimal   @default(0) @db.Decimal(18, 4)
+  sourceImportJobId String?   @map("source_import_job_id") @db.Uuid
+  sourceRowNumber   Int?      @map("source_row_number")
+  lineHash          String    @map("line_hash")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reversedAt        DateTime? @map("reversed_at") @db.Timestamptz()
 
   account         AnalyticalAccount @relation(fields: [accountId], references: [id])
   currency        Currency          @relation(fields: [currencyCode], references: [code])

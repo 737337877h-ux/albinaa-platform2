@@ -41,4 +41,5 @@ export const TASK_TYPE_AR: Record<string, string> = {
 export const IMPORT_STATUS_AR: Record<string, string> = {
   dry_run: 'جاهز للمراجعة', running: 'قيد التنفيذ',
   completed: 'مكتمل', failed: 'فشل',
+  reversed: 'تم التراجع',
 };

@@ -245,4 +245,79 @@ describe('Import Engine — Milestone 3 (e2e)', () => {
       .expect(200);
     expect(report.body.transactionsDuplicate).toBe(7);
   });
+
+  it('يتراجع عن أحدث دفعة أولًا ويحفظ سجلاتها دون حذف', async () => {
+    const reverseKey = `reverse-import-${firstJobId}`;
+    const res = await request(app.getHttpServer())
+      .post(`/imports/${firstJobId}/reverse`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', reverseKey)
+      .send({ reason: 'اختبار التراجع الآمن للدفعة المكررة' })
+      .expect(200);
+    expect(res.body.status).toBe('reversed');
+
+    // نفس المفتاح يعيد النتيجة نفسها ولا ينشئ عكسًا ثانيًا.
+    await request(app.getHttpServer())
+      .post(`/imports/${firstJobId}/reverse`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', reverseKey)
+      .send({ reason: 'اختبار التراجع الآمن للدفعة المكررة' })
+      .expect(200);
+
+    const job = await prisma.importJob.findUniqueOrThrow({ where: { id: firstJobId } });
+    expect(job.status).toBe('reversed');
+    expect(job.reversalReason).toContain('اختبار التراجع');
+    const audit = await prisma.auditLog.count({
+      where: { entityId: firstJobId, action: 'import_reversed' },
+    });
+    expect(audit).toBe(1);
+  });
+
+  it('يتراجع بعد ذلك عن الدفعة الأصلية ويؤرشف العملاء ويعكس الحركات', async () => {
+    const latest = await prisma.importJob.findFirstOrThrow({
+      where: { status: 'completed', fileName: { contains: 'fixture' } },
+      orderBy: { importedAt: 'desc' },
+    });
+    await request(app.getHttpServer())
+      .post(`/imports/${latest.id}/reverse`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', `reverse-import-${latest.id}`)
+      .send({ reason: 'اختبار استعادة الحالة قبل أول استيراد' })
+      .expect(200);
+
+    expect(await prisma.importedTransaction.count({
+      where: { importJobId: latest.id, reversedAt: null },
+    })).toBe(0);
+    expect(await prisma.importedTransaction.count({
+      where: { importJobId: latest.id, reversedAt: { not: null } },
+    })).toBe(7);
+    expect(await prisma.customerBalance.count({
+      where: { customer: { externalCustomerCode: { startsWith: '900' } } },
+    })).toBe(0);
+    expect(await prisma.customer.count({
+      where: { externalCustomerCode: { startsWith: '900' }, status: 'import_reversed' },
+    })).toBe(3);
+  });
+
+  it('يمكن إعادة استيراد الملف بعد التراجع دون فقد الحركات التاريخية', async () => {
+    const uploaded = await request(app.getHttpServer())
+      .post('/imports/upload')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', FIXTURE)
+      .expect(201);
+    expect(uploaded.body.previouslyImported).toBeNull();
+
+    const executed = await request(app.getHttpServer())
+      .post(`/imports/${uploaded.body.jobId}/execute`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({})
+      .expect(200);
+    expect(executed.body.transactionsNew).toBe(7);
+    expect(await prisma.importedTransaction.count({
+      where: { customer: { externalCustomerCode: { startsWith: '900' } } },
+    })).toBe(14); // 7 تاريخية معكوسة + 7 فعالة جديدة
+    expect(await prisma.customer.count({
+      where: { externalCustomerCode: { startsWith: '900' }, status: 'active' },
+    })).toBe(3);
+  });
 });

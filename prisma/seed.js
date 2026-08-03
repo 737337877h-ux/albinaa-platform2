@@ -125,6 +125,7 @@ async function main() {
     ['tasks.manage', 'إدارة المهام'],
     ['imports.run', 'تنفيذ استيراد Excel'],
     ['imports.read', 'عرض سجل الاستيراد'],
+    ['imports.reverse', 'التراجع الآمن عن أحدث دفعة استيراد'],
     ['reconciliation.review', 'مراجعة واعتماد التسويات'],
     ['reports.read', 'عرض التقارير'],
     ['reports.export', 'تصدير التقارير'],
@@ -167,7 +168,7 @@ async function main() {
     ],
     'المحاسب': [
       'customers.read', 'customers.read_all', 'balances.read', 'collections.approve', 'imports.run',
-      'imports.read', 'reconciliation.review', 'reports.read', 'reports.export', 'risk.read',
+      'imports.read', 'imports.reverse', 'reconciliation.review', 'reports.read', 'reports.export', 'risk.read',
       'reservations.read',
     ],
     'أمين الصندوق': ['cash.receive', 'collections.approve', 'balances.read'],

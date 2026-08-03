@@ -154,11 +154,11 @@ export class RiskService {
         select: { customerId: true, currencyCode: true, accountingBalance: true },
       }),
       this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId } },
+        where: { customer: { organizationId: orgId }, reversedAt: null },
         select: { customerId: true, currencyCode: true, totalDue: true },
       }),
       this.prisma.debtAgingDetail.findMany({
-        where: { customer: { organizationId: orgId } },
+        where: { customer: { organizationId: orgId }, reversedAt: null },
         select: {
           customerId: true,
           currencyCode: true,
@@ -186,7 +186,7 @@ export class RiskService {
         select: { id: true, name: true },
       }),
       this.prisma.importedTransaction.findMany({
-        where: { customer: { organizationId: orgId }, credit: { gt: 0 } },
+        where: { customer: { organizationId: orgId }, credit: { gt: 0 }, reversedAt: null },
         select: { customerId: true, currencyCode: true, txDate: true },
       }),
     ]);

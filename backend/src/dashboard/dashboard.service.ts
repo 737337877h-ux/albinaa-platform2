@@ -132,7 +132,7 @@ export class DashboardService {
 
     const oldest = await this.prisma.importedTransaction.groupBy({
       by: ['customerId', 'currencyCode'],
-      where: { customer: { organizationId: orgId } },
+      where: { customer: { organizationId: orgId }, reversedAt: null },
       _min: { txDate: true },
     });
     const oldestMap = new Map<string, Date>();
@@ -192,7 +192,7 @@ export class DashboardService {
         },
       }),
       this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId }, bucket_120_plus: { gt: 0 } },
+        where: { customer: { organizationId: orgId }, bucket_120_plus: { gt: 0 }, reversedAt: null },
         select: { customerId: true, currencyCode: true, totalDue: true },
       }),
     ]);

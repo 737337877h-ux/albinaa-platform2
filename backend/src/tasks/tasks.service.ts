@@ -344,7 +344,7 @@ export class TasksService {
         select: { customerId: true, score: true, riskLevel: true },
       }),
       this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId } },
+        where: { customer: { organizationId: orgId }, reversedAt: null },
         select: { customerId: true, currencyCode: true, totalDue: true, bucket_120_plus: true },
       }),
       this.prisma.customerBalance.findMany({
@@ -353,7 +353,7 @@ export class TasksService {
       }),
       this.prisma.importedTransaction.groupBy({
         by: ['customerId', 'currencyCode'],
-        where: { customer: { organizationId: orgId }, debit: { gt: 0 } },
+        where: { customer: { organizationId: orgId }, debit: { gt: 0 }, reversedAt: null },
         _max: { txDate: true },
       }),
       this.prisma.followup.findMany({

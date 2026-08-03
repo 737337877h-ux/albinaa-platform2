@@ -1,6 +1,7 @@
 import {
   BadRequestException, ConflictException, Injectable, Logger, NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { Request } from 'express';
 import * as fs from 'fs/promises';
@@ -371,11 +372,14 @@ export class ImportsService {
       );
     }
 
-    const started = Date.now();
-    await this.prisma.importJob.update({ where: { id: jobId }, data: { status: 'running' } });
-
     try {
       const parsed: ParseResultJson = JSON.parse(await fs.readFile(report.parsedPath, 'utf-8'));
+      const rollbackState = await this.captureRollbackBefore(actor, jobId, profile, parsed);
+      const started = Date.now();
+      await this.prisma.importJob.update({
+        where: { id: jobId },
+        data: { status: 'running', rollbackState: rollbackState as Prisma.InputJsonValue },
+      });
       let result: {
         customersNew: number; customersUpdated: number;
         txnsInserted: number; txnsSkipped: number;
@@ -399,6 +403,7 @@ export class ImportsService {
         result = await this.applyImport(actor, jobId, parsed, report.ruleErrors ?? []);
       }
       const durationMs = Date.now() - started;
+      const rollbackStateComplete = await this.captureRollbackAfter(actor, jobId, rollbackState);
 
       const updated = await this.prisma.importJob.update({
         where: { id: jobId },
@@ -414,6 +419,7 @@ export class ImportsService {
           agingSkippedDuplicate: result.agingSkippedDuplicate ?? null,
           totalBalanceBefore: result.totalsBefore as any,
           totalBalanceAfter: result.totalsAfter as any,
+          rollbackState: rollbackStateComplete as Prisma.InputJsonValue,
           errorReport: {
             ...report,
             executeErrors: result.executeErrors,
@@ -523,12 +529,13 @@ export class ImportsService {
           if (existing) {
             resolvedId = existing.id;
             customersUpdated += 1;
-            if (existing.name !== acc.customerName) {
+            if (existing.name !== acc.customerName || existing.status === 'import_reversed') {
               await this.prisma.customer.update({
                 where: { id: existing.id },
                 data: {
                   name: acc.customerName,
                   nameNormalized: normalizeName(acc.customerName),
+                  ...(existing.status === 'import_reversed' ? { status: 'active' } : {}),
                   updatedAt: new Date(),
                 },
               });
@@ -718,6 +725,7 @@ export class ImportsService {
             resolvedId = existing.id;
             customersUpdated += 1;
             const updates: Record<string, unknown> = {};
+            if (existing.status === 'import_reversed') updates.status = 'active';
             if (existing.name !== row.customerName) {
               updates.name = row.customerName;
               updates.nameNormalized = normalizeName(row.customerName);
@@ -813,6 +821,12 @@ export class ImportsService {
           if (existing) {
             customerId = existing.id;
             customersUpdated += 1;
+            if (existing.status === 'import_reversed') {
+              await this.prisma.customer.update({
+                where: { id: existing.id },
+                data: { status: 'active', updatedAt: new Date() },
+              });
+            }
           } else {
             const created = await this.prisma.customer.create({
               data: {
@@ -900,7 +914,7 @@ export class ImportsService {
         const lineHash = this.agingLineHash(
           'DEBT_AGING_SUMMARY', fileHash, row.customerCode, row.currency, row.rowNumber,
         );
-        if (await this.prisma.debtAgingSummary.findUnique({ where: { lineHash } })) {
+        if (await this.prisma.debtAgingSummary.findFirst({ where: { lineHash, reversedAt: null } })) {
           skipped += 1;
           continue;
         }
@@ -969,7 +983,7 @@ export class ImportsService {
           'DEBT_AGING_DETAILS', fileHash, row.customerCode, row.currency, row.rowNumber,
           row.documentNumber, row.documentDate,
         );
-        if (await this.prisma.debtAgingDetail.findUnique({ where: { lineHash } })) {
+        if (await this.prisma.debtAgingDetail.findFirst({ where: { lineHash, reversedAt: null } })) {
           skipped += 1;
           continue;
         }
@@ -1069,10 +1083,15 @@ export class ImportsService {
     if (existing) {
       customerId = existing.id;
       counts.customersUpdated += 1;
-      if (existing.name !== name) {
+      if (existing.name !== name || existing.status === 'import_reversed') {
         await this.prisma.customer.update({
           where: { id: existing.id },
-          data: { name, nameNormalized: normalizeName(name), updatedAt: new Date() },
+          data: {
+            name,
+            nameNormalized: normalizeName(name),
+            ...(existing.status === 'import_reversed' ? { status: 'active' } : {}),
+            updatedAt: new Date(),
+          },
         });
       }
     } else {
@@ -1103,6 +1122,303 @@ export class ImportsService {
     );
   }
 
+  private customerSnapshot(customer: any) {
+    return {
+      id: customer.id,
+      externalCustomerCode: customer.externalCustomerCode,
+      name: customer.name,
+      nameNormalized: customer.nameNormalized,
+      accountNumber: customer.accountNumber,
+      phonePrimary: customer.phonePrimary,
+      whatsapp: customer.whatsapp,
+      region: customer.region,
+      address: customer.address,
+      customerType: customer.customerType,
+      status: customer.status,
+    };
+  }
+
+  private balanceSnapshotState(balance: any, customerCode: string) {
+    return {
+      id: balance.id,
+      customerCode,
+      customerId: balance.customerId,
+      currencyCode: balance.currencyCode,
+      openingDebit: balance.openingDebit.toString(),
+      openingCredit: balance.openingCredit.toString(),
+      accountingBalance: balance.accountingBalance.toString(),
+      declaredBalance: balance.declaredBalance?.toString() ?? null,
+      declaredLabel: balance.declaredLabel,
+      lastImportJobId: balance.lastImportJobId,
+    };
+  }
+
+  private snapshotEquals(current: Record<string, unknown>, expected: Record<string, unknown>) {
+    return Object.keys(expected).every((key) => {
+      const left = current[key] ?? null;
+      const right = expected[key] ?? null;
+      return String(left) === String(right);
+    });
+  }
+
+  private rollbackTargets(profile: ImportProfile, parsed: ParseResultJson) {
+    const codes = new Set<string>();
+    const currencyByCode = new Map<string, Set<string>>();
+    const add = (code: string | null | undefined, currency?: string | null) => {
+      if (!code || code === 'None') return;
+      codes.add(code);
+      if (currency) {
+        const currencies = currencyByCode.get(code) ?? new Set<string>();
+        currencies.add(currency);
+        currencyByCode.set(code, currencies);
+      }
+    };
+    if (profile === 'CUSTOMER_STATEMENT_DETAILS') {
+      for (const row of parsed.accounts) add(row.customerCode, row.currency);
+    } else if (profile === 'CUSTOMER_BALANCE_SUMMARY') {
+      for (const row of parsed.balances) add(row.customerCode, row.currency);
+    } else if (profile === 'CUSTOMER_MASTER') {
+      for (const row of parsed.customers) add(row.customerCode);
+    } else if (profile === 'DEBT_AGING_SUMMARY') {
+      for (const row of parsed.agingSummary) add(row.customerCode);
+    } else if (profile === 'DEBT_AGING_DETAILS') {
+      for (const row of parsed.agingDetails) add(row.customerCode);
+    }
+    return {
+      codes: [...codes],
+      currencyByCode: Object.fromEntries(
+        [...currencyByCode.entries()].map(([code, currencies]) => [code, [...currencies]]),
+      ),
+    };
+  }
+
+  private async captureRollbackBefore(
+    actor: AuthUser, jobId: string, profile: ImportProfile, parsed: ParseResultJson,
+  ) {
+    const targets = this.rollbackTargets(profile, parsed);
+    const customers = await this.prisma.customer.findMany({
+      where: { organizationId: actor.organizationId, externalCustomerCode: { in: targets.codes } },
+    });
+    const codeById = new Map(customers.map((customer) => [customer.id, customer.externalCustomerCode]));
+    const balanceOr = customers.flatMap((customer) =>
+      (targets.currencyByCode[customer.externalCustomerCode] ?? []).map((currencyCode) => ({
+        customerId: customer.id, currencyCode,
+      })),
+    );
+    const balances = balanceOr.length
+      ? await this.prisma.customerBalance.findMany({ where: { OR: balanceOr } })
+      : [];
+    return {
+      version: 1,
+      jobId,
+      profile,
+      targets,
+      before: {
+        customers: customers.map((customer) => this.customerSnapshot(customer)),
+        balances: balances.map((balance) =>
+          this.balanceSnapshotState(balance, codeById.get(balance.customerId)!),
+        ),
+      },
+    };
+  }
+
+  private async captureRollbackAfter(actor: AuthUser, jobId: string, state: any) {
+    const customers = await this.prisma.customer.findMany({
+      where: {
+        organizationId: actor.organizationId,
+        externalCustomerCode: { in: state.targets.codes },
+      },
+    });
+    const codeById = new Map(customers.map((customer) => [customer.id, customer.externalCustomerCode]));
+    const balanceOr = customers.flatMap((customer) =>
+      (state.targets.currencyByCode[customer.externalCustomerCode] ?? []).map((currencyCode: string) => ({
+        customerId: customer.id, currencyCode,
+      })),
+    );
+    const balances = balanceOr.length
+      ? await this.prisma.customerBalance.findMany({ where: { OR: balanceOr } })
+      : [];
+    return {
+      ...state,
+      completedAt: new Date().toISOString(),
+      after: {
+        customers: customers.map((customer) => this.customerSnapshot(customer)),
+        balances: balances.map((balance) =>
+          this.balanceSnapshotState(balance, codeById.get(balance.customerId)!),
+        ),
+      },
+    };
+  }
+
+  async reverse(actor: AuthUser, jobId: string, reason: string, req?: Request) {
+    const normalizedReason = reason.trim();
+    if (normalizedReason.length < 3) {
+      throw new BadRequestException('سبب التراجع يجب أن يحتوي على 3 أحرف على الأقل');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const job = await tx.importJob.findFirst({
+        where: { id: jobId, organizationId: actor.organizationId },
+      });
+      if (!job) throw new NotFoundException('عملية الاستيراد غير موجودة');
+      if (job.status === 'reversed') throw new ConflictException('تم التراجع عن هذه الدفعة مسبقًا');
+      if (job.status !== 'completed') throw new ConflictException('لا يمكن التراجع إلا عن دفعة مكتملة');
+      const state = job.rollbackState as any;
+      if (!state?.version || !state?.after) {
+        throw new ConflictException('هذه دفعة قديمة لا تحتوي لقطة استعادة؛ لا يمكن عكسها آليًا بأمان');
+      }
+
+      const latest = await tx.importJob.findFirst({
+        where: { organizationId: actor.organizationId, status: 'completed' },
+        orderBy: { importedAt: 'desc' },
+        select: { id: true },
+      });
+      if (latest?.id !== jobId) {
+        throw new ConflictException('يجب التراجع عن أحدث دفعة مكتملة أولًا للمحافظة على التسلسل المحاسبي');
+      }
+
+      const currentCustomers = await tx.customer.findMany({
+        where: {
+          organizationId: actor.organizationId,
+          externalCustomerCode: { in: state.targets.codes },
+        },
+      });
+      const currentByCode = new Map(
+        currentCustomers.map((customer) => [customer.externalCustomerCode, customer]),
+      );
+      for (const expected of state.after.customers) {
+        const current = currentByCode.get(expected.externalCustomerCode);
+        if (!current || !this.snapshotEquals(this.customerSnapshot(current), expected)) {
+          throw new ConflictException(
+            `تغيرت بيانات العميل ${expected.externalCustomerCode} بعد الاستيراد؛ راجعها قبل التراجع`,
+          );
+        }
+      }
+
+      const expectedBalances = state.after.balances as any[];
+      for (const expected of expectedBalances) {
+        const customer = currentByCode.get(expected.customerCode);
+        const current = customer
+          ? await tx.customerBalance.findUnique({
+              where: {
+                customerId_currencyCode: {
+                  customerId: customer.id, currencyCode: expected.currencyCode,
+                },
+              },
+            })
+          : null;
+        if (!current
+          || !this.snapshotEquals(this.balanceSnapshotState(current, expected.customerCode), expected)) {
+          throw new ConflictException(
+            `تغير رصيد ${expected.customerCode}/${expected.currencyCode} بعد الاستيراد؛ أوقف التراجع للمراجعة`,
+          );
+        }
+      }
+
+      const beforeCodes = new Set((state.before.customers as any[]).map((customer) => customer.externalCustomerCode));
+      for (const customer of currentCustomers.filter((item) => !beforeCodes.has(item.externalCustomerCode))) {
+        const activityCount = await Promise.all([
+          tx.collection.count({ where: { customerId: customer.id } }),
+          tx.paymentPromise.count({ where: { customerId: customer.id } }),
+          tx.followup.count({ where: { customerId: customer.id } }),
+          tx.task.count({ where: { customerId: customer.id } }),
+          tx.reservation.count({ where: { customerId: customer.id } }),
+          tx.operationalLedger.count({ where: { customerId: customer.id } }),
+          tx.customerAssignment.count({ where: { customerId: customer.id } }),
+          tx.customerCreditPolicy.count({ where: { customerId: customer.id } }),
+        ]).then((counts) => counts.reduce((sum, count) => sum + count, 0));
+        if (activityCount > 0) {
+          throw new ConflictException(
+            `العميل ${customer.externalCustomerCode} أُنشئ في الدفعة ثم حصل على نشاط تشغيلي؛ لا يمكن أرشفته تلقائيًا`,
+          );
+        }
+      }
+
+      const reversedAt = new Date();
+      await Promise.all([
+        tx.importedTransaction.updateMany({ where: { importJobId: jobId, reversedAt: null }, data: { reversedAt } }),
+        tx.balanceSnapshot.updateMany({ where: { importJobId: jobId, reversedAt: null }, data: { reversedAt } }),
+        tx.balanceReconciliation.updateMany({ where: { importJobId: jobId, reversedAt: null }, data: { reversedAt } }),
+        tx.debtAgingSummary.updateMany({ where: { importJobId: jobId, reversedAt: null }, data: { reversedAt } }),
+        tx.debtAgingDetail.updateMany({ where: { importJobId: jobId, reversedAt: null }, data: { reversedAt } }),
+        tx.analyticalMovement.updateMany({ where: { sourceImportJobId: jobId, reversedAt: null }, data: { reversedAt } }),
+      ]);
+
+      for (const before of state.before.customers as any[]) {
+        await tx.customer.update({
+          where: { id: before.id },
+          data: {
+            name: before.name,
+            nameNormalized: before.nameNormalized,
+            accountNumber: before.accountNumber,
+            phonePrimary: before.phonePrimary,
+            whatsapp: before.whatsapp,
+            region: before.region,
+            address: before.address,
+            customerType: before.customerType,
+            status: before.status,
+            updatedAt: new Date(),
+          },
+        });
+      }
+      await tx.customer.updateMany({
+        where: {
+          organizationId: actor.organizationId,
+          createdByImportJob: jobId,
+          externalCustomerCode: { notIn: [...beforeCodes] },
+        },
+        data: { status: 'import_reversed', updatedAt: new Date() },
+      });
+
+      const beforeBalanceKeys = new Set<string>();
+      for (const before of state.before.balances as any[]) {
+        beforeBalanceKeys.add(`${before.customerCode}|${before.currencyCode}`);
+        await tx.customerBalance.update({
+          where: { id: before.id },
+          data: {
+            openingDebit: new Prisma.Decimal(before.openingDebit),
+            openingCredit: new Prisma.Decimal(before.openingCredit),
+            accountingBalance: new Prisma.Decimal(before.accountingBalance),
+            declaredBalance: before.declaredBalance == null ? null : new Prisma.Decimal(before.declaredBalance),
+            declaredLabel: before.declaredLabel,
+            lastImportJobId: before.lastImportJobId,
+            updatedAt: new Date(),
+          },
+        });
+      }
+      for (const after of expectedBalances) {
+        if (beforeBalanceKeys.has(`${after.customerCode}|${after.currencyCode}`)) continue;
+        await tx.customerBalance.deleteMany({
+          where: { id: after.id, lastImportJobId: jobId },
+        });
+      }
+
+      const changed = await tx.importJob.updateMany({
+        where: { id: jobId, status: 'completed', reversedAt: null },
+        data: { status: 'reversed', reversedAt, reversedBy: actor.id, reversalReason: normalizedReason },
+      });
+      if (changed.count !== 1) throw new ConflictException('تم التراجع عن الدفعة بالتزامن من مستخدم آخر');
+      await tx.auditLog.create({
+        data: {
+          userId: actor.id,
+          action: 'import_reversed',
+          entityTable: 'import_jobs',
+          entityId: jobId,
+          oldValue: { status: 'completed' },
+          newValue: { status: 'reversed', fileName: job.fileName },
+          reason: normalizedReason,
+          ipAddress: req?.ip ?? null,
+          userAgent: (req?.headers['user-agent'] as string) ?? null,
+        },
+      });
+      return {
+        jobId,
+        status: 'reversed',
+        reversedAt,
+        message: 'تم التراجع عن دفعة الاستيراد وحفظ سجلاتها كمُعكوسة دون حذف المصدر',
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60_000 });
+  }
+
   // --------------------------------------------------------------------------
   // الاستعلامات
   // --------------------------------------------------------------------------
@@ -1115,10 +1431,12 @@ export class ImportsService {
         txnsInFile: true, txnsInserted: true, txnsSkippedDuplicate: true,
         customersNew: true, customersUpdated: true, errorsCount: true,
         agingRowsWritten: true, agingDocumentsWritten: true,
+        rollbackState: true, reversedAt: true, reversalReason: true,
         errorReport: true,
         uploader: { select: { id: true, fullName: true } },
       },
     });
+    const latestCompletedId = jobs.find((j: any) => j.status === 'completed')?.id ?? null;
     return jobs.map((j: any) => {
       const er = (j.errorReport ?? {}) as any;
       return {
@@ -1130,6 +1448,9 @@ export class ImportsService {
         agingDocumentsWritten: j.agingDocumentsWritten ?? null,
         profile: er.profile ?? 'CUSTOMER_STATEMENT_DETAILS',
         executable: er.executable ?? true,
+        canReverse: j.id === latestCompletedId && Boolean(j.rollbackState),
+        reversedAt: j.reversedAt ?? null,
+        reversalReason: j.reversalReason ?? null,
         uploader: j.uploader,
       };
     });
@@ -1141,7 +1462,7 @@ export class ImportsService {
       include: { uploader: { select: { id: true, fullName: true } } },
     });
     if (!job) throw new NotFoundException('عملية الاستيراد غير موجودة');
-    const { errorReport: _errorReport, ...rest } = job as any;
+    const { errorReport: _errorReport, rollbackState: _rollbackState, ...rest } = job as any;
     return rest;
   }
 
