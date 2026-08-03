@@ -6,6 +6,12 @@ export class QueryCollectionsDto {
   @ApiPropertyOptional() @IsOptional() @IsUUID()
   customerId?: string;
 
+  @ApiPropertyOptional() @IsOptional() @IsUUID()
+  collectorId?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsUUID()
+  branchId?: string;
+
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(3)
   currency?: string;
 
