@@ -135,7 +135,11 @@ export class RiskService {
     private readonly audit: AuditService,
   ) {}
 
-  async recalculate(actor: AuthUser, req?: Request) {
+  async recalculate(
+    actor: AuthUser,
+    req?: Request,
+    source: 'manual' | 'scheduled' = 'manual',
+  ) {
     const orgId = actor.organizationId;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -409,8 +413,8 @@ export class RiskService {
       userId: actor.id,
       action: 'risk_recalculated',
       entityTable: 'customer_scores',
-      newValue: { totalCustomers: rows.length, byLevel },
-      reason: `إعادة احتساب درجات المخاطر (${rows.length} عميل)`,
+      newValue: { totalCustomers: rows.length, byLevel, source },
+      reason: `${source === 'scheduled' ? 'تحديث تلقائي' : 'إعادة احتساب يدوي'} لدرجات المخاطر (${rows.length} عميل)`,
       req,
     });
 
