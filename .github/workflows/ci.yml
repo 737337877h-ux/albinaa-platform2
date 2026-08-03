@@ -124,8 +124,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate production Compose configuration
+        env:
+          POSTGRES_USER: albinaa_ci
+          POSTGRES_PASSWORD: ci-only-not-a-production-secret
+          JWT_ACCESS_SECRET: ci-access-secret-at-least-32-characters
+          JWT_REFRESH_SECRET: ci-refresh-secret-at-least-32-characters
+          ADMIN_INITIAL_PASSWORD: ci-only-admin-password
+          CORS_ORIGINS: https://example.invalid
+          NEXT_PUBLIC_API_URL: https://example.invalid/api
+        run: docker compose -f docker-compose.prod.yml config --quiet
+
       - name: Build backend image
-        run: docker build -f backend/Dockerfile -t albinaa-backend:ci .
+        run: |
+          for attempt in 1 2 3; do
+            if docker build -f backend/Dockerfile -t albinaa-backend:ci .; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "Backend image build failed on attempt $attempt; retrying..."
+            sleep $((attempt * 10))
+          done
 
       - name: Build frontend image
-        run: docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL=http://backend:3000 -t albinaa-frontend:ci .
+        run: |
+          for attempt in 1 2 3; do
+            if docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL=http://backend:3000 -t albinaa-frontend:ci .; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "Frontend image build failed on attempt $attempt; retrying..."
+            sleep $((attempt * 10))
+          done

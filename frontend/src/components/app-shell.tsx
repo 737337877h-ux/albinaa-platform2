@@ -159,7 +159,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </nav>
         <div className="border-t border-white/10 px-5 py-4 text-xs text-white/60">
-          v1.0.0
+          v{process.env.NEXT_PUBLIC_APP_VERSION ?? '1.3.0-rc.1'}
         </div>
       </aside>
 

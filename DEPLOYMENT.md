@@ -1,4 +1,4 @@
-# دليل النشر للإنتاج — البناء الراقي v1.0
+# دليل النشر للإنتاج — البناء الراقي v1.3
 
 ## المتطلبات الإنتاجية
 
@@ -42,7 +42,7 @@ POSTGRES_USER=albinaa_prod
 POSTGRES_PASSWORD=STRONG_DB_PASSWORD_HERE
 POSTGRES_DB=albinaa_prod
 
-APP_VERSION=1.0.0
+APP_VERSION=1.3.0-rc.1
 JWT_ACCESS_SECRET=<from step 1.1>
 JWT_REFRESH_SECRET=<from step 1.1>
 JWT_ACCESS_TTL=900
@@ -177,7 +177,7 @@ curl https://api.yourdomain.com/health
 
 ```bash
 # استعادة الإصدار السابق
-git checkout v1.0.0
+git checkout v1.2.1
 
 docker compose -f docker-compose.prod.yml --env-file .env.prod build
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-recreate
