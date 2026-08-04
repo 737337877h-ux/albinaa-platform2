@@ -15,6 +15,23 @@ import { priorityOfTaskType } from '../tasks/tasks.service';
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async navCounts(user: AuthUser) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const collector = user.permissions.includes('customers.read_all')
+      ? null
+      : await this.prisma.collector.findUnique({ where: { userId: user.id }, select: { id: true } });
+    const customerScope = user.permissions.includes('customers.read_all')
+      ? { organizationId: user.organizationId }
+      : { organizationId: user.organizationId, assignments: { some: { collectorId: collector?.id ?? 'no-access', effectiveTo: null } } };
+    const taskWhere = user.permissions.includes('customers.read_all')
+      ? { status: 'open', customer: { organizationId: user.organizationId } }
+      : { status: 'open', assignedTo: collector?.id ?? 'no-access' };
+    const tasks = await this.prisma.task.count({ where: taskWhere });
+    const followups = await this.prisma.followup.count({ where: { customer: customerScope, deletedAt: null, nextFollowupDate: { lte: today } } });
+    const promises = await this.prisma.paymentPromise.count({ where: { customer: customerScope, status: { in: ['upcoming', 'due_today', 'unfulfilled'] }, dueDate: { lte: today } } });
+    return { tasks, followups, promises };
+  }
+
   async summary(user: AuthUser) {
     const orgId = user.organizationId;
 
@@ -132,7 +149,7 @@ export class DashboardService {
 
     const oldest = await this.prisma.importedTransaction.groupBy({
       by: ['customerId', 'currencyCode'],
-      where: { customer: { organizationId: orgId } },
+      where: { customer: { organizationId: orgId }, reversedAt: null },
       _min: { txDate: true },
     });
     const oldestMap = new Map<string, Date>();
@@ -192,7 +209,7 @@ export class DashboardService {
         },
       }),
       this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId }, bucket_120_plus: { gt: 0 } },
+        where: { customer: { organizationId: orgId }, bucket_120_plus: { gt: 0 }, reversedAt: null },
         select: { customerId: true, currencyCode: true, totalDue: true },
       }),
     ]);

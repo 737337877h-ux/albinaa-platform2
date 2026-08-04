@@ -24,12 +24,17 @@ export const TASK_STATUS_AR: Record<string, string> = {
   open: 'مفتوحة', escalated: 'تصعيد', done: 'منجزة',
 };
 export const TASK_TYPE_AR: Record<string, string> = {
+  large_debt_7plus: 'مديونية كبيرة تجاوزت أسبوعًا',
   promise_due: 'وعد سداد مستحق',
   promise_escalation: 'تصعيد وعد متأخر',
   followup_overdue: 'متابعة متأخرة',
   risk_critical: 'مخاطر حرجة',
   risk_high: 'مخاطر مرتفعة',
   debt_120plus: 'دين +120 يوم',
+  escalation_message_30: 'رسالة تحصيل — +30 يومًا',
+  escalation_call_60: 'مكالمة تحصيل — +60 يومًا',
+  escalation_visit_90: 'زيارة ميدانية — +90 يومًا',
+  escalation_legal_120: 'إنذار قانوني — +120 يومًا',
   high_balance_no_followup: 'رصيد مرتفع بلا متابعة حديثة',
   repeated_no_answer: 'لا يرد متكرر',
   needs_visit: 'يحتاج زيارة',
@@ -40,4 +45,5 @@ export const TASK_TYPE_AR: Record<string, string> = {
 export const IMPORT_STATUS_AR: Record<string, string> = {
   dry_run: 'جاهز للمراجعة', running: 'قيد التنفيذ',
   completed: 'مكتمل', failed: 'فشل',
+  reversed: 'تم التراجع',
 };

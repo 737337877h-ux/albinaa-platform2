@@ -38,7 +38,7 @@ export class AnalyticalAccountsService {
     if (rows.length === 0) return [] as (T & { balance: number })[];
     const sums = await this.prisma.analyticalMovement.groupBy({
       by: ['accountId'],
-      where: { accountId: { in: rows.map((r) => r.id) } },
+      where: { accountId: { in: rows.map((r) => r.id) }, reversedAt: null },
       _sum: { debit: true, credit: true },
     });
     const balanceMap = new Map(
@@ -91,9 +91,9 @@ export class AnalyticalAccountsService {
     const page = q.page ?? 1;
     const limit = q.limit ?? 50;
 
-    const total = await this.prisma.analyticalMovement.count({ where: { accountId: id } });
+    const total = await this.prisma.analyticalMovement.count({ where: { accountId: id, reversedAt: null } });
     const before = await this.prisma.analyticalMovement.findMany({
-      where: { accountId: id },
+      where: { accountId: id, reversedAt: null },
       orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
       take: (page - 1) * limit,
       select: { debit: true, credit: true },
@@ -101,7 +101,7 @@ export class AnalyticalAccountsService {
     let running = before.reduce((s, m) => s + Number(m.debit) - Number(m.credit), 0);
 
     const movements = await this.prisma.analyticalMovement.findMany({
-      where: { accountId: id },
+      where: { accountId: id, reversedAt: null },
       orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
       skip: (page - 1) * limit,
       take: limit,
@@ -261,7 +261,7 @@ export class AnalyticalAccountsService {
           ].join('|'))
           .digest('hex');
 
-        const already = await this.prisma.analyticalMovement.findUnique({ where: { lineHash } });
+        const already = await this.prisma.analyticalMovement.findFirst({ where: { lineHash, reversedAt: null } });
         if (already) { movementsSkippedDuplicate += 1; continue; }
 
         await this.prisma.analyticalMovement.create({

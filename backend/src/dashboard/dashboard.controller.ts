@@ -29,6 +29,13 @@ export class DashboardController {
     return this.dashboard.summary(user);
   }
 
+  @Get('nav-counts')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'عدادات الشريط الجانبي: مهام مفتوحة، متابعات ووعود مستحقة ضمن نطاق المستخدم' })
+  navCounts(@CurrentUser() user: AuthUser) {
+    return this.dashboard.navCounts(user);
+  }
+
   @Get('collector')
   @RequirePermissions('tasks.manage')
   @ApiQuery({ name: 'collectorId', required: false, description: 'للإشراف — افتراضي: المحصل الحالي' })

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # ============================================================================
 # Albinaa Platform — Backend (Milestone 2)
 # Multi-stage build: small runtime image without build tools
@@ -5,14 +6,21 @@
 FROM node:22-alpine AS deps
 WORKDIR /app/backend
 COPY backend/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm ci --prefer-offline --no-audit --no-fund
 
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/backend/node_modules ./backend/node_modules
 COPY backend/ ./backend/
 COPY prisma/ ./prisma/
-RUN cd /app/backend && npx prisma generate --schema=../prisma/schema.prisma && npm run build
+ENV PRISMA_GENERATE_SKIP_AUTOINSTALL=true
+RUN ln -s /app/backend/node_modules /app/node_modules \
+    && cd /app/backend \
+    && npx prisma generate --schema=../prisma/schema.prisma \
+    && npm run build
 
 FROM node:22-alpine AS runtime
 WORKDIR /app

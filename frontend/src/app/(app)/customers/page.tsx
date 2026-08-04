@@ -288,11 +288,11 @@ export default function CustomersPage() {
                         {c.balances.length > 0 ? (
                           <div className="space-y-0.5">
                             {c.balances.map((b) => (
-                              <Money key={b.currency} value={b.balance} currency={b.currency} signed />
+                              <div key={b.currency}><Money value={b.balance} currency={b.currency} signed /></div>
                             ))}
                           </div>
                         ) : (
-                          <span className="text-concrete-400">—</span>
+                          <span className="text-xs text-concrete-400">لا يوجد رصيد</span>
                         )}
                       </TD>
                       <TD className="text-concrete-600 dark:text-concrete-400">

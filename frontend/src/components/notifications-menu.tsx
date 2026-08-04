@@ -18,6 +18,18 @@ function describe(n: NotificationItem): string {
     case 'promise_due': return `تذكير: وعد سداد من ${p.customerName ?? 'عميل'}`;
     case 'promise_overdue': return `وعد متأخر من ${p.customerName ?? 'عميل'}`;
     case 'collection_created': return `تحصيل جديد من ${p.customerName ?? ''}`;
+    case 'collection_reversal_requested': return `طلب عكس تحصيل: ${p.amount ?? ''} ${p.currency ?? ''}`;
+    case 'finance_alert': {
+      const labels: Record<string, string> = {
+        collection_reversed: 'تم عكس تحصيل',
+        manual_balance_adjustment: 'تم تعديل رصيد يدويًا',
+        credit_limit_overridden: 'تم تجاوز سقف ائتمان',
+        customer_merged: 'تم دمج عميلين',
+        import_reversed: 'تم التراجع عن استيراد',
+      };
+      return `تنبيه مالي: ${labels[String(p.event)] ?? 'عملية حساسة'}`;
+    }
+    case 'scheduled_job_failed': return `تعطلت مهمة مجدولة: ${p.job ?? ''}`;
     case 'customer_transferred': return `نُقل إليك العميل ${p.customerName ?? ''}`;
     default: return n.kind;
   }

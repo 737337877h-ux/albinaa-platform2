@@ -1,19 +1,26 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   Banknote, CalendarClock, FileSpreadsheet, HandCoins, LayoutDashboard,
   ListTodo, PhoneCall, Users, Settings, Shield, UserCog, GitBranch,
-  CircleDollarSign, ScrollText, ArrowRightLeft, ShieldCheck, Landmark,
+  CircleDollarSign, ScrollText, ArrowRightLeft, ShieldCheck, Landmark, PackageCheck,
+  ChartNoAxesColumnIncreasing,
+  ChartPie,
+  Gauge,
+  ClipboardCheck,
+  MessageCircle,
 } from 'lucide-react';
 import { useMe, useCan } from '@/lib/auth';
-import { ApiError, tokenStore } from '@/lib/api';
+import { api, ApiError, tokenStore } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { BrandLogo } from '@/components/brand';
 import { Breadcrumb } from '@/components/breadcrumb';
 import { UserMenu } from '@/components/user-menu';
 import { NotificationsMenu } from '@/components/notifications-menu';
+import { CommandPalette } from '@/components/command-palette';
 
 const NAV = [
   { href: '/dashboard', label: 'لوحة التحكم', icon: LayoutDashboard, perm: 'reports.read' },
@@ -22,7 +29,12 @@ const NAV = [
   { href: '/followups', label: 'المتابعات', icon: PhoneCall, perm: 'customers.read' },
   { href: '/promises', label: 'وعود السداد', icon: CalendarClock, perm: 'customers.read' },
   { href: '/collections', label: 'التحصيلات', icon: HandCoins, perm: 'customers.read' },
+  { href: '/collections/reconciliation', label: 'مطابقة الصندوق', icon: ClipboardCheck, perm: 'collections.approve' },
   { href: '/imports', label: 'استيراد Excel', icon: FileSpreadsheet, perm: 'imports.read' },
+  { href: '/reservations', label: 'حجوزات البضاعة', icon: PackageCheck, perm: 'reservations.read' },
+  { href: '/reports', label: 'التقارير', icon: ChartPie, perm: 'reports.read' },
+  { href: '/reports/aging', label: 'أعمار الديون', icon: ChartNoAxesColumnIncreasing, perm: 'reports.read' },
+  { href: '/reports/kpi', label: 'مؤشرات التحصيل', icon: Gauge, perm: 'reports.read' },
 ] as const;
 
 const ADMIN_NAV = [
@@ -40,6 +52,7 @@ const ADMIN_NAV = [
   { href: '/admin/branches', label: 'الفروع', icon: GitBranch, perm: 'settings.manage' },
   { href: '/admin/currencies', label: 'العملات', icon: CircleDollarSign, perm: 'settings.manage' },
   { href: '/admin/settings', label: 'الإعدادات', icon: Settings, perm: 'settings.manage' },
+  { href: '/admin/accounting-periods', label: 'الفترات المحاسبية', icon: CalendarClock, perm: 'periods.manage' },
   { href: '/admin/audit', label: 'سجل العمليات', icon: ScrollText, perm: 'audit.read' },
 ] as const;
 
@@ -62,6 +75,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const { data: me, isLoading, isError, error, refetch, isFetching } = useMe();
   const can = useCan();
+  const navCounts = useQuery({
+    queryKey: ['nav-counts'],
+    queryFn: () => api<{ tasks: number; followups: number; promises: number }>('/dashboard/nav-counts'),
+    enabled: !!tokenStore.access && can('customers.read'),
+    refetchInterval: 60_000,
+  });
+  const badgeFor = (href: string) => href === '/tasks' ? navCounts.data?.tasks : href === '/followups' ? navCounts.data?.followups : href === '/promises' ? navCounts.data?.promises : undefined;
 
   const unauthorized = isError && error instanceof ApiError && error.status === 401;
 
@@ -107,8 +127,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (!me) return <LoadingShell />;
 
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[15rem_1fr]">
-      <aside className="hidden bg-iron-900 text-white lg:flex lg:flex-col">
+    <div className="min-h-screen bg-surface-0 text-ink-hi lg:grid lg:grid-cols-[15rem_1fr]">
+      <aside className="hidden border-l border-line bg-surface-1 text-ink-hi lg:flex lg:flex-col">
         <div className="flex items-center gap-2.5 px-5 py-5">
           <BrandLogo className="h-7 w-7" />
           <div>
@@ -125,12 +145,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 href={href}
                 aria-current={active ? 'page' : undefined}
                 className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-white/75 hover:bg-white/10 hover:text-white',
-                  active && 'bg-pine-700 text-white',
+                  'flex min-h-11 items-center gap-3 rounded-lg border-r-[3px] border-transparent px-3 py-2.5 text-sm text-ink-mid hover:bg-surface-2 hover:text-ink-hi',
+                  active && 'border-brand bg-surface-2 text-ink-hi shadow-glow',
                 )}
               >
                 <Icon className="h-[18px] w-[18px]" aria-hidden />
-                {label}
+                <span className="flex-1">{label}</span>
+                {badgeFor(href) !== undefined && <span className="tnum min-w-5 rounded-full bg-brand px-1.5 py-0.5 text-center text-[10px] font-bold text-surface-0">{badgeFor(href)! > 99 ? '99+' : badgeFor(href)}</span>}
               </Link>
             );
           })}
@@ -146,8 +167,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     href={href}
                     aria-current={active ? 'page' : undefined}
                     className={cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-white/75 hover:bg-white/10 hover:text-white',
-                      active && 'bg-pine-700 text-white',
+                      'flex min-h-11 items-center gap-3 rounded-lg border-r-[3px] border-transparent px-3 py-2.5 text-sm text-ink-mid hover:bg-surface-2 hover:text-ink-hi',
+                      active && 'border-brand bg-surface-2 text-ink-hi shadow-glow',
                     )}
                   >
                     <Icon className="h-[18px] w-[18px]" aria-hidden />
@@ -164,7 +185,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="flex min-h-screen flex-col">
-        <header className="sticky top-0 z-40 border-b border-concrete-200 bg-white/90 backdrop-blur dark:border-white/10 dark:bg-iron-900/90">
+        <header className="sticky top-0 z-40 border-b border-line bg-surface-0 backdrop-blur">
           <div className="flex items-center justify-between px-4 py-3 lg:px-6">
             <div className="flex items-center gap-2 lg:hidden">
               <BrandLogo className="h-7 w-7" />
@@ -174,6 +195,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Breadcrumb />
             </div>
             <div className="flex items-center gap-1">
+              <CommandPalette />
               <NotificationsMenu />
               <UserMenu me={me} />
             </div>
@@ -187,7 +209,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <nav
           aria-label="التنقل السريع"
-          className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-concrete-200 bg-white dark:border-white/10 dark:bg-iron-900 lg:hidden"
+          className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-4 border-t border-line bg-surface-1 lg:hidden"
         >
           {[NAV[1], NAV[2]].filter((n) => can(n.perm)).map(({ href, label, icon: Icon }) => (
             <Link
@@ -213,20 +235,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <span className="text-[9px]">تحصيل</span>
             </Link>
           ) : <span />}
-          {[NAV[4], NAV[0]].filter((n) => can(n.perm)).map(({ href, label, icon: Icon }) => (
-            <Link
-              key={href}
-              href={href}
-              aria-current={pathname.startsWith(href) ? 'page' : undefined}
-              className={cn(
-                'flex flex-col items-center gap-0.5 py-2 text-[10px]',
-                pathname.startsWith(href) ? 'text-pine-700 dark:text-pine-100' : 'text-concrete-500',
-              )}
-            >
-              <Icon className="h-5 w-5" aria-hidden />
-              {label}
-            </Link>
-          ))}
+          {can('tasks.manage') ? <Link href="/tasks?channel=whatsapp" className="flex min-h-14 flex-col items-center justify-center gap-0.5 py-2 text-[10px] text-whatsapp"><MessageCircle className="h-5 w-5" aria-hidden />واتساب</Link> : <span />}
         </nav>
       </div>
     </div>

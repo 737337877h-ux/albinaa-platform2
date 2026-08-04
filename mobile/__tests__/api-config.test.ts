@@ -61,10 +61,13 @@ describe('api config', () => {
     });
 
     it('returns failure on network error', async () => {
+      const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
       mockFetch.mockRejectedValueOnce(new Error('Network request failed'));
       const r = await pingServer('http://localhost:3000');
       expect(r.ok).toBe(false);
       expect(r.error).toBe('Network request failed');
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+      clearTimeoutSpy.mockRestore();
     });
 
     it('returns failure on timeout', async () => {

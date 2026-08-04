@@ -24,17 +24,34 @@ export class NotificationsService {
 
   /** إشعار كل مستخدمي المنشأة الحاملين صلاحية معينة (مثل أمين الصندوق cash.receive). */
   async notifyByPermission(orgId: string, permissionCode: string, kind: string, payload: Record<string, unknown>) {
-    const users = await this.prisma.user.findMany({
-      where: {
-        organizationId: orgId,
-        isActive: true,
-        userRoles: {
-          some: { role: { rolePermissions: { some: { permission: { code: permissionCode } } } } },
+    try {
+      const users = await this.prisma.user.findMany({
+        where: {
+          organizationId: orgId,
+          isActive: true,
+          userRoles: {
+            some: { role: { rolePermissions: { some: { permission: { code: permissionCode } } } } },
+          },
         },
-      },
-      select: { id: true },
+        select: { id: true },
+      });
+      await Promise.all(users.map((u) => this.notifyUser(u.id, kind, payload)));
+    } catch (e) {
+      this.logger.error(`فشل تحديد مستلمي إشعار ${kind}`, e instanceof Error ? e.stack : String(e));
+    }
+  }
+
+  async notifyFinance(
+    orgId: string,
+    event: 'collection_reversed' | 'manual_balance_adjustment' | 'credit_limit_overridden' | 'customer_merged' | 'import_reversed',
+    payload: Record<string, unknown>,
+  ) {
+    await this.notifyByPermission(orgId, 'finance.alerts.receive', 'finance_alert', {
+      event,
+      severity: 'critical',
+      occurredAt: new Date().toISOString(),
+      ...payload,
     });
-    await Promise.all(users.map((u) => this.notifyUser(u.id, kind, payload)));
   }
 
   async listMine(user: AuthUser, unreadOnly = false, page = 1, limit = 25) {

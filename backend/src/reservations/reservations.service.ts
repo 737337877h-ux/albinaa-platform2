@@ -1,20 +1,29 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { IssueReservationDto } from './dto/issue-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
+
+export function reservationWeightTons(quantity: number, weightKg: number | null): number | null {
+  return weightKg === null ? null : quantity * weightKg / 1000;
+}
 
 // Goods reservations: operational tracking only.
 // Never touches customer accountingBalance/operationalBalance or collections —
 // issuing only moves quantity between issuedQty/remainingQty on the reservation itself.
 @Injectable()
 export class ReservationsService {
+  private readonly summaryCache = new Map<string, { expiresAt: number; value: unknown }>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private async assertCustomerInOrg(actor: AuthUser, customerId: string) {
@@ -33,11 +42,120 @@ export class ReservationsService {
     return reservation;
   }
 
+  private invalidateSummary(organizationId: string) {
+    this.summaryCache.delete(organizationId);
+  }
+
+  private async resolveUnit(unitId?: string, legacyUnit?: string) {
+    const unit = unitId
+      ? await this.prisma.unit.findFirst({ where: { id: unitId, isActive: true } })
+      : legacyUnit
+        ? await this.prisma.unit.findFirst({
+            where: {
+              isActive: true,
+              OR: [
+                { code: { equals: legacyUnit.trim(), mode: 'insensitive' } },
+                { nameAr: { equals: legacyUnit.trim(), mode: 'insensitive' } },
+              ],
+            },
+          })
+        : null;
+    if (!unit) throw new BadRequestException('اختر وحدة قياس معتمدة ونشطة');
+    return unit;
+  }
+
+  async listUnits() {
+    const rows = await this.prisma.unit.findMany({
+      where: { isActive: true },
+      orderBy: [{ weightKg: 'desc' }, { nameAr: 'asc' }],
+    });
+    return rows.map((unit) => ({
+      id: unit.id,
+      code: unit.code,
+      nameAr: unit.nameAr,
+      weightKg: unit.weightKg === null ? null : Number(unit.weightKg),
+    }));
+  }
+
+  async summary(actor: AuthUser) {
+    const cached = this.summaryCache.get(actor.organizationId);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const rows = await this.prisma.$queryRaw<Array<{
+      active_count: bigint;
+      customer_count: bigint;
+      total_tons: Prisma.Decimal;
+      expiring_in_7_days: bigint;
+      totals_by_currency: Array<{ currency: string; amount: number | string }>;
+      unweighted_units: Array<{ unitName: string; qty: number | string }>;
+    }>>(Prisma.sql`
+      WITH active AS (
+        SELECT
+          r.customer_id,
+          r.currency_code,
+          COALESCE(r.remaining_qty, r.quantity, 0) AS qty,
+          COALESCE(r.unit_price, 0) AS unit_price,
+          r.expires_at,
+          u.name_ar AS unit_name,
+          u.weight_kg
+        FROM reservations r
+        JOIN customers c ON c.id = r.customer_id
+        LEFT JOIN units u ON u.id = r.unit_id
+        WHERE c.organization_id = ${actor.organizationId}::uuid
+          AND r.status IN ('open', 'partial')
+          AND (r.expires_at IS NULL OR r.expires_at >= CURRENT_DATE)
+      )
+      SELECT
+        (SELECT COUNT(*) FROM active) AS active_count,
+        (SELECT COUNT(DISTINCT customer_id) FROM active) AS customer_count,
+        (SELECT COALESCE(SUM(qty * weight_kg / 1000), 0) FROM active WHERE weight_kg IS NOT NULL) AS total_tons,
+        (SELECT COUNT(*) FROM active WHERE expires_at BETWEEN CURRENT_DATE AND CURRENT_DATE + 7) AS expiring_in_7_days,
+        (SELECT COALESCE(jsonb_agg(jsonb_build_object('currency', currency_code, 'amount', amount) ORDER BY currency_code), '[]'::jsonb)
+          FROM (SELECT currency_code, SUM(qty * unit_price) AS amount FROM active GROUP BY currency_code) currency_totals
+        ) AS totals_by_currency,
+        (SELECT COALESCE(jsonb_agg(jsonb_build_object('unitName', unit_name, 'qty', qty) ORDER BY unit_name), '[]'::jsonb)
+          FROM (SELECT COALESCE(unit_name, 'بانتظار التصنيف') AS unit_name, SUM(qty) AS qty FROM active WHERE weight_kg IS NULL GROUP BY COALESCE(unit_name, 'بانتظار التصنيف')) unweighted
+        ) AS unweighted_units
+    `);
+    const row = rows[0];
+    const value = {
+      activeCount: Number(row.active_count),
+      customerCount: Number(row.customer_count),
+      totalTons: Number(row.total_tons),
+      totalsByCurrency: (row.totals_by_currency ?? []).map((item) => ({
+        currency: item.currency,
+        amount: Number(item.amount),
+      })),
+      unweightedUnits: (row.unweighted_units ?? []).map((item) => ({
+        unitName: item.unitName,
+        qty: Number(item.qty),
+      })),
+      expiringIn7Days: Number(row.expiring_in_7_days),
+    };
+    this.summaryCache.set(actor.organizationId, { expiresAt: Date.now() + 60_000, value });
+    return value;
+  }
+
   async findAll(actor: AuthUser, customerId?: string) {
     return this.prisma.reservation.findMany({
       where: {
         customer: { organizationId: actor.organizationId },
         ...(customerId ? { customerId } : {}),
+      },
+      include: {
+        measureUnit: true,
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            externalCustomerCode: true,
+            assignments: {
+              where: { effectiveTo: null },
+              take: 1,
+              select: { collector: { select: { user: { select: { fullName: true } } } } },
+            },
+          },
+        },
       },
       orderBy: { reservedAt: 'desc' },
     });
@@ -54,6 +172,49 @@ export class ReservationsService {
     if (!currency) throw new BadRequestException('Unknown currency code');
 
     const totalAmount = dto.quantity * dto.unitPrice;
+    const unit = await this.resolveUnit(dto.unitId, dto.unit);
+
+    const [balance, limit, policy, activeReservations] = await Promise.all([
+      this.prisma.customerBalance.findUnique({
+        where: { customerId_currencyCode: { customerId: dto.customerId, currencyCode: dto.currencyCode } },
+        include: { lastImportJob: { select: { importedAt: true } } },
+      }),
+      this.prisma.customerCreditLimit.findUnique({
+        where: { customerId_currencyCode: { customerId: dto.customerId, currencyCode: dto.currencyCode } },
+      }),
+      this.prisma.customerCreditPolicy.findUnique({ where: { customerId: dto.customerId } }),
+      this.prisma.reservation.findMany({
+        where: { customerId: dto.customerId, currencyCode: dto.currencyCode, status: { in: ['open', 'partial'] } },
+        select: { remainingQty: true, quantity: true, unitPrice: true },
+      }),
+    ]);
+    let ledgerDelta = 0;
+    if (balance) {
+      const ledger = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: dto.customerId, currencyCode: dto.currencyCode,
+          ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
+        },
+      });
+      ledgerDelta = Number(ledger._sum.amountSigned ?? 0);
+    }
+    const currentDebt = Math.max(0, Number(balance?.accountingBalance ?? 0) + ledgerDelta);
+    const reservedExposure = activeReservations.reduce((sum, row) =>
+      sum + Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.unitPrice ?? 0), 0);
+    const projectedExposure = currentDebt + reservedExposure + totalAmount;
+    const limitAmount = limit && limit.effectiveFrom <= new Date() ? Number(limit.amount) : null;
+    const restricted = policy?.creditStatus === 'restricted' || policy?.creditStatus === 'blocked';
+    const exceedsLimit = limitAmount !== null && projectedExposure > limitAmount;
+    const overrideUsed = restricted || exceedsLimit;
+    if (overrideUsed && !actor.permissions.includes('credit.override')) {
+      throw new ForbiddenException(restricted
+        ? 'الحساب الائتماني مقيّد؛ يلزم تفويض تجاوز موثق'
+        : `الحجز يرفع التعرض إلى ${projectedExposure} ${dto.currencyCode} متجاوزًا السقف ${limitAmount}`);
+    }
+    if (overrideUsed && !dto.overrideReason?.trim()) {
+      throw new BadRequestException('سبب تجاوز سقف الائتمان إلزامي');
+    }
 
     const reservation = await this.prisma.reservation.create({
       data: {
@@ -64,7 +225,8 @@ export class ReservationsService {
         itemName: dto.itemName,
         itemType: dto.itemType,
         quantity: dto.quantity,
-        unit: dto.unit,
+        unit: unit.nameAr,
+        unitId: unit.id,
         unitPrice: dto.unitPrice,
         totalAmount,
         remainingQty: dto.quantity,
@@ -81,10 +243,28 @@ export class ReservationsService {
       userId: actor.id, action: 'reservation_created', entityTable: 'reservations', entityId: reservation.id,
       newValue: {
         customerId: dto.customerId, itemName: dto.itemName, quantity: dto.quantity,
-        unit: dto.unit, unitPrice: dto.unitPrice, totalAmount, currencyCode: dto.currencyCode,
+        unitId: unit.id, unit: unit.nameAr, unitPrice: dto.unitPrice, totalAmount, currencyCode: dto.currencyCode,
+        creditControl: { currentDebt, reservedExposure, projectedExposure, limitAmount, overrideUsed },
       },
+      reason: overrideUsed ? dto.overrideReason : undefined,
       req,
     });
+    if (overrideUsed) {
+      await this.notifications.notifyFinance(actor.organizationId, 'credit_limit_overridden', {
+        reservationId: reservation.id,
+        customerId: dto.customerId,
+        amount: totalAmount,
+        currency: dto.currencyCode,
+        currentDebt,
+        reservedExposure,
+        projectedExposure,
+        limitAmount,
+        reason: dto.overrideReason?.trim(),
+        actorName: actor.fullName,
+        href: `/customers/${dto.customerId}`,
+      });
+    }
+    this.invalidateSummary(actor.organizationId);
     return reservation;
   }
 
@@ -109,6 +289,7 @@ export class ReservationsService {
       oldValue: { warehouse: before.warehouse, documentNumber: before.documentNumber, notes: before.notes },
       newValue: dto, req,
     });
+    this.invalidateSummary(actor.organizationId);
     return reservation;
   }
 
@@ -137,6 +318,7 @@ export class ReservationsService {
       newValue: { qty: dto.qty, issuedQty: newIssuedQty, remainingQty: newRemainingQty, status: newStatus },
       req,
     });
+    this.invalidateSummary(actor.organizationId);
     return reservation;
   }
 
@@ -158,6 +340,7 @@ export class ReservationsService {
       userId: actor.id, action: 'reservation_cancelled', entityTable: 'reservations', entityId: id,
       oldValue: { status: before.status }, req,
     });
+    this.invalidateSummary(actor.organizationId);
     return reservation;
   }
 }

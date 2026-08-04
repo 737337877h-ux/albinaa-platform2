@@ -10,13 +10,15 @@ export function normalizePhone(raw?: string | null): string | null {
   return digits.length >= 7 && digits.length <= 15 ? digits : null;
 }
 
-export function contactLinks(phone?: string | null) {
+export function contactLinks(phone?: string | null, message?: string) {
   const normalized = normalizePhone(phone);
   if (!normalized) return null;
 
+  const encoded = message?.trim() ? encodeURIComponent(message.trim()) : '';
+
   return {
     tel: `tel:+${normalized}`,
-    sms: `sms:+${normalized}`,
-    whatsapp: `https://wa.me/${normalized}`,
+    sms: `sms:+${normalized}${encoded ? `?body=${encoded}` : ''}`,
+    whatsapp: `https://wa.me/${normalized}${encoded ? `?text=${encoded}` : ''}`,
   };
 }

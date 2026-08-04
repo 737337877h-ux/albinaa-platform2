@@ -15,28 +15,62 @@ import { CompleteTaskDto, TASK_COMPLETE_RESULT_LABELS } from './dto/complete-tas
  * 3. متابعة متأخرة يومين+
  * 4. عميل مخاطر حرجة
  * 5. عميل مخاطر مرتفعة (أُدرج بعد الحرجة — شرط قبول "ظهور مهام لـ High risk")
- * 6. دين عمره +120 يوم
- * 7. رصيد مرتفع دون متابعة حديثة
- * 8. لا يرد متكرر
- * 9. يحتاج زيارة
- * 10. متابعة دورية — مخاطر متوسطة
- * 11. متابعة عادية منخفضة الأولوية
+ * 6. مديونية كبيرة مرّ عليها الحد الأدنى المحدد (7 أيام افتراضيًا)
+ * 7. دين عمره +120 يوم
+ * 8. رصيد مرتفع دون متابعة حديثة
+ * 9. لا يرد متكرر
+ * 10. يحتاج زيارة
+ * 11. متابعة دورية — مخاطر متوسطة
+ * 12. متابعة عادية منخفضة الأولوية
  */
 export const TASK_TYPE_PRIORITY: Record<string, number> = {
   promise_overdue: 1,
   promise_escalation: 1,
+  escalation_legal_120: 1.5,
   promise_due_today: 2,
   promise_due: 2,
+  escalation_visit_90: 2.5,
   followup_overdue: 3,
   risk_critical: 4,
+  escalation_call_60: 4.5,
   risk_high: 5,
-  debt_120plus: 6,
-  high_balance_no_followup: 7,
-  repeated_no_answer: 8,
-  needs_visit: 9,
-  followup_periodic_medium: 10,
-  followup_normal: 11,
+  large_debt_7plus: 6,
+  escalation_message_30: 6.5,
+  debt_120plus: 7,
+  high_balance_no_followup: 8,
+  repeated_no_answer: 9,
+  needs_visit: 10,
+  followup_periodic_medium: 11,
+  followup_normal: 12,
 };
+
+export type DebtEscalationTaskType =
+  | 'escalation_message_30'
+  | 'escalation_call_60'
+  | 'escalation_visit_90'
+  | 'escalation_legal_120';
+
+/** أعلى إجراء واجب فقط لكل عميل/عملة، حتى لا تتكدس أربع مهام لنفس الدين. */
+export function escalationForAging(buckets: {
+  bucket31To60: number;
+  bucket61To90: number;
+  bucket91To120: number;
+  bucket120Plus: number;
+}): { taskType: DebtEscalationTaskType; text: string } | null {
+  if (buckets.bucket120Plus > 0) {
+    return { taskType: 'escalation_legal_120', text: 'إنذار قانوني — مديونية تجاوزت 120 يومًا' };
+  }
+  if (buckets.bucket91To120 > 0) {
+    return { taskType: 'escalation_visit_90', text: 'زيارة ميدانية — مديونية تجاوزت 90 يومًا' };
+  }
+  if (buckets.bucket61To90 > 0) {
+    return { taskType: 'escalation_call_60', text: 'مكالمة تحصيل — مديونية تجاوزت 60 يومًا' };
+  }
+  if (buckets.bucket31To60 > 0) {
+    return { taskType: 'escalation_message_30', text: 'رسالة تذكير — مديونية تجاوزت 30 يومًا' };
+  }
+  return null;
+}
 
 export function priorityOfTaskType(taskType: string): number {
   return TASK_TYPE_PRIORITY[taskType] ?? 100;
@@ -301,11 +335,17 @@ export class TasksService {
    */
   async generateToday(user: AuthUser, req?: Request) {
     const orgId = user.organizationId;
+    const enabledValue = await this.setting<unknown>(orgId, 'smartTasks.enabled', true);
+    const enabled = enabledValue !== false && String(enabledValue).toLowerCase() !== 'false';
+    if (!enabled) {
+      return { organizationId: orgId, enabled: false, skipped: true, reason: 'smart_tasks_disabled', createdTasks: 0 };
+    }
     const today = startOfLocalDayUtc(new Date());
     const tomorrow = new Date(today.getTime() + 86_400_000);
-    const staleDays = Number(await this.setting(orgId, 'followup_stale_days', 14));
+    const staleDays = Math.max(1, Number(await this.setting(orgId, 'smartTasks.followupStaleDays', 7)) || 7);
+    const minDebtAgeDays = Math.max(1, Number(await this.setting(orgId, 'smartTasks.minDebtAgeDays', 7)) || 7);
     const staleBefore = new Date(today.getTime() - staleDays * 86_400_000);
-    const highBalanceTopPercent = Number(await this.setting(orgId, 'high_balance_top_percent', 10));
+    const highBalanceTopPercent = Math.min(100, Math.max(1, Number(await this.setting(orgId, 'smartTasks.highBalanceTopPercent', 10)) || 10));
 
     // 0) مسح الوعود المتأخرة أولاً (idempotent) — التصعيدات جزء من القائمة
     await this.promises.sweepOverdue(orgId);
@@ -316,6 +356,7 @@ export class TasksService {
       scores,
       agingSummaries,
       balances,
+      latestDebitTransactions,
       followups,
       followupResults,
       promiseTasks,
@@ -335,12 +376,20 @@ export class TasksService {
         select: { customerId: true, score: true, riskLevel: true },
       }),
       this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId } },
-        select: { customerId: true, currencyCode: true, totalDue: true, bucket_120_plus: true },
+        where: { customer: { organizationId: orgId }, reversedAt: null },
+        select: {
+          customerId: true, currencyCode: true, totalDue: true,
+          bucket_31_60: true, bucket_61_90: true, bucket_91_120: true, bucket_120_plus: true,
+        },
       }),
       this.prisma.customerBalance.findMany({
         where: { customer: { organizationId: orgId }, accountingBalance: { gt: 0 } },
         select: { customerId: true, currencyCode: true, accountingBalance: true },
+      }),
+      this.prisma.importedTransaction.groupBy({
+        by: ['customerId', 'currencyCode'],
+        where: { customer: { organizationId: orgId }, debit: { gt: 0 }, reversedAt: null },
+        _max: { txDate: true },
       }),
       this.prisma.followup.findMany({
         where: { customer: { organizationId: orgId }, deletedAt: null },
@@ -401,11 +450,21 @@ export class TasksService {
     }
 
     // تقادم الديون: لكل (عميل/عملة) إجمالي + علم +120
-    const agingByKey = new Map<string, { totalDue: number; over120: boolean }>();
+    const agingByKey = new Map<string, {
+      totalDue: number;
+      over120: boolean;
+      escalation: ReturnType<typeof escalationForAging>;
+    }>();
     for (const s of agingSummaries) {
       agingByKey.set(`${s.customerId}|${s.currencyCode}`, {
         totalDue: Number(s.totalDue),
         over120: Number(s.bucket_120_plus) > 0,
+        escalation: escalationForAging({
+          bucket31To60: Number(s.bucket_31_60),
+          bucket61To90: Number(s.bucket_61_90),
+          bucket91To120: Number(s.bucket_91_120),
+          bucket120Plus: Number(s.bucket_120_plus),
+        }),
       });
     }
 
@@ -424,6 +483,10 @@ export class TasksService {
       list.sort((a, b) => b - a);
       const n = Math.max(1, Math.ceil((list.length * highBalanceTopPercent) / 100));
       topBalanceThresholdByCcy.set(ccy, list[n - 1] ?? 0);
+    }
+    const latestDebitByKey = new Map<string, Date>();
+    for (const tx of latestDebitTransactions) {
+      if (tx._max.txDate) latestDebitByKey.set(`${tx.customerId}|${tx.currencyCode}`, tx._max.txDate);
     }
 
     // عملات كل عميل + العملة الأساسية (أعلى دين/رصيد)
@@ -507,14 +570,14 @@ export class TasksService {
             } else if (risk.riskLevel === 'high') {
               reasons.push({ priority: 5, taskType: 'risk_high', text: `مخاطر مرتفعة (${risk.score})` });
             } else if (risk.riskLevel === 'medium') {
-              reasons.push({ priority: 10, taskType: 'followup_periodic_medium', text: `متابعة دورية — مخاطر متوسطة (${risk.score})` });
+              reasons.push({ priority: 11, taskType: 'followup_periodic_medium', text: `متابعة دورية — مخاطر متوسطة (${risk.score})` });
             }
           }
           if (noAnswer >= 2) {
-            reasons.push({ priority: 8, taskType: 'repeated_no_answer', text: `${noAnswer} متابعات بلا رد` });
+            reasons.push({ priority: 9, taskType: 'repeated_no_answer', text: `${noAnswer} متابعات بلا رد` });
           }
           if (visit) {
-            reasons.push({ priority: 9, taskType: 'needs_visit', text: 'يحتاج زيارة ميدانية' });
+            reasons.push({ priority: 10, taskType: 'needs_visit', text: 'يحتاج زيارة ميدانية' });
           }
         }
 
@@ -522,16 +585,30 @@ export class TasksService {
         if (ccy) {
           const aging = agingByKey.get(slot);
           const balance = balanceByKey.get(slot);
+          if (aging?.escalation) {
+            reasons.push({
+              priority: priorityOfTaskType(aging.escalation.taskType),
+              taskType: aging.escalation.taskType,
+              text: aging.escalation.text,
+            });
+          }
           if (aging?.over120) {
-            reasons.push({ priority: 6, taskType: 'debt_120plus', text: `دين +120 يوم (${fmtAmount(aging.totalDue)} ${ccy})` });
+            reasons.push({ priority: 7, taskType: 'debt_120plus', text: `دين +120 يوم (${fmtAmount(aging.totalDue)} ${ccy})` });
           }
           const threshold = topBalanceThresholdByCcy.get(ccy) ?? 0;
           const stale = !last || last < staleBefore;
+          const latestDebit = latestDebitByKey.get(slot);
+          const debtAgeDays = latestDebit
+            ? Math.max(0, Math.floor((today.getTime() - latestDebit.getTime()) / 86_400_000))
+            : null;
+          if (balance !== undefined && balance >= threshold && debtAgeDays !== null && debtAgeDays >= minDebtAgeDays) {
+            reasons.push({ priority: 6, taskType: 'large_debt_7plus', text: `مديونية كبيرة (${fmtAmount(balance)} ${ccy}) مرّ عليها ${debtAgeDays} يومًا` });
+          }
           if (balance !== undefined && balance >= threshold && stale) {
-            reasons.push({ priority: 7, taskType: 'high_balance_no_followup', text: `رصيد مرتفع (${fmtAmount(balance)} ${ccy}) دون متابعة حديثة` });
+            reasons.push({ priority: 8, taskType: 'high_balance_no_followup', text: `رصيد مرتفع (${fmtAmount(balance)} ${ccy}) دون متابعة حديثة` });
           }
           if (balance !== undefined && stale) {
-            reasons.push({ priority: 11, taskType: 'followup_normal', text: `متابعة عادية — رصيد مدين (${fmtAmount(balance)} ${ccy})` });
+            reasons.push({ priority: 12, taskType: 'followup_normal', text: `متابعة عادية — رصيد مدين (${fmtAmount(balance)} ${ccy})` });
           }
         }
 
@@ -613,6 +690,7 @@ export class TasksService {
     this.logger.log(`قائمة عمل اليوم: ${createdCount} مهمة جديدة (org ${orgId})`);
     return {
       organizationId: orgId,
+      enabled: true,
       generatedAt: new Date().toISOString(),
       date: today,
       createdTasks: createdCount,
