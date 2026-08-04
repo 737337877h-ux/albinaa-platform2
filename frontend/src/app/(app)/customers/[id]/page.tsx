@@ -706,12 +706,14 @@ export default function Customer360Page() {
             open={messageChannel !== null}
             onClose={() => setMessageChannel(null)}
             initialChannel={messageChannel ?? 'whatsapp'}
+            customerId={c.id}
             customerName={c.name}
             customerCode={c.externalCustomerCode}
             phone={c.phonePrimary}
             whatsapp={c.whatsapp}
             balance={primaryDebt ? Number(primaryDebt.accountingBalance) : null}
             currency={primaryDebt?.currency ?? null}
+            collectorName={c.currentCollector?.name ?? null}
           />
         </Card>
       )}

@@ -24,11 +24,32 @@ export const DEFAULT_MESSAGE_TEMPLATES: MessageTemplate[] = [
     body: 'الأخ/الأخت {customerName}، نرفق لكم تنبيهًا بخصوص حسابكم رقم {customerCode}. الرصيد الحالي {balance} {currency}. يرجى مراجعة الحساب والتواصل معنا عند وجود أي ملاحظة.',
   },
   {
-    id: 'urgent-collection',
-    name: 'متابعة تحصيل عاجلة',
+    id: 'firm-reminder',
+    name: 'تذكير حازم بالسداد',
     channel: 'both',
     active: true,
-    body: 'مرحبًا {customerName}، مرّ على المديونية {debtAgeDays} يومًا، والرصيد المستحق {balance} {currency}. نأمل الإفادة بموعد السداد اليوم لتجنب تأخر الحساب.',
+    body: 'الأخ/الأخت {اسم_العميل}، مضى على أقدم مديونية {أقدم_دين_بالأيام} يومًا، وإجمالي الرصيد المستحق {الرصيد} {العملة}. نرجو تحديد موعد السداد اليوم. المحصل: {اسم_المحصل}.',
+  },
+  {
+    id: 'credit-limit-exceeded',
+    name: 'تجاوز الحد الائتماني',
+    channel: 'both',
+    active: true,
+    body: 'مرحبًا {اسم_العميل}، نحيطكم بأن رصيد الحساب {الرصيد} {العملة} تجاوز الحد الائتماني المعتمد. يرجى السداد أو التواصل مع {اسم_المحصل} لاستكمال الإجراءات.',
+  },
+  {
+    id: 'reservation-expiry',
+    name: 'انتهاء حجز البضاعة',
+    channel: 'whatsapp',
+    active: true,
+    body: 'مرحبًا {اسم_العميل}، نذكّركم بأن الحجز رقم {رقم_الحجز} يستحق في {تاريخ_الاستحقاق}. يرجى التواصل مع {اسم_المحصل} لتأكيد الاستلام أو السداد.',
+  },
+  {
+    id: 'final-warning',
+    name: 'إنذار نهائي قبل التصعيد',
+    channel: 'both',
+    active: true,
+    body: 'الأخ/الأخت {اسم_العميل}، هذا إنذار نهائي بشأن الرصيد المتأخر {الرصيد} {العملة} منذ {أقدم_دين_بالأيام} يومًا. نرجو السداد قبل {تاريخ_الاستحقاق} لتجنب التصعيد النظامي.',
   },
 ];
 
@@ -39,6 +60,9 @@ export interface TemplateVariables {
   currency?: string | null;
   debtAgeDays?: number | string | null;
   companyName?: string | null;
+  collectorName?: string | null;
+  reservationNumber?: string | null;
+  dueDate?: string | null;
 }
 
 export function renderMessageTemplate(body: string, variables: TemplateVariables): string {
@@ -49,8 +73,19 @@ export function renderMessageTemplate(body: string, variables: TemplateVariables
     currency: variables.currency || '',
     debtAgeDays: variables.debtAgeDays == null ? '—' : String(variables.debtAgeDays),
     companyName: variables.companyName || 'البناء الراقي',
+    collectorName: variables.collectorName || 'فريق التحصيل',
+    reservationNumber: variables.reservationNumber || '—',
+    dueDate: variables.dueDate || '—',
   };
-  return body.replace(/\{(customerName|customerCode|balance|currency|debtAgeDays|companyName)\}/g, (_, key: string) => values[key]);
+  const aliases: Record<string, keyof typeof values> = {
+    اسم_العميل: 'customerName', الرصيد: 'balance', العملة: 'currency',
+    أقدم_دين_بالأيام: 'debtAgeDays', اسم_المحصل: 'collectorName',
+    رقم_الحجز: 'reservationNumber', تاريخ_الاستحقاق: 'dueDate',
+  };
+  return body.replace(/\{([^{}]+)\}/g, (token, key: string) => {
+    const resolved = aliases[key] ?? key;
+    return resolved in values ? values[resolved] : token;
+  });
 }
 
 export function parseMessageTemplates(value: unknown): MessageTemplate[] {

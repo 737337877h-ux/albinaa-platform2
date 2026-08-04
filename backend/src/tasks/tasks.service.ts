@@ -26,12 +26,16 @@ import { CompleteTaskDto, TASK_COMPLETE_RESULT_LABELS } from './dto/complete-tas
 export const TASK_TYPE_PRIORITY: Record<string, number> = {
   promise_overdue: 1,
   promise_escalation: 1,
+  escalation_legal_120: 1.5,
   promise_due_today: 2,
   promise_due: 2,
+  escalation_visit_90: 2.5,
   followup_overdue: 3,
   risk_critical: 4,
+  escalation_call_60: 4.5,
   risk_high: 5,
   large_debt_7plus: 6,
+  escalation_message_30: 6.5,
   debt_120plus: 7,
   high_balance_no_followup: 8,
   repeated_no_answer: 9,
@@ -39,6 +43,34 @@ export const TASK_TYPE_PRIORITY: Record<string, number> = {
   followup_periodic_medium: 11,
   followup_normal: 12,
 };
+
+export type DebtEscalationTaskType =
+  | 'escalation_message_30'
+  | 'escalation_call_60'
+  | 'escalation_visit_90'
+  | 'escalation_legal_120';
+
+/** أعلى إجراء واجب فقط لكل عميل/عملة، حتى لا تتكدس أربع مهام لنفس الدين. */
+export function escalationForAging(buckets: {
+  bucket31To60: number;
+  bucket61To90: number;
+  bucket91To120: number;
+  bucket120Plus: number;
+}): { taskType: DebtEscalationTaskType; text: string } | null {
+  if (buckets.bucket120Plus > 0) {
+    return { taskType: 'escalation_legal_120', text: 'إنذار قانوني — مديونية تجاوزت 120 يومًا' };
+  }
+  if (buckets.bucket91To120 > 0) {
+    return { taskType: 'escalation_visit_90', text: 'زيارة ميدانية — مديونية تجاوزت 90 يومًا' };
+  }
+  if (buckets.bucket61To90 > 0) {
+    return { taskType: 'escalation_call_60', text: 'مكالمة تحصيل — مديونية تجاوزت 60 يومًا' };
+  }
+  if (buckets.bucket31To60 > 0) {
+    return { taskType: 'escalation_message_30', text: 'رسالة تذكير — مديونية تجاوزت 30 يومًا' };
+  }
+  return null;
+}
 
 export function priorityOfTaskType(taskType: string): number {
   return TASK_TYPE_PRIORITY[taskType] ?? 100;
@@ -345,7 +377,10 @@ export class TasksService {
       }),
       this.prisma.debtAgingSummary.findMany({
         where: { customer: { organizationId: orgId }, reversedAt: null },
-        select: { customerId: true, currencyCode: true, totalDue: true, bucket_120_plus: true },
+        select: {
+          customerId: true, currencyCode: true, totalDue: true,
+          bucket_31_60: true, bucket_61_90: true, bucket_91_120: true, bucket_120_plus: true,
+        },
       }),
       this.prisma.customerBalance.findMany({
         where: { customer: { organizationId: orgId }, accountingBalance: { gt: 0 } },
@@ -415,11 +450,21 @@ export class TasksService {
     }
 
     // تقادم الديون: لكل (عميل/عملة) إجمالي + علم +120
-    const agingByKey = new Map<string, { totalDue: number; over120: boolean }>();
+    const agingByKey = new Map<string, {
+      totalDue: number;
+      over120: boolean;
+      escalation: ReturnType<typeof escalationForAging>;
+    }>();
     for (const s of agingSummaries) {
       agingByKey.set(`${s.customerId}|${s.currencyCode}`, {
         totalDue: Number(s.totalDue),
         over120: Number(s.bucket_120_plus) > 0,
+        escalation: escalationForAging({
+          bucket31To60: Number(s.bucket_31_60),
+          bucket61To90: Number(s.bucket_61_90),
+          bucket91To120: Number(s.bucket_91_120),
+          bucket120Plus: Number(s.bucket_120_plus),
+        }),
       });
     }
 
@@ -540,6 +585,13 @@ export class TasksService {
         if (ccy) {
           const aging = agingByKey.get(slot);
           const balance = balanceByKey.get(slot);
+          if (aging?.escalation) {
+            reasons.push({
+              priority: priorityOfTaskType(aging.escalation.taskType),
+              taskType: aging.escalation.taskType,
+              text: aging.escalation.text,
+            });
+          }
           if (aging?.over120) {
             reasons.push({ priority: 7, taskType: 'debt_120plus', text: `دين +120 يوم (${fmtAmount(aging.totalDue)} ${ccy})` });
           }

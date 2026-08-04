@@ -1,4 +1,4 @@
-import { TASK_TYPE_PRIORITY, priorityOfTaskType, queueTaskKey } from './tasks.service';
+import { escalationForAging, TASK_TYPE_PRIORITY, priorityOfTaskType, queueTaskKey } from './tasks.service';
 
 describe('daily work queue helpers (PR 5)', () => {
   describe('TASK_TYPE_PRIORITY', () => {
@@ -55,6 +55,21 @@ describe('daily work queue helpers (PR 5)', () => {
       const base = queueTaskKey('c1', 'SAR', 'debt_120plus', today);
       expect(queueTaskKey('c1', 'USD', 'debt_120plus', today)).not.toBe(base);
       expect(queueTaskKey('c1', 'SAR', 'risk_high', today)).not.toBe(base);
+    });
+  });
+
+  describe('automatic debt escalation ladder', () => {
+    it.each([
+      [{ bucket31To60: 1, bucket61To90: 0, bucket91To120: 0, bucket120Plus: 0 }, 'escalation_message_30'],
+      [{ bucket31To60: 1, bucket61To90: 1, bucket91To120: 0, bucket120Plus: 0 }, 'escalation_call_60'],
+      [{ bucket31To60: 1, bucket61To90: 1, bucket91To120: 1, bucket120Plus: 0 }, 'escalation_visit_90'],
+      [{ bucket31To60: 1, bucket61To90: 1, bucket91To120: 1, bucket120Plus: 1 }, 'escalation_legal_120'],
+    ])('selects only the highest action for populated buckets', (buckets, expected) => {
+      expect(escalationForAging(buckets)?.taskType).toBe(expected);
+    });
+
+    it('does not escalate current debt', () => {
+      expect(escalationForAging({ bucket31To60: 0, bucket61To90: 0, bucket91To120: 0, bucket120Plus: 0 })).toBeNull();
     });
   });
 });

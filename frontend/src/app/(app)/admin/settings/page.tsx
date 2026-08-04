@@ -395,10 +395,10 @@ function MessageTemplatesSettings({ initial }: { initial: unknown }) {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
         <div>
           <h3 className="font-display text-sm font-semibold">قوالب واتساب والرسائل النصية</h3>
-          <p className="mt-1 text-xs text-concrete-500">المتغيرات: {'{customerName}'}، {'{customerCode}'}، {'{balance}'}، {'{currency}'}، {'{debtAgeDays}'}، {'{companyName}'}</p>
+          <p className="mt-1 text-xs text-concrete-500">المتغيرات: {'{اسم_العميل}'}، {'{الرصيد}'}، {'{العملة}'}، {'{أقدم_دين_بالأيام}'}، {'{اسم_المحصل}'}، {'{رقم_الحجز}'}، {'{تاريخ_الاستحقاق}'}</p>
         </div>
         <Button type="button" variant="secondary" onClick={() => setTemplates((items) => [...items, {
-          id: `template-${Date.now()}`, name: 'قالب جديد', channel: 'both', body: 'مرحبًا {customerName}،', active: true,
+          id: `template-${Date.now()}`, name: 'قالب جديد', channel: 'both', body: 'مرحبًا {اسم_العميل}،', active: true,
         }])}><Plus className="h-4 w-4" /> إضافة قالب</Button>
       </div>
       <div className="space-y-4 p-4">

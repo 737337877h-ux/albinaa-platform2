@@ -7,6 +7,7 @@ import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateFollowupDto } from './dto/create-followup.dto';
+import { CreateContactEventDto } from './dto/create-contact-event.dto';
 import { QueryFollowupsDto } from './dto/query-followups.dto';
 import { UpdateFollowupDto } from './dto/update-followup.dto';
 
@@ -83,6 +84,43 @@ export class FollowupsService {
     await this.audit.log({
       userId: actor.id, action: 'followup_created', entityTable: 'followups', entityId: followup.id,
       newValue: { customerId: dto.customerId, type: type.name, result: result.name }, req,
+    });
+    return followup;
+  }
+
+  async createContactEvent(actor: AuthUser, dto: CreateContactEventDto, req?: Request) {
+    await this.assertCustomerInScope(actor, dto.customerId);
+    const typeName = dto.channel === 'whatsapp' ? 'رسالة واتساب' : 'رسالة نصية';
+    const resultName = 'تم فتح تطبيق الإرسال';
+    const followup = await this.prisma.$transaction(async (tx) => {
+      const type = await tx.followupType.upsert({
+        where: { organizationId_name: { organizationId: actor.organizationId, name: typeName } },
+        update: { active: true },
+        create: { organizationId: actor.organizationId, name: typeName },
+      });
+      const result = await tx.followupResult.upsert({
+        where: { organizationId_name: { organizationId: actor.organizationId, name: resultName } },
+        update: { active: true },
+        create: { organizationId: actor.organizationId, name: resultName },
+      });
+      return tx.followup.create({
+        data: {
+          customerId: dto.customerId,
+          userId: actor.id,
+          typeId: type.id,
+          resultId: result.id,
+          notes: `${typeName}${dto.templateId ? ` — القالب: ${dto.templateId}` : ''}\n${dto.message}`,
+        },
+        include: { type: true, result: true },
+      });
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'contact_app_opened',
+      entityTable: 'followups',
+      entityId: followup.id,
+      newValue: { customerId: dto.customerId, channel: dto.channel, templateId: dto.templateId ?? null },
+      req,
     });
     return followup;
   }

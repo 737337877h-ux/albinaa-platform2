@@ -12,6 +12,19 @@ describe('message templates', () => {
     expect(parseMessageTemplates([])).toEqual(DEFAULT_MESSAGE_TEMPLATES);
   });
 
+  it('renders the approved Arabic business variables and preserves unknown variables', () => {
+    expect(renderMessageTemplate('{اسم_العميل} / {اسم_المحصل} / {رقم_الحجز} / {تاريخ_الاستحقاق} / {غير_معروف}', {
+      customerName: 'أحمد', collectorName: 'سالم', reservationNumber: 'R-10', dueDate: '2026-08-10',
+    })).toBe('أحمد / سالم / R-10 / 2026-08-10 / {غير_معروف}');
+  });
+
+  it('provides the six approved ready-to-use templates', () => {
+    expect(DEFAULT_MESSAGE_TEMPLATES.map((template) => template.id)).toEqual([
+      'friendly-reminder', 'account-statement', 'firm-reminder', 'credit-limit-exceeded',
+      'reservation-expiry', 'final-warning',
+    ]);
+  });
+
   it('accepts serialized editable templates', () => {
     const input = [{ id: 'one', name: 'اختبار', channel: 'sms', body: 'مرحبًا', active: true }];
     expect(parseMessageTemplates(JSON.stringify(input))).toEqual(input);
