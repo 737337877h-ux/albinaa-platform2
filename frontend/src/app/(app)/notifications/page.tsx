@@ -40,6 +40,7 @@ const KIND_AR: Record<string, { label: string; tone: KindTone }> = {
   collection_created: { label: 'تحصيل جديد', tone: 'pine' },
   collection_reversal_requested: { label: 'طلب عكس تحصيل', tone: 'debt' },
   finance_alert: { label: 'تنبيه مالي فوري', tone: 'debt' },
+  scheduled_job_failed: { label: 'فشل مهمة مجدولة', tone: 'debt' },
   customer_transferred: { label: 'نقل عميل', tone: 'neutral' },
 };
 
@@ -97,6 +98,12 @@ function describe(n: NotificationItem): { title: string; text: string; href?: st
         href: typeof p.href === 'string' ? p.href : undefined,
       };
     }
+    case 'scheduled_job_failed':
+      return {
+        title: 'تعطلت مهمة مجدولة',
+        text: `فشلت المهمة ${p.job ?? ''}${p.message ? ` — ${p.message}` : ''}`,
+        href: typeof p.href === 'string' ? p.href : '/admin/audit',
+      };
     case 'customer_transferred':
       return {
         title: 'نُقل إليك عميل',

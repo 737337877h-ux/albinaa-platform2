@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { RiskRefreshService } from './risk-refresh.service';
 
 export function nextDailyRun(now: Date, hour: number): Date {
@@ -19,6 +20,7 @@ export class RiskScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly refresh: RiskRefreshService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   onModuleInit() {
@@ -87,6 +89,13 @@ export class RiskScheduler implements OnModuleInit, OnModuleDestroy {
             `فشل تحديث المخاطر التلقائي للمنظمة ${organization.id}`,
             error instanceof Error ? error.stack : String(error),
           );
+          await this.notifications.notifyByPermission(organization.id, 'finance.alerts.receive', 'scheduled_job_failed', {
+            job: 'risk_recalculation',
+            severity: 'critical',
+            failedAt: new Date().toISOString(),
+            message: error instanceof Error ? error.message : String(error),
+            href: '/admin/audit',
+          });
         }
       }
     } finally {

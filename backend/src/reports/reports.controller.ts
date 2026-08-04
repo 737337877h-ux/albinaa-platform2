@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Req, Res } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -16,7 +17,7 @@ export class ReportsController {
   @ApiOperation({ summary: 'ملخص شامل مفصول بالعملة: المديونية، أعلى المدينين، الحجوزات، المحصلون، والتعتيق' })
   summary(@CurrentUser() user: AuthUser) { return this.reports.summary(user); }
 
-  @Get('summary.xlsx') @RequirePermissions('reports.export')
+  @Get('summary.xlsx') @RequirePermissions('reports.export') @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @ApiOperation({ summary: 'تصدير التقرير الشامل إلى Excel منسق مع تجميد الرأس وعرض أعمدة تلقائي' })
   async summaryExcel(@CurrentUser() user: AuthUser, @Res() res: Response) {
     const buffer = await this.reports.summaryWorkbook(user);

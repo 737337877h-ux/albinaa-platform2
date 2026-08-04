@@ -2,6 +2,7 @@ import {
   Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Idempotent } from '../common/decorators/idempotent.decorator';
@@ -160,6 +161,7 @@ export class CustomersController {
 
   @Get(':id/statement.pdf')
   @RequirePermissions('customers.read', 'balances.read')
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @ApiOperation({ summary: 'كشف حساب PDF عربي بالترويسة وختم عدم الاعتماد' })
   async statementPdf(
     @CurrentUser() user: AuthUser,

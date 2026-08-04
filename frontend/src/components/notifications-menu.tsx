@@ -29,6 +29,7 @@ function describe(n: NotificationItem): string {
       };
       return `تنبيه مالي: ${labels[String(p.event)] ?? 'عملية حساسة'}`;
     }
+    case 'scheduled_job_failed': return `تعطلت مهمة مجدولة: ${p.job ?? ''}`;
     case 'customer_transferred': return `نُقل إليك العميل ${p.customerName ?? ''}`;
     default: return n.kind;
   }

@@ -1,5 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { AgingService } from './aging.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export function nextMonthEndRun(now: Date) {
   const run = new Date(now);
@@ -19,7 +21,11 @@ export class AgingScheduler implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AgingScheduler.name);
   private timer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly aging: AgingService) {}
+  constructor(
+    private readonly aging: AgingService,
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   onModuleInit() {
     if (process.env.AGING_MONTHLY_SNAPSHOT_ENABLED === 'false') return;
@@ -51,6 +57,13 @@ export class AgingScheduler implements OnModuleInit, OnModuleDestroy {
       await this.aging.createMonthlySnapshots(asOf);
     } catch (error) {
       this.logger.error('فشل إقفال لقطة أعمار الديون الشهرية', error instanceof Error ? error.stack : String(error));
+      const organizations = await this.prisma.organization.findMany({ select: { id: true } });
+      await Promise.all(organizations.map((organization) => this.notifications.notifyByPermission(
+        organization.id, 'finance.alerts.receive', 'scheduled_job_failed', {
+          job: 'monthly_aging_snapshot', severity: 'critical', failedAt: new Date().toISOString(),
+          message: error instanceof Error ? error.message : String(error), href: '/reports/aging',
+        },
+      )));
     } finally {
       this.schedule();
     }
