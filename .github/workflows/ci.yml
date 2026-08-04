@@ -40,6 +40,10 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: python -m unittest test_import_profiles
 
+      - name: Validate dependency-free performance test
+        working-directory: .
+        run: python -m py_compile scripts/load_test.py
+
       - name: Generate Prisma Client
         run: npx prisma generate --schema=../prisma/schema.prisma
 
