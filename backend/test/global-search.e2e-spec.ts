@@ -63,6 +63,14 @@ describe('Global command palette search (e2e)', () => {
     await request(app.getHttpServer()).get('/search?q=x').set('Authorization', `Bearer ${adminToken}`).expect(400);
   });
 
+  it('returns navigation badges from the current user scope', async () => {
+    const response = await request(app.getHttpServer()).get('/dashboard/nav-counts')
+      .set('Authorization', `Bearer ${adminToken}`).expect(200);
+    expect(response.body).toEqual(expect.objectContaining({
+      tasks: expect.any(Number), followups: expect.any(Number), promises: expect.any(Number),
+    }));
+  });
+
   it('never leaks unassigned customers to a collector', async () => {
     const user = await request(app.getHttpServer()).post('/users').set('Authorization', `Bearer ${adminToken}`)
       .send({ username: 'cmd_collector', fullName: 'محصل البحث', password: 'Test1234pass' }).expect(201);

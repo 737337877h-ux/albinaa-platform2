@@ -13,6 +13,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@fontsource/cairo": "^5.3.0",
+    "@fontsource/space-grotesk": "^5.3.0",
     "@hookform/resolvers": "^3.9.0",
     "@tanstack/react-query": "^5.51.0",
     "clsx": "^2.1.1",
@@ -38,7 +40,7 @@
     "postcss": "8.5.25",
     "tailwindcss": "^3.4.7",
     "typescript": "^5.5.0",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "postcss": "$postcss",
