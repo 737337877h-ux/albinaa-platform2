@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ImageIcon, Plus, Save, RotateCcw, Trash2, Upload } from 'lucide-react';
+import { BellRing, ImageIcon, Plus, Save, RotateCcw, Trash2, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { cn } from '@/lib/utils';
@@ -177,8 +177,8 @@ const GROUPS: SettingsGroup[] = [
     items: [
       {
         key: 'notifications.reminderEnabled',
-        label: 'التذكير التلقائي',
-        description: 'إرسال تذكيرات تلقائية للوعود المستحقة',
+        label: 'التذكير الداخلي التلقائي',
+        description: 'إنشاء إشعار للمحصل عن الوعود المستحقة والمتأخرة، مرة واحدة لكل وعد في اليوم',
         type: 'boolean',
         defaultValue: 'true',
       },
@@ -449,11 +449,40 @@ export default function SettingsPage() {
               </Card>
             );
           })}
+          <ReminderRunCard />
           <BrandingLogoSettings initial={query.data?.find((s) => s.key === 'branding.logoDataUrl')?.value} />
           <MessageTemplatesSettings initial={query.data?.find((s) => s.key === 'communication.templates')?.value} />
         </div>
       </DataState>
     </div>
+  );
+}
+
+function ReminderRunCard() {
+  const run = useMutation({
+    mutationFn: () => api<{ enabled: boolean; candidates: number; created: number; skipped: number }>(
+      '/payment-promises/reminders/run', { method: 'POST' },
+    ),
+    onSuccess: (result) => {
+      if (!result.enabled) toast('التذكيرات الداخلية معطلة من الإعدادات', 'err');
+      else toast(`تم الفحص: ${result.created} تذكير جديد، ${result.skipped} مكرر تم تجاهله`, 'ok');
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
+  });
+
+  return (
+    <Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p className="text-sm font-semibold text-concrete-700 dark:text-concrete-200">اختبار التذكيرات الداخلية الآن</p>
+        <p className="mt-1 text-xs text-concrete-500">
+          يفحص الوعود المستحقة والمتأخرة وينشئ إشعارات للمحصلين فقط، مع منع التكرار. لا يرسل WhatsApp أو SMS.
+        </p>
+      </div>
+      <Button variant="secondary" loading={run.isPending} onClick={() => run.mutate()}>
+        <BellRing className="h-4 w-4" aria-hidden />
+        تشغيل الفحص
+      </Button>
+    </Card>
   );
 }
 
