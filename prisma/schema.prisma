@@ -30,22 +30,23 @@ model Organization {
   name      String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  branches           Branch[]
-  users              User[]
-  roles              Role[]
-  documentTypes      DocumentType[]
-  customers          Customer[]
-  importTemplates    ImportTemplate[]
-  importJobs         ImportJob[]
-  collectionMethods  CollectionMethod[]
-  followupTypes      FollowupType[]
-  followupResults    FollowupResult[]
-  systemSettings     SystemSetting[]
-  analyticalAccounts AnalyticalAccount[]
-  customerAliases    CustomerAlias[]
-  customerMerges     CustomerMerge[]
-  agingSnapshots     AgingSnapshot[]
-  handoverVouchers   CollectionHandoverVoucher[]
+  branches             Branch[]
+  users                User[]
+  roles                Role[]
+  documentTypes        DocumentType[]
+  customers            Customer[]
+  importTemplates      ImportTemplate[]
+  importJobs           ImportJob[]
+  collectionMethods    CollectionMethod[]
+  followupTypes        FollowupType[]
+  followupResults      FollowupResult[]
+  systemSettings       SystemSetting[]
+  analyticalAccounts   AnalyticalAccount[]
+  customerAliases      CustomerAlias[]
+  customerMerges       CustomerMerge[]
+  customerAccountLinks CustomerAccountLink[]
+  agingSnapshots       AgingSnapshot[]
+  handoverVouchers     CollectionHandoverVoucher[]
 
   @@map("organizations")
 }
@@ -314,6 +315,8 @@ model Customer {
   aliasesFromMerge        CustomerAlias[]              @relation("CustomerAliasSource")
   mergeOperationsAsMaster CustomerMerge[]              @relation("CustomerMergeMaster")
   mergeOperationsAsSource CustomerMerge[]              @relation("CustomerMergeSource")
+  primaryAccountLinks     CustomerAccountLink[]        @relation("PrimaryCustomerAccount")
+  childAccountLink        CustomerAccountLink?         @relation("ChildCustomerAccount")
   agingSnapshots          AgingSnapshot[]
 
   @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
@@ -369,6 +372,25 @@ model CustomerMerge {
   @@index([organizationId, mergedAt], map: "idx_customer_merges_org_date")
   @@index([sourceCustomerId, status], map: "idx_customer_merges_source_status")
   @@map("customer_merges")
+}
+
+/// Non-destructive relationship between separate customer accounts.
+/// The child keeps its own ledger and identity; the primary account only
+/// receives a read-only consolidated view of all linked balances.
+model CustomerAccountLink {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId    String   @map("organization_id") @db.Uuid
+  primaryCustomerId String   @map("primary_customer_id") @db.Uuid
+  childCustomerId   String   @unique(map: "uq_customer_account_link_child") @map("child_customer_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  primary      Customer     @relation("PrimaryCustomerAccount", fields: [primaryCustomerId], references: [id], onDelete: Cascade)
+  child        Customer     @relation("ChildCustomerAccount", fields: [childCustomerId], references: [id], onDelete: Cascade)
+
+  @@unique([primaryCustomerId, childCustomerId], map: "uq_customer_account_link_pair")
+  @@index([organizationId, primaryCustomerId], map: "idx_customer_account_link_primary")
+  @@map("customer_account_links")
 }
 
 model CustomerAssignment {

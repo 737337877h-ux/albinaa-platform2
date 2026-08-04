@@ -3,10 +3,10 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
-import PDFDocument from 'pdfkit';
-import path from 'node:path';
 import { AuditService } from '../audit/audit.service';
+import { BRANDING_KEYS } from '../common/branding';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { normalizeUploadedFilename } from '../common/uploaded-filename';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RiskRefreshService } from '../risk/risk-refresh.service';
@@ -19,6 +19,7 @@ import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
 import { UpdateCreditLimitDto } from './dto/update-credit-limit.dto';
 import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
+import { renderCustomerStatementPdf } from './statement-pdf.renderer';
 
 /**
  * شكل استجابة GET /customers/:id/balances — تعريف صريح (بدل مصفوفة فارغة
@@ -260,7 +261,7 @@ export class CustomersService {
         openingDebit: Number(b.openingDebit),
         openingCredit: Number(b.openingCredit),
         lastImport: b.lastImportJob
-          ? { jobId: b.lastImportJob.id, at: b.lastImportJob.importedAt, file: b.lastImportJob.fileName }
+          ? { jobId: b.lastImportJob.id, at: b.lastImportJob.importedAt, file: normalizeUploadedFilename(b.lastImportJob.fileName) }
           : null,
         updatedAt: b.updatedAt,
       })),
@@ -346,7 +347,7 @@ export class CustomersService {
       events.push({
         at: s.snapshotAt,
         type: 'balance_snapshot',
-        title: `تحديث رصيد من استيراد (${s.importJob.fileName})`,
+        title: `تحديث رصيد من استيراد (${normalizeUploadedFilename(s.importJob.fileName)})`,
         details: { currency: s.currencyCode, balance: Number(s.balance) },
       });
     }
@@ -766,11 +767,148 @@ export class CustomersService {
     });
   }
 
+  // --------------------------------------------------------------------------
+  // Customer account groups (primary + sub-accounts), without merging data.
+  // --------------------------------------------------------------------------
+  async accountGroup(user: AuthUser, id: string) {
+    await this.assertAccess(user, id);
+    const childLink = await this.prisma.customerAccountLink.findUnique({
+      where: { childCustomerId: id },
+      select: { primaryCustomerId: true },
+    });
+    const primaryId = childLink?.primaryCustomerId ?? id;
+    const links = await this.prisma.customerAccountLink.findMany({
+      where: { organizationId: user.organizationId, primaryCustomerId: primaryId },
+      select: { childCustomerId: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const memberIds = [primaryId, ...links.map((link) => link.childCustomerId)];
+    const scope = await this.scopeWhere(user);
+    const members = await this.prisma.customer.findMany({
+      where: { ...scope, id: { in: memberIds }, status: { not: 'merged' } },
+      select: {
+        id: true,
+        externalCustomerCode: true,
+        name: true,
+        balances: { select: { currencyCode: true, accountingBalance: true } },
+      },
+    });
+    const memberMap = new Map(members.map((member) => [member.id, member]));
+    const primary = memberMap.get(primaryId) ?? null;
+    const children = links
+      .map((link) => memberMap.get(link.childCustomerId))
+      .filter((member): member is NonNullable<typeof member> => !!member);
+    const totals = new Map<string, number>();
+    for (const member of members) {
+      for (const balance of member.balances) {
+        totals.set(
+          balance.currencyCode,
+          (totals.get(balance.currencyCode) ?? 0) + Number(balance.accountingBalance),
+        );
+      }
+    }
+    return {
+      role: id === primaryId ? (links.length ? 'primary' : 'standalone') : 'child',
+      primary,
+      children,
+      aggregateBalances: [...totals.entries()]
+        .map(([currency, balance]) => ({ currency, balance }))
+        .sort((a, b) => a.currency.localeCompare(b.currency)),
+    };
+  }
+
+  async linkChildAccount(
+    actor: AuthUser,
+    primaryCustomerId: string,
+    childCustomerId: string,
+    req?: Request,
+  ) {
+    if (primaryCustomerId === childCustomerId) {
+      throw new BadRequestException('لا يمكن ربط الحساب بنفسه');
+    }
+    const [primary, child] = await Promise.all([
+      this.assertAccess(actor, primaryCustomerId),
+      this.assertAccess(actor, childCustomerId),
+    ]);
+    if (primary.organizationId !== child.organizationId || primary.organizationId !== actor.organizationId) {
+      throw new BadRequestException('يجب أن يكون الحسابان ضمن المنشأة نفسها');
+    }
+    const [primaryAsChild, childAsPrimary, currentLink] = await Promise.all([
+      this.prisma.customerAccountLink.findUnique({ where: { childCustomerId: primaryCustomerId } }),
+      this.prisma.customerAccountLink.count({ where: { primaryCustomerId: childCustomerId } }),
+      this.prisma.customerAccountLink.findUnique({ where: { childCustomerId } }),
+    ]);
+    if (primaryAsChild) {
+      throw new ConflictException('الحساب المختار كرئيسي هو حساب فرعي حاليًا؛ فك ارتباطه أولًا');
+    }
+    if (childAsPrimary > 0) {
+      throw new ConflictException('الحساب الفرعي المختار رئيسي لمجموعة أخرى؛ انقل حساباته أولًا');
+    }
+    if (currentLink) {
+      if (currentLink.primaryCustomerId === primaryCustomerId) return this.accountGroup(actor, primaryCustomerId);
+      throw new ConflictException('الحساب الفرعي مرتبط بحساب رئيسي آخر؛ فك الارتباط أولًا');
+    }
+    const link = await this.prisma.customerAccountLink.create({
+      data: { organizationId: actor.organizationId, primaryCustomerId, childCustomerId },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'customer_sub_account_linked',
+      entityTable: 'customers',
+      entityId: primaryCustomerId,
+      newValue: {
+        linkId: link.id,
+        primaryCustomerId,
+        primaryCode: primary.externalCustomerCode,
+        childCustomerId,
+        childCode: child.externalCustomerCode,
+      },
+      req,
+    });
+    return this.accountGroup(actor, primaryCustomerId);
+  }
+
+  async unlinkChildAccount(
+    actor: AuthUser,
+    primaryCustomerId: string,
+    childCustomerId: string,
+    req?: Request,
+  ) {
+    await Promise.all([
+      this.assertAccess(actor, primaryCustomerId),
+      this.assertAccess(actor, childCustomerId),
+    ]);
+    const link = await this.prisma.customerAccountLink.findFirst({
+      where: { organizationId: actor.organizationId, primaryCustomerId, childCustomerId },
+    });
+    if (!link) throw new NotFoundException('رابط الحساب الفرعي غير موجود');
+    await this.prisma.customerAccountLink.delete({ where: { id: link.id } });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'customer_sub_account_unlinked',
+      entityTable: 'customers',
+      entityId: primaryCustomerId,
+      oldValue: { linkId: link.id, primaryCustomerId, childCustomerId },
+      req,
+    });
+    return this.accountGroup(actor, primaryCustomerId);
+  }
+
   async statementPdf(user: AuthUser, id: string, q: StatementQueryDto): Promise<Buffer> {
     await this.assertAccess(user, id);
     const customer = await this.prisma.customer.findUniqueOrThrow({
       where: { id },
-      include: { organization: { select: { name: true } } },
+      include: {
+        organization: {
+          select: {
+            name: true,
+            systemSettings: {
+              where: { key: { in: [...BRANDING_KEYS] } },
+              select: { key: true, value: true },
+            },
+          },
+        },
+      },
     });
     const first = await this.statement(user, id, { ...q, page: 1, limit: 200 });
     const items = [...first.items];
@@ -779,72 +917,7 @@ export class CustomersService {
       items.push(...next.items);
     }
 
-    const fontDir = path.dirname(require.resolve('@fontsource/noto-sans-arabic/package.json'));
-    const regularFont = path.join(fontDir, 'files', 'noto-sans-arabic-arabic-400-normal.woff');
-    const boldFont = path.join(fontDir, 'files', 'noto-sans-arabic-arabic-700-normal.woff');
-    const document = new PDFDocument({ size: 'A4', margin: 36, bufferPages: true, info: { Title: `كشف حساب ${customer.name}` } });
-    const chunks: Buffer[] = [];
-    document.on('data', (chunk: Buffer) => chunks.push(chunk));
-    const completed = new Promise<Buffer>((resolve, reject) => {
-      document.on('end', () => resolve(Buffer.concat(chunks)));
-      document.on('error', reject);
-    });
-    document.registerFont('Arabic', regularFont).registerFont('ArabicBold', boldFont);
-
-    const right = 559;
-    const drawHeader = () => {
-      document.font('ArabicBold').fontSize(18).fillColor('#0f4c3a').text(customer.organization.name || 'البناء الراقي', 36, 32, { width: 523, align: 'right' });
-      document.font('ArabicBold').fontSize(14).fillColor('#172426').text('كشف حساب عميل', 36, 62, { width: 523, align: 'right' });
-      document.moveTo(36, 88).lineTo(right, 88).strokeColor('#0f4c3a').lineWidth(1).stroke();
-      document.font('Arabic').fontSize(9).fillColor('#475569');
-      document.text(`العميل: ${customer.name} — الكود: ${customer.externalCustomerCode}`, 36, 96, { width: 523, align: 'right' });
-      document.text(`العملة: ${q.currency} — تاريخ الإصدار: ${new Date().toLocaleDateString('ar-YE')}`, 36, 112, { width: 523, align: 'right' });
-      const period = q.fromDate || q.toDate ? `الفترة: ${q.fromDate ?? 'البداية'} إلى ${q.toDate ?? 'اليوم'}` : 'الفترة: جميع الحركات';
-      document.text(period, 36, 128, { width: 523, align: 'right' });
-      document.moveDown(1);
-    };
-    const columns = [36, 104, 170, 252, 368, 432, 496];
-    const widths = [68, 66, 82, 116, 64, 64, 63];
-    const headers = ['الرصيد', 'دائن', 'مدين', 'البيان', 'رقم المستند', 'النوع', 'التاريخ'];
-    const drawTableHeader = (y: number) => {
-      document.rect(36, y, 523, 22).fill('#0f4c3a');
-      document.font('ArabicBold').fontSize(7.5).fillColor('#ffffff');
-      headers.forEach((label, index) => document.text(label, columns[index] + 2, y + 6, { width: widths[index] - 4, align: 'center' }));
-      return y + 22;
-    };
-    drawHeader();
-    let y = drawTableHeader(154);
-    document.font('Arabic').fontSize(7).fillColor('#172426');
-    for (const item of items) {
-      if (y > 730) {
-        document.addPage(); drawHeader(); y = drawTableHeader(154); document.font('Arabic').fontSize(7).fillColor('#172426');
-      }
-      const values = [
-        item.runningBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }),
-        item.credit ? item.credit.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—',
-        item.debit ? item.debit.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—',
-        item.description || '—', item.documentNumber || '—', item.documentType,
-        new Date(item.date).toLocaleDateString('ar-YE'),
-      ];
-      document.rect(36, y, 523, 21).strokeColor('#d8dedc').lineWidth(0.4).stroke();
-      values.forEach((value, index) => document.text(value, columns[index] + 2, y + 5, { width: widths[index] - 4, height: 12, ellipsis: true, align: index === 3 ? 'right' : 'center' }));
-      y += 21;
-    }
-    if (!items.length) document.font('Arabic').fontSize(10).fillColor('#64748b').text('لا توجد حركات ضمن الفترة المحددة', 36, y + 18, { width: 523, align: 'center' });
-    y = Math.min(Math.max(y + 14, 200), 748);
-    document.font('ArabicBold').fontSize(9).fillColor('#172426').text(
-      `رصيد بداية الفترة: ${first.periodStartBalance.toLocaleString('en-US')}   |   رصيد نهاية الفترة: ${first.periodEndBalance.toLocaleString('en-US')} ${q.currency}`,
-      36, y, { width: 523, align: 'right' },
-    );
-    document.font('ArabicBold').fontSize(10).fillColor('#b42318').text('كشف غير معتمد ما لم يُختم', 36, y + 26, { width: 523, align: 'center' });
-
-    const pages = document.bufferedPageRange();
-    for (let index = pages.start; index < pages.start + pages.count; index += 1) {
-      document.switchToPage(index);
-      document.font('Arabic').fontSize(7).fillColor('#64748b').text(`صفحة ${index + 1} من ${pages.count}`, 36, 806, { width: 523, align: 'center' });
-    }
-    document.end();
-    return completed;
+    return renderCustomerStatementPdf(customer, first, items, q);
   }
 
   async updateCreditPolicy(

@@ -341,8 +341,10 @@ export default function TasksPage() {
                           <p className="text-xs text-concrete-500" dir="ltr">{t.customer.externalCustomerCode}</p>
                         )}
                       </TD>
-                      <TD className="text-xs text-concrete-600 dark:text-concrete-400">
-                        {t.priorityReason ?? '—'}
+                      <TD className="max-w-[260px] text-xs leading-5 text-concrete-600 dark:text-concrete-400">
+                        <span className="line-clamp-3" title={t.priorityReason ?? ''}>
+                          {t.priorityReason ?? '—'}
+                        </span>
                       </TD>
                       <TD>
                         {t.expectedAmount != null && t.expectedCurrency ? (

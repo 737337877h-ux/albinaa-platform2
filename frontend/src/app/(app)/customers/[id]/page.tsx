@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
-import { ArrowDownUp, CheckCircle2, Download, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
+import { ArrowDownUp, CheckCircle2, Download, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX, Link2, Unlink } from 'lucide-react';
 import { api, ApiError, downloadApiFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
@@ -171,6 +171,24 @@ interface ReservationItem {
   expiresAt: string | null;
 }
 
+interface CustomerAccountGroupMember {
+  id: string;
+  externalCustomerCode: string;
+  name: string;
+  balances: { currencyCode: string; accountingBalance: string | number }[];
+}
+
+interface CustomerAccountGroup {
+  role: 'standalone' | 'primary' | 'child';
+  primary: CustomerAccountGroupMember | null;
+  children: CustomerAccountGroupMember[];
+  aggregateBalances: { currency: string; balance: number }[];
+}
+
+interface CustomerSearchResponse {
+  items: { id: string; externalCustomerCode: string; name: string; balances: { currency: string; balance: number }[] }[];
+}
+
 interface CreditPolicy {
   allowCreditSale: boolean;
   allowPurchaseWithDebt: boolean;
@@ -262,6 +280,47 @@ const TIMELINE_COLORS: Record<string, string> = {
   collection_reversal: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-200',
 };
 
+const TIMELINE_LABELS: Record<string, string> = {
+  customer_created: 'إنشاء العميل',
+  balance_snapshot: 'تحديث الرصيد',
+  assignment: 'إسناد',
+  followup: 'متابعة',
+  payment_promise: 'وعد سداد',
+  collection: 'تحصيل',
+  collection_reversal: 'عكس تحصيل',
+};
+
+const TIMELINE_DETAIL_LABELS: Record<string, string> = {
+  currency: 'العملة', balance: 'الرصيد', from: 'من', to: 'إلى', reason: 'السبب',
+  notes: 'الملاحظات', nextFollowupDate: 'المتابعة التالية', collector: 'المحصل',
+  statusReason: 'سبب الحالة', old: 'قبل', new: 'بعد',
+};
+
+function timelineValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') return fmtMoney(value);
+  if (typeof value === 'boolean') return value ? 'نعم' : 'لا';
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, nested]) => `${TIMELINE_DETAIL_LABELS[key] ?? key}: ${timelineValue(nested)}`)
+      .join('، ');
+  }
+  return String(value);
+}
+
+function TimelineDetails({ details }: { details: Record<string, unknown> }) {
+  return (
+    <dl className="mt-2 grid gap-x-4 gap-y-1 rounded-lg bg-concrete-50 p-3 text-xs sm:grid-cols-2 dark:bg-white/5">
+      {Object.entries(details).map(([key, value]) => (
+        <div key={key} className="flex min-w-0 gap-2">
+          <dt className="shrink-0 text-concrete-500">{TIMELINE_DETAIL_LABELS[key] ?? key}:</dt>
+          <dd className="break-words text-iron-800 dark:text-concrete-200" dir="auto">{timelineValue(value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function timelineColor(type: string) {
   if (type.startsWith('audit:')) return 'bg-concrete-100 text-concrete-600 dark:bg-white/10 dark:text-concrete-300';
   return TIMELINE_COLORS[type] ?? 'bg-concrete-100 text-concrete-600 dark:bg-white/10 dark:text-concrete-300';
@@ -331,6 +390,7 @@ export default function Customer360Page() {
   const [stmtCurrency, setStmtCurrency] = useState('YER');
   const [stmtPage, setStmtPage] = useState(1);
   const [pdfDownloading, setPdfDownloading] = useState(false);
+  const [pdfTemplate, setPdfTemplate] = useState<'classic' | 'branded'>('branded');
   const statement = useQuery<StatementResponse>({
     queryKey: ['statement', id, stmtCurrency, stmtPage],
     queryFn: () => api<StatementResponse>(
@@ -338,6 +398,38 @@ export default function Customer360Page() {
     ),
     enabled: canRead && canBalances && tab === 'statement',
     retry: false,
+  });
+  const accountGroup = useQuery<CustomerAccountGroup>({
+    queryKey: ['customer-account-group', id],
+    queryFn: () => api<CustomerAccountGroup>(`/customers/${id}/account-group`),
+    enabled: canRead,
+  });
+  const [linkAccountOpen, setLinkAccountOpen] = useState(false);
+  const [linkAccountSearch, setLinkAccountSearch] = useState('');
+  const linkedCandidates = useQuery<CustomerSearchResponse>({
+    queryKey: ['customer-link-candidates', linkAccountSearch],
+    queryFn: () => api<CustomerSearchResponse>(`/customers?search=${encodeURIComponent(linkAccountSearch)}&limit=10`),
+    enabled: linkAccountOpen && linkAccountSearch.trim().length >= 2,
+  });
+  const linkAccount = useMutation({
+    mutationFn: (childCustomerId: string) => api(`/customers/${id}/account-group/children`, {
+      method: 'POST', body: JSON.stringify({ childCustomerId }),
+    }),
+    onSuccess: () => {
+      toast('تم ربط الحساب الفرعي مع إبقاء بياناته وحركاته مستقلة', 'ok');
+      setLinkAccountOpen(false);
+      setLinkAccountSearch('');
+      qc.invalidateQueries({ queryKey: ['customer-account-group'] });
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
+  });
+  const unlinkAccount = useMutation({
+    mutationFn: (childCustomerId: string) => api(`/customers/${id}/account-group/children/${childCustomerId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast('تم فك الارتباط وبقي الحساب الفرعي مستقلًا دون تغيير حركاته', 'ok');
+      qc.invalidateQueries({ queryKey: ['customer-account-group'] });
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
   });
 
   const [creditOpen, setCreditOpen] = useState(false);
@@ -619,8 +711,8 @@ export default function Customer360Page() {
     setPdfDownloading(true);
     try {
       await downloadApiFile(
-        `/customers/${id}/statement.pdf?currency=${encodeURIComponent(stmtCurrency)}`,
-        `statement-${c?.externalCustomerCode ?? id}-${stmtCurrency}.pdf`,
+        `/customers/${id}/statement.pdf?currency=${encodeURIComponent(stmtCurrency)}&template=${pdfTemplate}`,
+        `statement-${c?.externalCustomerCode ?? id}-${stmtCurrency}-${pdfTemplate}.pdf`,
       );
       toast('تم تنزيل كشف الحساب PDF', 'ok');
     } catch (error) {
@@ -768,6 +860,77 @@ export default function Customer360Page() {
                   <StatCard label="تاريخ بدء العلاقة" value={c.relationshipStartDate ? fmtDate(c.relationshipStartDate) : '—'} />
                   <StatCard label="تاريخ الإنشاء" value={fmtDateTime(c.createdAt)} />
                 </div>
+
+                {accountGroup.data && (
+                  <Card className="p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Link2 className="h-4 w-4 text-pine-700" />
+                          <h3 className="text-sm font-semibold">الحسابات الرئيسية والفرعية</h3>
+                          <Badge tone="pine">
+                            {accountGroup.data.role === 'primary' ? 'حساب رئيسي' : accountGroup.data.role === 'child' ? 'حساب فرعي' : 'حساب مستقل'}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-xs text-concrete-500">الربط للعرض والتجميع فقط؛ كل حساب وحركاته يبقيان مستقلين.</p>
+                      </div>
+                      {canWrite && accountGroup.data.role !== 'child' && (
+                        <Button variant="secondary" onClick={() => setLinkAccountOpen(true)}><Link2 className="h-4 w-4" /> ربط حساب فرعي</Button>
+                      )}
+                    </div>
+                    {accountGroup.data.aggregateBalances.length > 0 && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {accountGroup.data.aggregateBalances.map((balance) => (
+                          <div key={balance.currency} className="rounded-lg bg-pine-50 px-3 py-2 text-sm dark:bg-pine-900/20">
+                            <span className="ml-2 text-xs text-concrete-500">الرصيد المجمع</span>
+                            <Money value={balance.balance} currency={balance.currency} signed />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {accountGroup.data.role === 'child' && accountGroup.data.primary && (
+                      <div className="mt-4 rounded-lg border border-concrete-100 p-3 dark:border-white/10">
+                        <p className="text-xs text-concrete-500">الحساب الرئيسي</p>
+                        <Link href={`/customers/${accountGroup.data.primary.id}`} className="mt-1 inline-block font-semibold text-pine-700 hover:underline">
+                          {accountGroup.data.primary.externalCustomerCode} — {accountGroup.data.primary.name}
+                        </Link>
+                      </div>
+                    )}
+                    {accountGroup.data.children.length > 0 && (
+                      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {accountGroup.data.children.map((child) => (
+                          <div key={child.id} className="rounded-lg border border-concrete-100 p-3 dark:border-white/10">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <Link href={`/customers/${child.id}`} className="font-semibold text-pine-700 hover:underline">{child.externalCustomerCode} — {child.name}</Link>
+                                <div className="mt-2 space-y-1 text-xs">{child.balances.map((balance) => <div key={balance.currencyCode}><Money value={Number(balance.accountingBalance)} currency={balance.currencyCode} signed /></div>)}</div>
+                              </div>
+                              {canWrite && <button type="button" title="فك الارتباط" onClick={() => unlinkAccount.mutate(child.id)} className="rounded p-1 text-concrete-400 hover:bg-red-50 hover:text-red-600"><Unlink className="h-4 w-4" /></button>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                )}
+
+                <Dialog open={linkAccountOpen} onClose={() => setLinkAccountOpen(false)} title="ربط حساب فرعي">
+                  <div className="space-y-4">
+                    <p className="text-sm text-concrete-600 dark:text-concrete-400">ابحث برقم الحساب أو الاسم. لن يتم دمج أو نقل أي حركة.</p>
+                    <Field label="الحساب الفرعي">
+                      <Input value={linkAccountSearch} onChange={(event) => setLinkAccountSearch(event.target.value)} placeholder="مثال: 10005 أو اسم العميل" />
+                    </Field>
+                    <div className="max-h-72 space-y-2 overflow-auto">
+                      {(linkedCandidates.data?.items ?? []).filter((item) => item.id !== id).map((item) => (
+                        <button key={item.id} type="button" onClick={() => linkAccount.mutate(item.id)} disabled={linkAccount.isPending} className="flex w-full items-center justify-between rounded-lg border border-concrete-100 p-3 text-right hover:bg-pine-50 disabled:opacity-50 dark:border-white/10 dark:hover:bg-white/5">
+                          <span><span className="font-semibold">{item.externalCustomerCode}</span><span className="mr-2">{item.name}</span></span>
+                          <span className="text-xs text-pine-700">اختيار</span>
+                        </button>
+                      ))}
+                      {linkAccountSearch.trim().length >= 2 && !linkedCandidates.isLoading && !(linkedCandidates.data?.items ?? []).filter((item) => item.id !== id).length && <p className="py-4 text-center text-sm text-concrete-500">لا توجد نتائج مطابقة</p>}
+                    </div>
+                  </div>
+                </Dialog>
 
                 {/* Risk Score (PR 4) */}
                 {canRisk && (
@@ -994,8 +1157,15 @@ export default function Customer360Page() {
                 >
                   <Download className="h-4 w-4" /> تصدير CSV
                 </Button>
+                <label className="flex items-center gap-2 text-sm print:hidden">
+                  <span className="text-concrete-500">قالب PDF</span>
+                  <Select value={pdfTemplate} onChange={(event) => setPdfTemplate(event.target.value as 'classic' | 'branded')}>
+                    <option value="branded">الرسمي الملوّن</option>
+                    <option value="classic">الكلاسيكي</option>
+                  </Select>
+                </label>
                 <Button variant="secondary" onClick={exportStatementPdf} loading={pdfDownloading} className="print:hidden">
-                  <Download className="h-4 w-4" /> كشف PDF معتمد للطباعة
+                  <Download className="h-4 w-4" /> تنزيل PDF
                 </Button>
               </div>
 
@@ -1079,16 +1249,12 @@ export default function Customer360Page() {
                         <div className="flex-1 pb-3">
                           <div className="flex items-center gap-2">
                             <Badge className={timelineColor(ev.type)}>
-                              {ev.type.replace(/_/g, ' ')}
+                              {TIMELINE_LABELS[ev.type] ?? (ev.type.startsWith('audit:') ? 'تدقيق' : ev.type.replace(/_/g, ' '))}
                             </Badge>
                             <span className="text-xs text-concrete-400">{fmtDateTime(ev.at)}</span>
                           </div>
                           <p className="mt-1 text-sm text-iron-800 dark:text-concrete-100">{ev.title}</p>
-                          {ev.details && (
-                            <pre className="mt-1 max-h-32 overflow-auto rounded bg-concrete-50 p-2 text-[10px] text-concrete-600 dark:bg-white/5 dark:text-concrete-400">
-                              {JSON.stringify(ev.details, null, 2)}
-                            </pre>
-                          )}
+                          {ev.details && <TimelineDetails details={ev.details} />}
                         </div>
                       </div>
                     ))}

@@ -9,6 +9,7 @@ import * as path from 'path';
 import { AuditService } from '../audit/audit.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { normalizeUploadedFilename } from '../common/uploaded-filename';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RiskRefreshService } from '../risk/risk-refresh.service';
@@ -49,7 +50,8 @@ export class ImportsService {
   // --------------------------------------------------------------------------
   async upload(actor: AuthUser, file: Express.Multer.File, req?: Request) {
     if (!file) throw new BadRequestException('لم يُرفق ملف — الحقل المطلوب: file');
-    const ext = path.extname(file.originalname).toLowerCase();
+    const originalName = normalizeUploadedFilename(file.originalname);
+    const ext = path.extname(originalName).toLowerCase();
     if (!['.xlsx', '.xlsm', '.xls'].includes(ext)) {
       throw new BadRequestException(
         'الصيغ المدعومة: xlsx / xlsm / xls (نصي مفصول بـ Tab بترميز Windows-1256)',
@@ -86,7 +88,7 @@ export class ImportsService {
     const job = await this.prisma.importJob.create({
       data: {
         organizationId: actor.organizationId,
-        fileName: file.originalname,
+        fileName: originalName,
         fileHash,
         uploadedBy: actor.id,
         status: 'dry_run',
@@ -115,7 +117,7 @@ export class ImportsService {
 
     await this.audit.log({
       userId: actor.id, action: 'import_uploaded', entityTable: 'import_jobs', entityId: job.id,
-      newValue: { fileName: file.originalname, fileHash, profile }, req,
+      newValue: { fileName: originalName, fileHash, profile }, req,
     });
 
     // المعاينة — المرحلة 4 من الـ Workflow

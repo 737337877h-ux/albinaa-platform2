@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res,
+  Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -15,6 +15,7 @@ import { QueryCustomersDto } from './dto/query-customers.dto';
 import { ReviewDuplicateDto } from './dto/review-duplicate.dto';
 import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
+import { LinkCustomerAccountDto } from './dto/link-customer-account.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
@@ -100,6 +101,37 @@ export class CustomersController {
   @ApiOperation({ summary: 'Customer 360: البيانات + الأرصدة + الإسناد + السياسة + العدادات' })
   find360(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.customers.find360(user, id);
+  }
+
+  @Get(':id/account-group')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'الحساب الرئيسي والفرعي مع الأرصدة المجمعة دون دمج السجلات' })
+  accountGroup(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.customers.accountGroup(user, id);
+  }
+
+  @Post(':id/account-group/children')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'ربط حساب عميل مستقل كحساب فرعي دون نقل أو حذف حركاته' })
+  linkChildAccount(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LinkCustomerAccountDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.linkChildAccount(user, id, dto.childCustomerId, req);
+  }
+
+  @Delete(':id/account-group/children/:childId')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'فك ارتباط حساب فرعي مع إبقاء الحساب وحركاته كما هي' })
+  unlinkChildAccount(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('childId', ParseUUIDPipe) childId: string,
+    @Req() req: Request,
+  ) {
+    return this.customers.unlinkChildAccount(user, id, childId, req);
   }
 
   @Patch(':id/credit-policy')

@@ -37,6 +37,14 @@ export class AnalyticalAccountsController {
     return this.accounts.findOne(user, id);
   }
 
+  @Get('summary/by-category')
+  @RequirePermissions('analytical_accounts.read')
+  @ApiQuery({ name: 'category', required: false })
+  @ApiOperation({ summary: 'Totals and account count by currency for an analytical account category' })
+  summary(@CurrentUser() user: AuthUser, @Query('category') category?: string) {
+    return this.accounts.summary(user, category);
+  }
+
   @Get(':id/statement')
   @RequirePermissions('analytical_accounts.read')
   @ApiOperation({ summary: 'Account statement: movements with running balance (paginated)' })
@@ -59,7 +67,7 @@ export class AnalyticalAccountsController {
   @RequirePermissions('analytical_accounts.manage')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 30 * 1024 * 1024 } }))
   @ApiConsumes('multipart/form-data')
-  @ApiQuery({ name: 'layout', enum: ['debtor', 'employee'] })
+  @ApiQuery({ name: 'layout', enum: ['debtor', 'employee', 'employee_statement'] })
   @ApiQuery({
     name: 'employeeCategory',
     required: false,
@@ -74,7 +82,7 @@ export class AnalyticalAccountsController {
     },
   })
   @ApiOperation({
-    summary: 'Import accounts + movements from CSV (debtor or employee layout). '
+    summary: 'Import analytical accounts from CSV, or preview/execute an employee statement XLSX. '
       + 'Movements are append-only and deduped; re-uploading the same file is safe.',
   })
   import(
@@ -83,6 +91,15 @@ export class AnalyticalAccountsController {
     @UploadedFile() file: Express.Multer.File,
     @Req() req: Request,
   ) {
+    if (dto.layout === 'employee_statement') {
+      return this.accounts.importEmployeeStatementExcel(
+        user,
+        dto.employeeCategory,
+        file,
+        dto.dryRun !== 'false',
+        req,
+      );
+    }
     return this.accounts.importCsv(user, dto.layout, dto.employeeCategory, file, req);
   }
 }

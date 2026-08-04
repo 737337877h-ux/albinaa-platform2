@@ -35,7 +35,7 @@ export class DashboardService {
   async summary(user: AuthUser) {
     const orgId = user.organizationId;
 
-    const [totalCustomers, activeCustomers, balances, lastImport, pendingDuplicates] =
+    const [totalCustomers, activeCustomers, balances, lastImport, pendingDuplicates, advanceAccounts] =
       await Promise.all([
         this.prisma.customer.count({ where: { organizationId: orgId } }),
         this.prisma.customer.count({ where: { organizationId: orgId, status: 'active' } }),
@@ -50,6 +50,10 @@ export class DashboardService {
         }),
         this.prisma.potentialDuplicateCustomer.count({
           where: { reviewStatus: 'pending', customerA: { organizationId: orgId } },
+        }),
+        this.prisma.analyticalAccount.findMany({
+          where: { organizationId: orgId, category: 'employee_advance', status: 'active' },
+          select: { id: true, currencyCode: true },
         }),
       ]);
 
@@ -68,12 +72,30 @@ export class DashboardService {
       else byCurrency[ccy].zero += 1;
     }
 
+    const advanceSums = advanceAccounts.length
+      ? await this.prisma.analyticalMovement.groupBy({
+          by: ['accountId'],
+          where: { accountId: { in: advanceAccounts.map((account) => account.id) }, reversedAt: null },
+          _sum: { debit: true, credit: true },
+        })
+      : [];
+    const advanceMap = new Map(
+      advanceSums.map((row) => [row.accountId, Number(row._sum.debit ?? 0) - Number(row._sum.credit ?? 0)]),
+    );
+    const advanceByCurrency: Record<string, { accounts: number; balance: number }> = {};
+    for (const account of advanceAccounts) {
+      advanceByCurrency[account.currencyCode] ??= { accounts: 0, balance: 0 };
+      advanceByCurrency[account.currencyCode].accounts += 1;
+      advanceByCurrency[account.currencyCode].balance += advanceMap.get(account.id) ?? 0;
+    }
+
     return {
       customers: {
         total: totalCustomers,
         active: activeCustomers,
         withBalances: new Set(balances.map((b) => b.customerId)).size,
       },
+      advances: { accounts: advanceAccounts.length, byCurrency: advanceByCurrency },
       byCurrency,
       lastImport,
       pendingDuplicateAlerts: pendingDuplicates,

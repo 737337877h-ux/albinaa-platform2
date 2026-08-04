@@ -20,6 +20,7 @@ const hasToken = () => typeof window !== 'undefined' && !!tokenStore.access;
 
 interface DashboardSummary {
   customers: { total: number; active: number; withBalances: number };
+  advances: { accounts: number; byCurrency: Record<string, { accounts: number; balance: number }> };
   byCurrency: Record<string, { debtors: number; debtTotal: number; creditors: number; creditTotal: number; zero: number }>;
   lastImport: { id: string; fileName: string; importedAt: string } | null;
   newDebt: { perCurrency?: Record<string, { amount: number; accounts: number; newDebtors: number }> } | null;
@@ -230,6 +231,19 @@ export default function DashboardPage() {
                     <p className="text-xs text-concrete-500">إجمالي العملاء</p>
                     <p className="tnum mt-1 font-display text-2xl font-bold">{summary.data.customers.total}</p>
                     <p className="mt-1 text-xs text-concrete-500">النشطون: {summary.data.customers.active}</p>
+                  </Card>
+                </Link>
+                <Link href="/advances">
+                  <Card className="p-4 transition-colors hover:bg-pine-50/40 dark:hover:bg-white/5">
+                    <p className="text-xs text-concrete-500">إجمالي السلف</p>
+                    {Object.keys(summary.data.advances.byCurrency).length > 0 ? (
+                      <div className="mt-2 space-y-1">
+                        {Object.entries(summary.data.advances.byCurrency).map(([ccy, value]) => (
+                          <p key={ccy} className="tnum font-bold" dir="ltr">{fmtMoney(value.balance)} {ccy}</p>
+                        ))}
+                      </div>
+                    ) : <p className="mt-2 text-sm text-concrete-500">لا توجد سلف مستوردة</p>}
+                    <p className="mt-1 text-xs text-concrete-500">{summary.data.advances.accounts} حساب</p>
                   </Card>
                 </Link>
                 {Object.entries(summary.data.byCurrency).map(([ccy, v]) => (
@@ -534,8 +548,10 @@ export default function DashboardPage() {
                             </Link>
                             {t.customerCode && <p className="text-xs text-concrete-500" dir="ltr">{t.customerCode}</p>}
                           </TD>
-                          <TD className="max-w-[220px] text-xs text-concrete-600 dark:text-concrete-400">
-                            {t.priorityReason}
+                          <TD className="max-w-[240px] text-xs leading-5 text-concrete-600 dark:text-concrete-400">
+                            <span className="line-clamp-3" title={t.priorityReason}>
+                              {t.priorityReason}
+                            </span>
                           </TD>
                           <TD>
                             {t.expectedAmount != null && t.expectedCurrency ? (

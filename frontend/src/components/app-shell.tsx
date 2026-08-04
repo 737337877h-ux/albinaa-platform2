@@ -16,6 +16,7 @@ import {
 import { useMe, useCan } from '@/lib/auth';
 import { api, ApiError, tokenStore } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { brandingFromOrganization, OrganizationBrandSource } from '@/lib/branding';
 import { BrandLogo } from '@/components/brand';
 import { Breadcrumb } from '@/components/breadcrumb';
 import { UserMenu } from '@/components/user-menu';
@@ -26,6 +27,7 @@ const NAV = [
   { href: '/dashboard', label: 'لوحة التحكم', icon: LayoutDashboard, perm: 'reports.read' },
   { href: '/tasks', label: 'عمل اليوم', icon: ListTodo, perm: 'tasks.manage' },
   { href: '/customers', label: 'العملاء', icon: Users, perm: 'customers.read' },
+  { href: '/advances', label: 'السلف', icon: Banknote, perm: 'analytical_accounts.read' },
   { href: '/followups', label: 'المتابعات', icon: PhoneCall, perm: 'customers.read' },
   { href: '/promises', label: 'وعود السداد', icon: CalendarClock, perm: 'customers.read' },
   { href: '/collections', label: 'التحصيلات', icon: HandCoins, perm: 'customers.read' },
@@ -75,6 +77,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const { data: me, isLoading, isError, error, refetch, isFetching } = useMe();
   const can = useCan();
+  const organization = useQuery<OrganizationBrandSource>({
+    queryKey: ['organization'],
+    queryFn: () => api<OrganizationBrandSource>('/organizations/current'),
+    enabled: !!tokenStore.access,
+  });
+  const branding = brandingFromOrganization(organization.data);
   const navCounts = useQuery({
     queryKey: ['nav-counts'],
     queryFn: () => api<{ tasks: number; followups: number; promises: number }>('/dashboard/nav-counts'),
@@ -94,6 +102,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (!mounted) return;
     if (unauthorized) router.replace('/login');
   }, [mounted, unauthorized, router]);
+
+  useEffect(() => {
+    if (!organization.data) return;
+    document.title = `${branding.name} — ${branding.subtitle}`;
+  }, [branding.name, branding.subtitle, organization.data]);
 
   // Same tree on server and first client paint — avoids React #418/#423
   if (!mounted) return <LoadingShell />;
@@ -130,10 +143,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-surface-0 text-ink-hi lg:grid lg:grid-cols-[15rem_1fr]">
       <aside className="hidden border-l border-line bg-surface-1 text-ink-hi lg:flex lg:flex-col">
         <div className="flex items-center gap-2.5 px-5 py-5">
-          <BrandLogo className="h-7 w-7" />
+          <BrandLogo className="h-9 w-9" src={branding.logoDataUrl} name={branding.name} />
           <div>
-            <p className="font-display text-sm font-bold leading-tight">البناء الراقي</p>
-            <p className="text-[11px] text-white/60">المديونية والتحصيل</p>
+            <p className="font-display text-sm font-bold leading-tight">{branding.name}</p>
+            <p className="text-[11px] text-white/60">{branding.subtitle}</p>
           </div>
         </div>
         <nav aria-label="التنقل الرئيسي" className="flex-1 space-y-0.5 px-3">
@@ -188,8 +201,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <header className="sticky top-0 z-40 border-b border-line bg-surface-0 backdrop-blur">
           <div className="flex items-center justify-between px-4 py-3 lg:px-6">
             <div className="flex items-center gap-2 lg:hidden">
-              <BrandLogo className="h-7 w-7" />
-              <span className="font-display text-sm font-bold">البناء الراقي</span>
+              <BrandLogo className="h-8 w-8" src={branding.logoDataUrl} name={branding.name} />
+              <span className="font-display text-sm font-bold">{branding.name}</span>
             </div>
             <div className="hidden lg:block">
               <Breadcrumb />

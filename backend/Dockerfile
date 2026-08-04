@@ -31,6 +31,7 @@ RUN apk add --no-cache python3 py3-openpyxl
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=deps /app/backend/node_modules ./node_modules
 COPY --from=build /app/backend/dist ./dist
+COPY --from=build /app/backend/assets ./assets
 COPY --from=build /app/backend/node_modules/.prisma ./node_modules/.prisma
 COPY prisma/ ./prisma/
 COPY backend/parser/ ./parser/

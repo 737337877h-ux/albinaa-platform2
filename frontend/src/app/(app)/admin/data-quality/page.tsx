@@ -54,6 +54,7 @@ export default function DataQualityPage() {
   const can = useCan();
   const canView = can('duplicates.review');
   const canMerge = can('duplicates.merge');
+  const canLink = can('customers.write');
   const qc = useQueryClient();
   const [mergeChoice, setMergeChoice] = useState<{ pair: DuplicatePair; masterId: string } | null>(null);
   const [mergeConfirm, setMergeConfirm] = useState('');
@@ -88,6 +89,36 @@ export default function DataQualityPage() {
       toast('تم تسجيل المراجعة', 'ok');
       qc.invalidateQueries({ queryKey: ['data-quality-duplicates'] });
       qc.invalidateQueries({ queryKey: ['data-quality-summary'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const linkMut = useMutation({
+    mutationFn: async ({ pairId, primaryId, childId }: { pairId: string; primaryId: string; childId: string }) => {
+      await api(`/customers/${primaryId}/account-group/children`, {
+        method: 'POST',
+        body: JSON.stringify({ childCustomerId: childId }),
+      });
+      try {
+        await api(`/customers/duplicates/${pairId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ decision: 'rejected_intentional' }),
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    onSuccess: (reviewed) => {
+      toast(
+        reviewed
+          ? 'تم ربط الحساب الفرعي مع إبقاء السجلين والحركات كما هي'
+          : 'تم ربط الحساب، وبقي قرار التشابه بحاجة إلى مراجعة',
+        'ok',
+      );
+      qc.invalidateQueries({ queryKey: ['data-quality-duplicates'] });
+      qc.invalidateQueries({ queryKey: ['data-quality-summary'] });
+      qc.invalidateQueries({ queryKey: ['customers'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
   });
@@ -203,6 +234,26 @@ export default function DataQualityPage() {
                   </TD>
                   <TD>
                     <div className="flex min-w-[170px] flex-col gap-2">
+                      {canLink && (
+                        <>
+                          <Button
+                            className="text-xs"
+                            variant="secondary"
+                            loading={linkMut.isPending}
+                            onClick={() => linkMut.mutate({ pairId: p.id, primaryId: p.customerA.id, childId: p.customerB.id })}
+                          >
+                            ربط — الأول رئيسي
+                          </Button>
+                          <Button
+                            className="text-xs"
+                            variant="secondary"
+                            loading={linkMut.isPending}
+                            onClick={() => linkMut.mutate({ pairId: p.id, primaryId: p.customerB.id, childId: p.customerA.id })}
+                          >
+                            ربط — الثاني رئيسي
+                          </Button>
+                        </>
+                      )}
                       {canMerge && (
                         <>
                           <Button className="text-xs" onClick={() => setMergeChoice({ pair: p, masterId: p.customerA.id })}>

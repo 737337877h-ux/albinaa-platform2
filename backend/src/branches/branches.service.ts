@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
+import { BRANDING_KEYS } from '../common/branding';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBranchDto } from './dto/create-branch.dto';
@@ -18,6 +19,10 @@ export class BranchesService {
       where: { id: orgId },
       select: {
         id: true, name: true, createdAt: true,
+        systemSettings: {
+          where: { key: { in: [...BRANDING_KEYS] } },
+          select: { key: true, value: true },
+        },
         _count: { select: { branches: true, users: true, customers: true } },
       },
     });

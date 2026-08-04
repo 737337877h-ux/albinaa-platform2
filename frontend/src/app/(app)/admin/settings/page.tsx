@@ -1,11 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Save, RotateCcw, Trash2 } from 'lucide-react';
+import { ImageIcon, Plus, Save, RotateCcw, Trash2, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/app-shell';
+import { BrandLogo } from '@/components/brand';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { toast } from '@/components/ui/toast';
 import { Button, Card, Input, Select, Textarea } from '@/components/ui/primitives';
@@ -22,7 +23,7 @@ interface SettingDef {
   key: string;
   label: string;
   description: string;
-  type: 'number' | 'boolean' | 'string';
+  type: 'number' | 'boolean' | 'string' | 'textarea';
   defaultValue: string;
 }
 
@@ -34,6 +35,53 @@ interface SettingsGroup {
 /* ────────────────────────── Setting Definitions ───────────────────────── */
 
 const GROUPS: SettingsGroup[] = [
+  {
+    title: 'هوية النظام وترويسة كشوف الحسابات',
+    items: [
+      {
+        key: 'branding.name',
+        label: 'اسم المنشأة الظاهر',
+        description: 'يظهر في القائمة الرئيسية وعنوان المتصفح وترويسة كشف الحساب.',
+        type: 'string',
+        defaultValue: 'البناء الراقي',
+      },
+      {
+        key: 'branding.subtitle',
+        label: 'العنوان التعريفي',
+        description: 'وصف مختصر يظهر أسفل اسم المنشأة وفي الترويسة.',
+        type: 'string',
+        defaultValue: 'المديونية والتحصيل',
+      },
+      {
+        key: 'branding.address',
+        label: 'العنوان',
+        description: 'عنوان المنشأة المطبوع في كشوف الحسابات.',
+        type: 'string',
+        defaultValue: 'صنعاء - الجمهورية اليمنية',
+      },
+      {
+        key: 'branding.phone',
+        label: 'الهاتف',
+        description: 'رقم التواصل المطبوع في ترويسة كشف الحساب.',
+        type: 'string',
+        defaultValue: '',
+      },
+      {
+        key: 'branding.statementTitle',
+        label: 'عنوان كشف الحساب',
+        description: 'العنوان الرئيسي المستخدم في القالب الرسمي والكلاسيكي.',
+        type: 'string',
+        defaultValue: 'كشف حساب',
+      },
+      {
+        key: 'branding.statementFooter',
+        label: 'نص تذييل كشف الحساب',
+        description: 'الملاحظة القانونية أو الإدارية المطبوعة أسفل الكشف.',
+        type: 'textarea',
+        defaultValue: 'يعتبر هذا الكشف صحيحًا ما لم يصلنا اعتراض خطي خلال خمسة عشر يومًا من تاريخه، مع الشكر.',
+      },
+    ],
+  },
   {
     title: 'المهام الذكية والأولويات',
     items: [
@@ -223,6 +271,7 @@ export default function SettingsPage() {
         return next;
       });
       qc.invalidateQueries({ queryKey: ['settings'] });
+      if (key.startsWith('branding.')) qc.invalidateQueries({ queryKey: ['organization'] });
     },
     onError: (err: Error, { key }) => {
       toast(err.message, 'err');
@@ -308,12 +357,19 @@ export default function SettingsPage() {
                               dir="ltr"
                               disabled={saving}
                             />
+                          ) : def.type === 'textarea' ? (
+                            <Textarea
+                              value={currentVal}
+                              onChange={(e) => updateValue(def.key, e.target.value)}
+                              className="min-h-20 w-full sm:w-96"
+                              disabled={saving}
+                            />
                           ) : (
                             <Input
                               type="text"
                               value={currentVal}
                               onChange={(e) => updateValue(def.key, e.target.value)}
-                              className="w-40"
+                              className={def.key.startsWith('branding.') ? 'w-full sm:w-72' : 'w-40'}
                               disabled={saving}
                             />
                           )}
@@ -360,10 +416,75 @@ export default function SettingsPage() {
               </Card>
             );
           })}
+          <BrandingLogoSettings initial={query.data?.find((s) => s.key === 'branding.logoDataUrl')?.value} />
           <MessageTemplatesSettings initial={query.data?.find((s) => s.key === 'communication.templates')?.value} />
         </div>
       </DataState>
     </div>
+  );
+}
+
+function BrandingLogoSettings({ initial }: { initial: unknown }) {
+  const qc = useQueryClient();
+  const [logo, setLogo] = useState(typeof initial === 'string' ? initial : '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setLogo(typeof initial === 'string' ? initial : ''), [initial]);
+
+  const chooseLogo = (file?: File) => {
+    if (!file) return;
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      toast('اختر صورة PNG أو JPEG', 'err');
+      return;
+    }
+    if (file.size > 512 * 1024) {
+      toast('حجم الشعار يجب ألا يتجاوز 512 كيلوبايت', 'err');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setLogo(typeof reader.result === 'string' ? reader.result : '');
+    reader.readAsDataURL(file);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api('/settings/branding.logoDataUrl', {
+        method: 'PUT',
+        body: JSON.stringify({ key: 'branding.logoDataUrl', value: logo }),
+      });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['settings'] }),
+        qc.invalidateQueries({ queryKey: ['organization'] }),
+      ]);
+      toast(logo ? 'تم حفظ الشعار' : 'تمت إزالة الشعار المخصص', 'ok');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'تعذر حفظ الشعار', 'err');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <div className="border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+        <h3 className="font-display text-sm font-semibold">الشعار</h3>
+        <p className="mt-1 text-xs text-concrete-500">يظهر في الصفحة الرئيسية وترويسة كشوف الحسابات. PNG أو JPEG حتى 512 كيلوبايت.</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-4 p-4">
+        <div className="flex h-24 w-32 items-center justify-center overflow-hidden rounded-xl border border-concrete-100 bg-white p-2 dark:border-white/10">
+          {logo ? <BrandLogo src={logo} name="المعاينة" className="max-h-full max-w-full object-contain" /> : <ImageIcon className="h-9 w-9 text-concrete-300" />}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border border-concrete-200 px-3 py-2 text-sm font-medium hover:bg-concrete-50 dark:border-white/10 dark:hover:bg-white/5">
+            <Upload className="h-4 w-4" /> اختيار شعار
+            <input className="sr-only" type="file" accept="image/png,image/jpeg" onChange={(event) => chooseLogo(event.target.files?.[0])} />
+          </label>
+          {logo && <Button variant="secondary" onClick={() => setLogo('')}><Trash2 className="h-4 w-4" /> إزالة</Button>}
+          <Button onClick={save} loading={saving}><Save className="h-4 w-4" /> حفظ الشعار</Button>
+        </div>
+      </div>
+    </Card>
   );
 }
 

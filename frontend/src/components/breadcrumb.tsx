@@ -7,6 +7,7 @@ import { ChevronLeft } from 'lucide-react';
 const LABELS: Record<string, string> = {
   dashboard: 'لوحة التحكم',
   customers: 'العملاء',
+  advances: 'السلف',
   followups: 'المتابعات',
   promises: 'وعود السداد',
   collections: 'التحصيلات',
