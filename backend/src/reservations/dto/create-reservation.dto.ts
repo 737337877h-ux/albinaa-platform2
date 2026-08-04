@@ -48,6 +48,10 @@ export class CreateReservationDto {
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string;
 
+  @ApiPropertyOptional({ description: 'سبب تجاوز سقف الائتمان، ويتطلب صلاحية credit.override' })
+  @IsOptional() @IsString() @MaxLength(500)
+  overrideReason?: string;
+
   @ApiPropertyOptional()
   @IsOptional() @IsDateString()
   expiresAt?: string;

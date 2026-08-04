@@ -17,6 +17,7 @@ import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
+import { UpdateCreditLimitDto } from './dto/update-credit-limit.dto';
 import { CustomersService } from './customers.service';
 
 @ApiTags('Customers')
@@ -110,6 +111,19 @@ export class CustomersController {
     @Req() req: Request,
   ) {
     return this.customers.updateCreditPolicy(user, id, dto, req);
+  }
+
+  @Patch(':id/credit-limits/:currency')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'اعتماد سقف ائتمان مستقل لعملة محددة مع تاريخ السريان' })
+  updateCreditLimit(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('currency') currency: string,
+    @Body() dto: UpdateCreditLimitDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.updateCreditLimit(user, id, currency.toUpperCase(), dto, req);
   }
 
   @Get(':id/timeline')

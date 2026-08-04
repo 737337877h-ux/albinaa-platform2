@@ -78,6 +78,9 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
     { code: 'reports.read', label: 'عرض التقارير' },
     { code: 'reports.export', label: 'تصدير التقارير' },
   ]},
+  { label: 'الائتمان', prefix: 'credit.', items: [
+    { code: 'credit.override', label: 'تجاوز سقف الائتمان بسبب موثق' },
+  ]},
   { label: 'المستخدمون', prefix: 'users.', items: [
     { code: 'users.manage', label: 'إدارة المستخدمين' },
   ]},

@@ -142,6 +142,7 @@ async function main() {
     ['reservations.deliver', 'تسليم حجوزات البضاعة'],
     ['reservations.cancel', 'إلغاء حجوزات البضاعة'],
     ['reservations.extend', 'تمديد حجوزات البضاعة'],
+    ['credit.override', 'تجاوز سقف الائتمان بسبب موثق'],
     ['analytical_accounts.manage', 'إدارة الحسابات التحليلية'],
     ['analytical_accounts.read', 'عرض الحسابات التحليلية'],
   ];
@@ -159,6 +160,7 @@ async function main() {
       'promises.create', 'tasks.manage', 'reports.read', 'reports.export', 'duplicates.review', 'duplicates.merge',
       'risk.read', 'risk.recalculate', 'reservations.manage', 'reservations.read',
       'reservations.create', 'reservations.deliver', 'reservations.cancel', 'reservations.extend',
+      'credit.override',
       'analytical_accounts.manage', 'analytical_accounts.read',
     ],
     'المحصل': [

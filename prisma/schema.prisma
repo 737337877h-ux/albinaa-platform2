@@ -89,6 +89,7 @@ model User {
   rolesGranted              UserRole[]                   @relation("RoleGranter")
   assignmentsMade           CustomerAssignment[]         @relation("AssignmentMaker")
   creditDecisions           CustomerCreditPolicy[]       @relation("CreditDecider")
+  creditLimitApprovals      CustomerCreditLimit[]        @relation("CreditLimitApprover")
   duplicateReviews          PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
   customerMergesCreated     CustomerMerge[]              @relation("CustomerMergeCreator")
   customerMergesReversed    CustomerMerge[]              @relation("CustomerMergeReverser")
@@ -198,7 +199,8 @@ model Currency {
   reservations        Reservation[]
   tasksExpected       Task[]
   followupsExpected   Followup[]
-  creditLimits        CustomerCreditPolicy[]
+  creditPolicies      CustomerCreditPolicy[]
+  customerCreditLimits CustomerCreditLimit[]
   balanceSnapshots    BalanceSnapshot[]
   agingRows           DebtAgingSummary[]
   agingDocuments      DebtAgingDetail[]
@@ -260,6 +262,7 @@ model Customer {
 
   balances                CustomerBalance[]
   creditPolicy            CustomerCreditPolicy?
+  creditLimits            CustomerCreditLimit[]
   assignments             CustomerAssignment[]
   importedTxns            ImportedTransaction[]
   balanceSnapshots        BalanceSnapshot[]
@@ -373,6 +376,25 @@ model CustomerCreditPolicy {
   decider  User?     @relation("CreditDecider", fields: [decidedBy], references: [id])
 
   @@map("customer_credit_policies")
+}
+
+model CustomerCreditLimit {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId    String   @map("customer_id") @db.Uuid
+  currencyCode  String   @map("currency_code")
+  amount        Decimal  @db.Decimal(18, 4)
+  effectiveFrom DateTime @default(dbgenerated("CURRENT_DATE")) @map("effective_from") @db.Date
+  approvedBy    String   @map("approved_by") @db.Uuid
+  approvedAt    DateTime @default(now()) @map("approved_at") @db.Timestamptz()
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  currency Currency @relation(fields: [currencyCode], references: [code])
+  approver User     @relation("CreditLimitApprover", fields: [approvedBy], references: [id])
+
+  @@unique([customerId, currencyCode], map: "uq_customer_credit_limit_currency")
+  @@index([currencyCode, amount], map: "idx_credit_limits_currency_amount")
+  @@map("customer_credit_limits")
 }
 
 model PotentialDuplicateCustomer {

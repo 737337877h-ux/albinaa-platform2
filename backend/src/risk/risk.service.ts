@@ -193,9 +193,9 @@ export class RiskService {
         where: { customer: { organizationId: orgId }, credit: { gt: 0 }, reversedAt: null },
         select: { customerId: true, currencyCode: true, txDate: true },
       }),
-      this.prisma.customerCreditPolicy.findMany({
-        where: { customer: { organizationId: orgId }, creditLimitAmount: { not: null } },
-        select: { customerId: true, creditLimitAmount: true, creditLimitCurrency: true },
+      this.prisma.customerCreditLimit.findMany({
+        where: { customer: { organizationId: orgId }, effectiveFrom: { lte: today } },
+        select: { customerId: true, amount: true, currencyCode: true },
       }),
     ]);
 
@@ -270,13 +270,8 @@ export class RiskService {
       percentileByKey.set(key, sorted.length > 0 ? (lower / sorted.length) * 100 : 0);
     }
     const creditLimitByKey = new Map<string, number>();
-    for (const policy of creditPolicies) {
-      if (policy.creditLimitCurrency && policy.creditLimitAmount != null) {
-        creditLimitByKey.set(
-          `${policy.customerId}|${policy.creditLimitCurrency}`,
-          Number(policy.creditLimitAmount),
-        );
-      }
+    for (const limit of creditPolicies) {
+      creditLimitByKey.set(`${limit.customerId}|${limit.currencyCode}`, Number(limit.amount));
     }
 
     const currenciesOf = new Map<string, Set<string>>();

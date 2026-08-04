@@ -25,6 +25,7 @@ export async function cleanupTestCustomers(prisma: PrismaService) {
       where: { OR: [{ masterCustomerId: { in: ids } }, { sourceCustomerId: { in: ids } }] },
     });
     await prisma.balanceSnapshot.deleteMany({ where: { customerId: { in: ids } } });
+    await prisma.agingSnapshot.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.importedTransaction.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customerBalance.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.potentialDuplicateCustomer.deleteMany({
@@ -48,6 +49,7 @@ export async function cleanupTestCustomers(prisma: PrismaService) {
     await prisma.balanceReconciliation.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customerAssignment.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customerCreditPolicy.deleteMany({ where: { customerId: { in: ids } } });
+    await prisma.customerCreditLimit.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customer.deleteMany({ where: { id: { in: ids } } });
     // لا نحذف كل import_jobs (قد تشير لها أرصدة عملاء حقيقيين في بيئة تطوير مشتركة) —
     // نحذف فقط الوظائف غير المرتبطة بأي بيانات بعد تنظيف عملاء الاختبار

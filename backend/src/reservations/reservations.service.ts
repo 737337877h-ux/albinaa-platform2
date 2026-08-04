@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
@@ -172,6 +172,48 @@ export class ReservationsService {
     const totalAmount = dto.quantity * dto.unitPrice;
     const unit = await this.resolveUnit(dto.unitId, dto.unit);
 
+    const [balance, limit, policy, activeReservations] = await Promise.all([
+      this.prisma.customerBalance.findUnique({
+        where: { customerId_currencyCode: { customerId: dto.customerId, currencyCode: dto.currencyCode } },
+        include: { lastImportJob: { select: { importedAt: true } } },
+      }),
+      this.prisma.customerCreditLimit.findUnique({
+        where: { customerId_currencyCode: { customerId: dto.customerId, currencyCode: dto.currencyCode } },
+      }),
+      this.prisma.customerCreditPolicy.findUnique({ where: { customerId: dto.customerId } }),
+      this.prisma.reservation.findMany({
+        where: { customerId: dto.customerId, currencyCode: dto.currencyCode, status: { in: ['open', 'partial'] } },
+        select: { remainingQty: true, quantity: true, unitPrice: true },
+      }),
+    ]);
+    let ledgerDelta = 0;
+    if (balance) {
+      const ledger = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: dto.customerId, currencyCode: dto.currencyCode,
+          ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
+        },
+      });
+      ledgerDelta = Number(ledger._sum.amountSigned ?? 0);
+    }
+    const currentDebt = Math.max(0, Number(balance?.accountingBalance ?? 0) + ledgerDelta);
+    const reservedExposure = activeReservations.reduce((sum, row) =>
+      sum + Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.unitPrice ?? 0), 0);
+    const projectedExposure = currentDebt + reservedExposure + totalAmount;
+    const limitAmount = limit && limit.effectiveFrom <= new Date() ? Number(limit.amount) : null;
+    const restricted = policy?.creditStatus === 'restricted' || policy?.creditStatus === 'blocked';
+    const exceedsLimit = limitAmount !== null && projectedExposure > limitAmount;
+    const overrideUsed = restricted || exceedsLimit;
+    if (overrideUsed && !actor.permissions.includes('credit.override')) {
+      throw new ForbiddenException(restricted
+        ? 'الحساب الائتماني مقيّد؛ يلزم تفويض تجاوز موثق'
+        : `الحجز يرفع التعرض إلى ${projectedExposure} ${dto.currencyCode} متجاوزًا السقف ${limitAmount}`);
+    }
+    if (overrideUsed && !dto.overrideReason?.trim()) {
+      throw new BadRequestException('سبب تجاوز سقف الائتمان إلزامي');
+    }
+
     const reservation = await this.prisma.reservation.create({
       data: {
         customerId: dto.customerId,
@@ -200,7 +242,9 @@ export class ReservationsService {
       newValue: {
         customerId: dto.customerId, itemName: dto.itemName, quantity: dto.quantity,
         unitId: unit.id, unit: unit.nameAr, unitPrice: dto.unitPrice, totalAmount, currencyCode: dto.currencyCode,
+        creditControl: { currentDebt, reservedExposure, projectedExposure, limitAmount, overrideUsed },
       },
+      reason: overrideUsed ? dto.overrideReason : undefined,
       req,
     });
     this.invalidateSummary(actor.organizationId);

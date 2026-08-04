@@ -13,6 +13,7 @@ import { QueryCustomersDto } from './dto/query-customers.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
+import { UpdateCreditLimitDto } from './dto/update-credit-limit.dto';
 import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
 
@@ -215,6 +216,7 @@ export class CustomersService {
       include: {
         branch: { select: { id: true, name: true } },
         creditPolicy: true,
+        creditLimits: { include: { approver: { select: { fullName: true } } }, orderBy: { currencyCode: 'asc' } },
         balances: { include: { lastImportJob: { select: { id: true, importedAt: true, fileName: true } } } },
         assignments: {
           orderBy: { effectiveFrom: 'desc' },
@@ -269,6 +271,18 @@ export class CustomersService {
       assignmentHistoryCount: c.assignments.length,
       // السياسة الائتمانية والمخاطر
       creditPolicy: c.creditPolicy,
+      creditLimits: c.creditLimits.map((limit) => {
+        const balance = c.balances.find((item) => item.currencyCode === limit.currencyCode);
+        const used = Math.max(0, Number(balance?.accountingBalance ?? 0));
+        const amount = Number(limit.amount);
+        return {
+          ...limit,
+          amount,
+          used,
+          available: Math.max(0, amount - used),
+          usagePercent: amount > 0 ? (used / amount) * 100 : used > 0 ? 100 : 0,
+        };
+      }),
       latestScore: c.scores[0] ?? null,
       pendingDuplicateAlerts: c.duplicatesAsA.length + c.duplicatesAsB.length,
       // عدادات النشاط (المتابعات/الوعود/التحصيل تُفعَّل في مراحلها)
@@ -791,6 +805,13 @@ export class CustomersService {
         decidedAt: new Date(),
       },
     });
+    if (amount != null && currencyCode) {
+      await this.prisma.customerCreditLimit.upsert({
+        where: { customerId_currencyCode: { customerId: id, currencyCode } },
+        update: { amount, approvedBy: actor.id, approvedAt: new Date() },
+        create: { customerId: id, currencyCode, amount, approvedBy: actor.id },
+      });
+    }
     await this.audit.log({
       userId: actor.id,
       action: 'credit_policy_updated',
@@ -802,6 +823,31 @@ export class CustomersService {
     });
     await this.riskRefresh?.trigger(actor, [id], 'credit_policy_changed', req);
     return policy;
+  }
+
+  async updateCreditLimit(
+    actor: AuthUser, id: string, currencyCode: string, dto: UpdateCreditLimitDto, req?: Request,
+  ) {
+    await this.assertAccess(actor, id);
+    const currency = await this.prisma.currency.findFirst({ where: { code: currencyCode, active: true } });
+    if (!currency) throw new BadRequestException('عملة سقف الائتمان غير معروفة أو معطلة');
+    const effectiveFrom = dto.effectiveFrom ? new Date(dto.effectiveFrom) : new Date();
+    const before = await this.prisma.customerCreditLimit.findUnique({
+      where: { customerId_currencyCode: { customerId: id, currencyCode } },
+    });
+    const limit = await this.prisma.customerCreditLimit.upsert({
+      where: { customerId_currencyCode: { customerId: id, currencyCode } },
+      update: { amount: dto.amount, effectiveFrom, approvedBy: actor.id, approvedAt: new Date() },
+      create: { customerId: id, currencyCode, amount: dto.amount, effectiveFrom, approvedBy: actor.id },
+      include: { approver: { select: { fullName: true } } },
+    });
+    await this.audit.log({
+      userId: actor.id, action: 'credit_limit_approved', entityTable: 'customer_credit_limits',
+      entityId: limit.id, oldValue: before ? JSON.parse(JSON.stringify(before)) : null,
+      newValue: JSON.parse(JSON.stringify(limit)), reason: dto.reason ?? null, req,
+    });
+    await this.riskRefresh?.trigger(actor, [id], 'credit_policy_changed', req);
+    return limit;
   }
 
   async listMerges(actor: AuthUser) {
@@ -906,11 +952,11 @@ export class CustomersService {
       const [master, source] = await Promise.all([
         tx.customer.findFirst({
           where: { id: dto.masterCustomerId, organizationId: actor.organizationId },
-          include: { balances: true, creditPolicy: true },
+          include: { balances: true, creditPolicy: true, creditLimits: true },
         }),
         tx.customer.findFirst({
           where: { id: sourceCustomerId, organizationId: actor.organizationId },
-          include: { balances: true, creditPolicy: true },
+          include: { balances: true, creditPolicy: true, creditLimits: true },
         }),
       ]);
       if (!master || !source) throw new NotFoundException('أحد سجلي العميل غير موجود');
@@ -919,6 +965,10 @@ export class CustomersService {
       }
       if (master.creditPolicy && source.creditPolicy) {
         throw new ConflictException('لكلا العميلين سياسة ائتمانية. راجع السياسة واختر واحدة قبل الدمج');
+      }
+      const masterLimitCurrencies = new Set(master.creditLimits.map((limit) => limit.currencyCode));
+      if (source.creditLimits.some((limit) => masterLimitCurrencies.has(limit.currencyCode))) {
+        throw new ConflictException('يوجد سقف ائتمان للعملة نفسها لدى العميلين؛ راجع الحدود قبل الدمج');
       }
 
       const sourceReconciliations = await tx.balanceReconciliation.findMany({
@@ -973,6 +1023,7 @@ export class CustomersService {
         followups: ids(followups), promises: ids(promises), tasks: ids(tasks), reservations: ids(reservations),
         scores: ids(scores), agingRows: ids(agingRows), agingDocuments: ids(agingDocuments),
         assignments: ids(assignments), attachments: ids(attachments), gpsLogs: ids(gpsLogs),
+        creditLimits: ids(source.creditLimits),
       };
 
       const masterBalanceBefore = master.balances.map((b) => ({
@@ -1065,6 +1116,7 @@ export class CustomersService {
       await move(tx.debtAgingSummary, movedIds.agingRows);
       await move(tx.debtAgingDetail, movedIds.agingDocuments);
       await move(tx.customerAssignment, movedIds.assignments);
+      await move(tx.customerCreditLimit, movedIds.creditLimits);
       if (movedIds.attachments.length) {
         await tx.attachment.updateMany({ where: { id: { in: movedIds.attachments } }, data: { entityId: master.id } });
       }
@@ -1084,6 +1136,7 @@ export class CustomersService {
         sourceBefore: { status: source.status, mergedIntoId: source.mergedIntoId, mergedAt: source.mergedAt },
         movedIds, movedBalanceIds, masterBalanceBefore, mergedBalanceExpected, movedCreditPolicy,
         ledgerTransferByCurrency, movedCreditPolicyExpected,
+        movedCreditLimitsExpected: source.creditLimits.map((limit) => ({ ...limit, customerId: master.id })),
         sourceOpenAssignmentId: masterOpenAssignment ? sourceOpenAssignment?.id ?? null : null,
         duplicatePairIds: ids(duplicatePairs),
       })) as Prisma.InputJsonValue;
@@ -1171,6 +1224,12 @@ export class CustomersService {
           throw new ConflictException('تغيرت السياسة الائتمانية بعد الدمج؛ أوقف التراجع وراجعها يدويًا');
         }
       }
+      for (const expected of payload.movedCreditLimitsExpected ?? []) {
+        const current = await tx.customerCreditLimit.findUnique({ where: { id: expected.id } });
+        if (JSON.stringify(current) !== JSON.stringify(expected)) {
+          throw new ConflictException('تغيّر سقف الائتمان بعد الدمج؛ أوقف التراجع وراجعه يدويًا');
+        }
+      }
 
       const moved = payload.movedIds as Record<string, string[]>;
       const restore = async (model: any, rowIds: string[] = []) => {
@@ -1188,6 +1247,7 @@ export class CustomersService {
       await restore(tx.debtAgingSummary, moved.agingRows);
       await restore(tx.debtAgingDetail, moved.agingDocuments);
       await restore(tx.customerAssignment, moved.assignments);
+      await restore(tx.customerCreditLimit, moved.creditLimits);
       if (payload.sourceOpenAssignmentId) {
         await tx.customerAssignment.update({ where: { id: payload.sourceOpenAssignmentId }, data: { effectiveTo: null } });
       }

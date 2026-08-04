@@ -53,6 +53,7 @@ interface Customer360 {
   } | null;
   assignmentHistoryCount: number;
   creditPolicy: CreditPolicy | null;
+  creditLimits: CreditLimit[];
   latestScore: Record<string, unknown> | null;
   pendingDuplicateAlerts: number;
   counts: {
@@ -180,6 +181,18 @@ interface CreditPolicy {
   restrictionReason: string | null;
 }
 
+interface CreditLimit {
+  id: string;
+  currencyCode: string;
+  amount: number;
+  effectiveFrom: string;
+  approvedAt: string;
+  approver: { fullName: string };
+  used: number;
+  available: number;
+  usagePercent: number;
+}
+
 interface ReservationUnit {
   id: string;
   code: string;
@@ -296,6 +309,7 @@ export default function Customer360Page() {
   const canReservationsCreate = can('reservations.create');
   const canReservationsDeliver = can('reservations.deliver');
   const canReservationsCancel = can('reservations.cancel');
+  const canCreditOverride = can('credit.override');
   const qc = useQueryClient();
 
   const [tab, setTab] = useState(searchParams.get('tab') ?? 'overview');
@@ -332,35 +346,54 @@ export default function Customer360Page() {
     defaultPaymentDays: '',
     creditLimitAmount: '',
     creditLimitCurrency: 'YER',
+    effectiveFrom: new Date().toISOString().slice(0, 10),
+    limitReason: '',
     creditStatus: 'open',
     restrictionReason: '',
   });
   const openCreditPolicy = () => {
     const policy = customer.data?.creditPolicy;
+    const selectedLimit = customer.data?.creditLimits[0];
     setCreditForm({
       allowCreditSale: policy?.allowCreditSale ?? false,
       allowPurchaseWithDebt: policy?.allowPurchaseWithDebt ?? false,
       defaultPaymentDays: policy?.defaultPaymentDays == null ? '' : String(policy.defaultPaymentDays),
-      creditLimitAmount: policy?.creditLimitAmount == null ? '' : String(policy.creditLimitAmount),
-      creditLimitCurrency: policy?.creditLimitCurrency ?? 'YER',
+      creditLimitAmount: selectedLimit ? String(selectedLimit.amount) : '',
+      creditLimitCurrency: selectedLimit?.currencyCode ?? customer.data?.balances[0]?.currency ?? 'YER',
+      effectiveFrom: selectedLimit?.effectiveFrom?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+      limitReason: '',
       creditStatus: policy?.creditStatus ?? 'open',
       restrictionReason: policy?.restrictionReason ?? '',
     });
     setCreditOpen(true);
   };
+  const selectCreditCurrency = (currencyCode: string) => {
+    const limit = customer.data?.creditLimits.find((item) => item.currencyCode === currencyCode);
+    setCreditForm((value) => ({
+      ...value, creditLimitCurrency: currencyCode,
+      creditLimitAmount: limit ? String(limit.amount) : '',
+      effectiveFrom: limit?.effectiveFrom?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+      limitReason: '',
+    }));
+  };
   const creditMut = useMutation({
-    mutationFn: () => api(`/customers/${id}/credit-policy`, {
-      method: 'PATCH',
-      body: JSON.stringify({
+    mutationFn: async () => {
+      await api(`/customers/${id}/credit-policy`, { method: 'PATCH', body: JSON.stringify({
         allowCreditSale: creditForm.allowCreditSale,
         allowPurchaseWithDebt: creditForm.allowPurchaseWithDebt,
         defaultPaymentDays: creditForm.defaultPaymentDays === '' ? null : Number(creditForm.defaultPaymentDays),
-        creditLimitAmount: creditForm.creditLimitAmount === '' ? null : Number(creditForm.creditLimitAmount),
-        creditLimitCurrency: creditForm.creditLimitAmount === '' ? null : creditForm.creditLimitCurrency,
         creditStatus: creditForm.creditStatus,
         restrictionReason: creditForm.restrictionReason.trim() || null,
-      }),
-    }),
+      }) });
+      if (creditForm.creditLimitAmount !== '') {
+        await api(`/customers/${id}/credit-limits/${creditForm.creditLimitCurrency}`, {
+          method: 'PATCH', body: JSON.stringify({
+            amount: Number(creditForm.creditLimitAmount), effectiveFrom: creditForm.effectiveFrom,
+            reason: creditForm.limitReason.trim() || undefined,
+          }),
+        });
+      }
+    },
     onSuccess: () => {
       toast('تم تحديث سياسة الائتمان ودرجة المخاطر', 'ok');
       setCreditOpen(false);
@@ -469,6 +502,7 @@ export default function Customer360Page() {
   const [resForm, setResForm] = useState({
     itemName: '', itemType: '', quantity: '', unitId: '', unitPrice: '',
     currencyCode: 'YER', warehouse: '', documentNumber: '', notes: '', expiresAt: '',
+    overrideReason: '',
   });
   const resFormValid = resForm.itemName.trim() !== '' && resForm.unitId !== ''
     && Number(resForm.quantity) > 0 && Number(resForm.unitPrice) > 0;
@@ -737,16 +771,24 @@ export default function Customer360Page() {
                           <span>الحالة: {c.creditPolicy.creditStatus === 'blocked' ? 'محظور' : c.creditPolicy.creditStatus === 'restricted' ? 'مقيّد' : 'مفتوح'}</span>
                           <span>البيع الآجل: {c.creditPolicy.allowCreditSale ? 'مسموح' : 'غير مسموح'}</span>
                           <span>أيام السداد: {c.creditPolicy.defaultPaymentDays ?? '—'}</span>
-                          <span>
-                            حد الائتمان:{' '}
-                            {c.creditPolicy.creditLimitAmount == null
-                              ? 'غير محدد'
-                              : <Money value={Number(c.creditPolicy.creditLimitAmount)} currency={c.creditPolicy.creditLimitCurrency ?? undefined} />}
-                          </span>
                         </div>
                       ) : (
                         <p className="mt-2 text-sm text-concrete-500">لم تُحدد سياسة ائتمانية لهذا العميل.</p>
                       )}
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {c.creditLimits.map((limit) => {
+                          const pct = Math.max(0, limit.usagePercent);
+                          const tone = pct > 100 ? 'bg-red-600 shadow-[0_0_12px_rgba(220,38,38,.9)] animate-pulse'
+                            : pct >= 90 ? 'bg-debt-600' : pct >= 70 ? 'bg-hazard-500' : 'bg-credit-600';
+                          return <div key={limit.id} className="rounded-lg border border-concrete-100 p-3 dark:border-white/10">
+                            <div className="flex items-center justify-between text-xs"><span className="font-bold">{limit.currencyCode}</span><span className="tnum">{fmtMoney(pct)}%</span></div>
+                            <div className="mt-2 h-2 overflow-hidden rounded-full bg-concrete-100 dark:bg-white/10"><div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.min(100, pct)}%` }} /></div>
+                            <div className="mt-2 flex justify-between text-xs text-concrete-500"><span>المستخدم {fmtMoney(limit.used)}</span><span>السقف {fmtMoney(limit.amount)}</span></div>
+                            <p className="mt-1 text-[11px] text-concrete-400">ساري من {fmtDate(limit.effectiveFrom)} • {limit.approver.fullName}</p>
+                          </div>;
+                        })}
+                        {!c.creditLimits.length && <p className="text-sm text-concrete-500">لا توجد حدود ائتمان معتمدة حسب العملة.</p>}
+                      </div>
                     </div>
                     {canWrite && <Button variant="secondary" onClick={openCreditPolicy}>تعديل السياسة</Button>}
                   </div>
@@ -766,9 +808,15 @@ export default function Customer360Page() {
                       <Input type="number" min="0" value={creditForm.creditLimitAmount} onChange={(e) => setCreditForm((v) => ({ ...v, creditLimitAmount: e.target.value }))} />
                     </Field>
                     <Field label="عملة الحد">
-                      <Select value={creditForm.creditLimitCurrency} onChange={(e) => setCreditForm((v) => ({ ...v, creditLimitCurrency: e.target.value }))}>
+                      <Select value={creditForm.creditLimitCurrency} onChange={(e) => selectCreditCurrency(e.target.value)}>
                         <option value="YER">ريال يمني</option><option value="SAR">ريال سعودي</option><option value="USD">دولار</option>
                       </Select>
+                    </Field>
+                    <Field label="تاريخ سريان الحد">
+                      <Input type="date" value={creditForm.effectiveFrom} onChange={(e) => setCreditForm((v) => ({ ...v, effectiveFrom: e.target.value }))} />
+                    </Field>
+                    <Field label="سبب اعتماد أو تغيير الحد">
+                      <Input value={creditForm.limitReason} onChange={(e) => setCreditForm((v) => ({ ...v, limitReason: e.target.value }))} />
                     </Field>
                     <Field label="أيام السداد الافتراضية">
                       <Input type="number" min="0" max="3650" value={creditForm.defaultPaymentDays} onChange={(e) => setCreditForm((v) => ({ ...v, defaultPaymentDays: e.target.value }))} />
@@ -1302,6 +1350,9 @@ export default function Customer360Page() {
               onChange={(e) => setResForm(f => ({ ...f, expiresAt: e.target.value }))}
             />
           </Field>
+          {canCreditOverride && <Field label="سبب تجاوز سقف الائتمان" hint="يُستخدم فقط إذا كان الحجز يتجاوز السقف أو الحساب مقيّدًا">
+            <Textarea value={resForm.overrideReason} onChange={(e) => setResForm(f => ({ ...f, overrideReason: e.target.value }))} rows={2} />
+          </Field>}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setCreateResOpen(false)}>إلغاء</Button>
             <Button
@@ -1319,6 +1370,7 @@ export default function Customer360Page() {
                 documentNumber: resForm.documentNumber || undefined,
                 notes: resForm.notes || undefined,
                 expiresAt: resForm.expiresAt || undefined,
+                overrideReason: resForm.overrideReason.trim() || undefined,
               })}
             >
               إنشاء الحجز

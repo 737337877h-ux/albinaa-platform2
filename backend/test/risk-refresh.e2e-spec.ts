@@ -28,6 +28,7 @@ describe('Immediate risk refresh (e2e)', () => {
     const oldIds = old.map((customer) => customer.id);
     if (oldIds.length) {
       await prisma.customerScore.deleteMany({ where: { customerId: { in: oldIds } } });
+      await prisma.customerCreditLimit.deleteMany({ where: { customerId: { in: oldIds } } });
       await prisma.customerCreditPolicy.deleteMany({ where: { customerId: { in: oldIds } } });
       await prisma.customerBalance.deleteMany({ where: { customerId: { in: oldIds } } });
       await prisma.customer.deleteMany({ where: { id: { in: oldIds } } });
@@ -61,6 +62,7 @@ describe('Immediate risk refresh (e2e)', () => {
   afterAll(async () => {
     if (prisma) {
       await prisma.customerScore.deleteMany({ where: { customerId: { in: [firstId, secondId] } } });
+      await prisma.customerCreditLimit.deleteMany({ where: { customerId: { in: [firstId, secondId] } } });
       await prisma.customerCreditPolicy.deleteMany({ where: { customerId: { in: [firstId, secondId] } } });
       await prisma.customerBalance.deleteMany({ where: { customerId: { in: [firstId, secondId] } } });
       await prisma.customer.deleteMany({ where: { id: { in: [firstId, secondId] } } });
@@ -70,17 +72,20 @@ describe('Immediate risk refresh (e2e)', () => {
 
   it('updates only the affected customer and gives full balance points when over the credit limit', async () => {
     const secondBefore = await prisma.customerScore.findFirstOrThrow({ where: { customerId: secondId } });
-    const response = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .patch(`/customers/${firstId}/credit-policy`)
       .set('Authorization', `Bearer ${token}`)
       .send({
         allowCreditSale: true,
-        creditLimitAmount: 600,
-        creditLimitCurrency: 'YER',
         creditStatus: 'open',
       })
       .expect(200);
-    expect(Number(response.body.creditLimitAmount)).toBe(600);
+    const response = await request(app.getHttpServer())
+      .patch(`/customers/${firstId}/credit-limits/YER`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ amount: 600, effectiveFrom: '2026-08-01' })
+      .expect(200);
+    expect(Number(response.body.amount)).toBe(600);
 
     const risk = await request(app.getHttpServer())
       .get(`/customers/${firstId}/risk`)
