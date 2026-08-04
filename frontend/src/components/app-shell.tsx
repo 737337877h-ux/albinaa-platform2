@@ -18,6 +18,7 @@ import { BrandLogo } from '@/components/brand';
 import { Breadcrumb } from '@/components/breadcrumb';
 import { UserMenu } from '@/components/user-menu';
 import { NotificationsMenu } from '@/components/notifications-menu';
+import { CommandPalette } from '@/components/command-palette';
 
 const NAV = [
   { href: '/dashboard', label: 'لوحة التحكم', icon: LayoutDashboard, perm: 'reports.read' },
@@ -183,6 +184,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Breadcrumb />
             </div>
             <div className="flex items-center gap-1">
+              <CommandPalette />
               <NotificationsMenu />
               <UserMenu me={me} />
             </div>
