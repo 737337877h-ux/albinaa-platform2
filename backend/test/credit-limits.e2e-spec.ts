@@ -66,5 +66,16 @@ describe('Credit limits per currency (e2e)', () => {
     const audit = await prisma.auditLog.findFirstOrThrow({ where: { entityId: overridden.body.id, action: 'reservation_created' } });
     expect(audit.reason).toBe('اعتماد المدير لمشروع عاجل');
     expect((audit.newValue as any).creditControl.overrideUsed).toBe(true);
+    const financeAlert = await prisma.notification.findFirstOrThrow({
+      where: { user: { username: 'admin' }, kind: 'finance_alert' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(financeAlert.payload).toMatchObject({
+      event: 'credit_limit_overridden',
+      severity: 'critical',
+      reservationId: overridden.body.id,
+      customerId,
+      currency: 'YER',
+    });
   });
 });

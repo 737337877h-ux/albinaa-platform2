@@ -8,6 +8,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RiskRefreshService } from '../risk/risk-refresh.service';
 import { ImportProfile, ParseResultJson, ParserService } from './parser.service';
@@ -37,6 +38,7 @@ export class ImportsService {
     private readonly prisma: PrismaService,
     private readonly parser: ParserService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
     @Optional() private readonly riskRefresh?: RiskRefreshService,
   ) {}
 
@@ -1264,7 +1266,7 @@ export class ImportsService {
     if (normalizedReason.length < 3) {
       throw new BadRequestException('سبب التراجع يجب أن يحتوي على 3 أحرف على الأقل');
     }
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const job = await tx.importJob.findFirst({
         where: { id: jobId, organizationId: actor.organizationId },
       });
@@ -1426,6 +1428,13 @@ export class ImportsService {
         message: 'تم التراجع عن دفعة الاستيراد وحفظ سجلاتها كمُعكوسة دون حذف المصدر',
       };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60_000 });
+    await this.notifications.notifyFinance(actor.organizationId, 'import_reversed', {
+      importJobId: jobId,
+      reason: normalizedReason,
+      actorName: actor.fullName,
+      href: '/imports',
+    });
+    return result;
   }
 
   // --------------------------------------------------------------------------

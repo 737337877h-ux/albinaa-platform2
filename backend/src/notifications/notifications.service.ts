@@ -37,6 +37,19 @@ export class NotificationsService {
     await Promise.all(users.map((u) => this.notifyUser(u.id, kind, payload)));
   }
 
+  async notifyFinance(
+    orgId: string,
+    event: 'collection_reversed' | 'manual_balance_adjustment' | 'credit_limit_overridden' | 'customer_merged' | 'import_reversed',
+    payload: Record<string, unknown>,
+  ) {
+    await this.notifyByPermission(orgId, 'finance.alerts.receive', 'finance_alert', {
+      event,
+      severity: 'critical',
+      occurredAt: new Date().toISOString(),
+      ...payload,
+    });
+  }
+
   async listMine(user: AuthUser, unreadOnly = false, page = 1, limit = 25) {
     const where = { userId: user.id, ...(unreadOnly ? { readAt: null } : {}) };
     const [total, unread, items] = await Promise.all([

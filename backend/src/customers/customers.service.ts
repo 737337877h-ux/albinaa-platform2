@@ -7,6 +7,7 @@ import PDFDocument from 'pdfkit';
 import path from 'node:path';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RiskRefreshService } from '../risk/risk-refresh.service';
 import { AssignCollectorDto } from './dto/assign-collector.dto';
@@ -53,6 +54,7 @@ export class CustomersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
     @Optional() private readonly riskRefresh?: RiskRefreshService,
   ) {}
 
@@ -1020,7 +1022,7 @@ export class CustomersService {
     const now = new Date();
     const reversibleUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const pair = await tx.potentialDuplicateCustomer.findFirst({
         where: { id: pairId, reviewStatus: 'pending', customerA: { organizationId: actor.organizationId } },
       });
@@ -1276,6 +1278,15 @@ export class CustomersService {
         reversibleUntil, movedCounts: Object.fromEntries(Object.entries(movedIds).map(([k, v]) => [k, v.length])),
       };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
+    await this.notifications.notifyFinance(actor.organizationId, 'customer_merged', {
+      mergeId: result.mergeId,
+      masterCustomerId: result.masterCustomerId,
+      sourceCustomerId: result.sourceCustomerId,
+      reason: dto.reason ?? null,
+      actorName: actor.fullName,
+      href: '/admin/data-quality',
+    });
+    return result;
   }
 
   async reverseMerge(actor: AuthUser, mergeId: string, dto: ReverseCustomerMergeDto, req?: Request) {

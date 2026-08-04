@@ -39,6 +39,7 @@ const KIND_AR: Record<string, { label: string; tone: KindTone }> = {
   promise_overdue: { label: 'وعد متأخر', tone: 'debt' },
   collection_created: { label: 'تحصيل جديد', tone: 'pine' },
   collection_reversal_requested: { label: 'طلب عكس تحصيل', tone: 'debt' },
+  finance_alert: { label: 'تنبيه مالي فوري', tone: 'debt' },
   customer_transferred: { label: 'نقل عميل', tone: 'neutral' },
 };
 
@@ -81,6 +82,21 @@ function describe(n: NotificationItem): { title: string; text: string; href?: st
         text: `طُلب عكس تحصيل${money ? ` بمبلغ ${money}` : ''}${p.reason ? ` — ${p.reason}` : ''}`,
         href: '/collections/reconciliation',
       };
+    case 'finance_alert': {
+      const labels: Record<string, string> = {
+        collection_reversed: 'تم عكس تحصيل',
+        manual_balance_adjustment: 'تم تعديل رصيد يدويًا',
+        credit_limit_overridden: 'تم تجاوز سقف ائتمان',
+        customer_merged: 'تم دمج سجلّي عميل',
+        import_reversed: 'تم التراجع عن دفعة استيراد',
+      };
+      const eventLabel = labels[String(p.event)] ?? 'تمت عملية مالية حساسة';
+      return {
+        title: eventLabel,
+        text: `${eventLabel}${money ? ` بمبلغ ${money}` : ''}${p.actorName ? ` بواسطة ${p.actorName}` : ''}${p.reason ? ` — ${p.reason}` : ''}`,
+        href: typeof p.href === 'string' ? p.href : undefined,
+      };
+    }
     case 'customer_transferred':
       return {
         title: 'نُقل إليك عميل',

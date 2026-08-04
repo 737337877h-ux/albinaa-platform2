@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { IssueReservationDto } from './dto/issue-reservation.dto';
@@ -22,6 +23,7 @@ export class ReservationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private async assertCustomerInOrg(actor: AuthUser, customerId: string) {
@@ -247,6 +249,21 @@ export class ReservationsService {
       reason: overrideUsed ? dto.overrideReason : undefined,
       req,
     });
+    if (overrideUsed) {
+      await this.notifications.notifyFinance(actor.organizationId, 'credit_limit_overridden', {
+        reservationId: reservation.id,
+        customerId: dto.customerId,
+        amount: totalAmount,
+        currency: dto.currencyCode,
+        currentDebt,
+        reservedExposure,
+        projectedExposure,
+        limitAmount,
+        reason: dto.overrideReason?.trim(),
+        actorName: actor.fullName,
+        href: `/customers/${dto.customerId}`,
+      });
+    }
     this.invalidateSummary(actor.organizationId);
     return reservation;
   }

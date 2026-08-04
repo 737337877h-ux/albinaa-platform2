@@ -413,6 +413,16 @@ export class CollectionsService {
       newValue: { requestId, reversalId: mirror.id, reason: reversalRequest.reason }, req,
     });
     await this.riskRefresh?.trigger(actor, [original.customerId], 'collection_reversed', req);
+    await this.notifications.notifyFinance(actor.organizationId, 'collection_reversed', {
+      collectionId: original.id,
+      reversalId: mirror.id,
+      customerId: original.customerId,
+      amount: Number(original.amount),
+      currency: original.currencyCode,
+      reason: reversalRequest.reason,
+      actorName: actor.fullName,
+      href: '/collections/reconciliation',
+    });
     return { original: original.id, reversal: mirror.id, requestId, message: 'اعتمد المستخدم الثاني العكس ونُفذ بأثر تدقيقي كامل' };
   }
 
