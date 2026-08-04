@@ -60,6 +60,14 @@ function balanceSide(value: number): string {
   return value >= 0 ? 'مدين' : 'دائن';
 }
 
+function pdfText(value: string): string {
+  // Accounting exports occasionally contain non-printing control characters.
+  // Remove them before PDFKit turns them into visible missing-glyph squares.
+  return value
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '')
+    .replace(/\s*\/\s*(?=[\u0600-\u06ff])/gu, ' - ');
+}
+
 function registerFonts(document: PDFKit.PDFDocument) {
   const fontDir = path.resolve(__dirname, '../../assets/fonts');
   document.registerFont('Arabic', path.join(fontDir, 'NotoSansArabic-Regular.ttf'));
@@ -84,7 +92,7 @@ function arabic(
   y: number,
   options: PDFKit.Mixins.TextOptions & { width: number },
 ) {
-  document.text(value, x, y, { ...options, features: ['rtla'] });
+  document.text(pdfText(value), x, y, { ...options, features: ['rtla'] });
 }
 
 function tableText(
@@ -98,7 +106,7 @@ function tableText(
     document.font('Arabic');
     arabic(document, value, x, y, options);
   }
-  else document.font('Latin').text(value, x, y, options);
+  else document.font('Latin').text(pdfText(value), x, y, options);
 }
 
 function boldText(
@@ -111,7 +119,7 @@ function boldText(
   if (/[^\u0000-\u007f]/u.test(value)) {
     document.font('ArabicBold');
     arabic(document, value, x, y, options);
-  } else document.font('LatinBold').text(value, x, y, options);
+  } else document.font('LatinBold').text(pdfText(value), x, y, options);
 }
 
 function drawConfiguredLogo(
