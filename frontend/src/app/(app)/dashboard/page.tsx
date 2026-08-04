@@ -90,6 +90,7 @@ function notifText(n: NotificationItem): string {
     case 'promise_due': return `تذكير: وعد سداد من ${p.customerName ?? 'عميل'} بمبلغ ${fmtMoney(p.amount ?? 0)} ${p.currency ?? ''}`;
     case 'promise_overdue': return `وعد متأخر من ${p.customerName ?? 'عميل'}`;
     case 'collection_created': return `تحصيل جديد: ${fmtMoney(p.amount ?? 0)} ${p.currency ?? ''} من ${p.customerName ?? ''}`;
+    case 'collection_reversal_requested': return `طلب عكس تحصيل: ${fmtMoney(p.amount ?? 0)} ${p.currency ?? ''}`;
     case 'customer_transferred': return `نُقل إليك العميل ${p.customerName ?? ''}`;
     default: return n.kind;
   }

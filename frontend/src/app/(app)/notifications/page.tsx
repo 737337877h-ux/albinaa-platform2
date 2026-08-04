@@ -38,6 +38,7 @@ const KIND_AR: Record<string, { label: string; tone: KindTone }> = {
   promise_due: { label: 'وعد مستحق', tone: 'hazard' },
   promise_overdue: { label: 'وعد متأخر', tone: 'debt' },
   collection_created: { label: 'تحصيل جديد', tone: 'pine' },
+  collection_reversal_requested: { label: 'طلب عكس تحصيل', tone: 'debt' },
   customer_transferred: { label: 'نقل عميل', tone: 'neutral' },
 };
 
@@ -73,6 +74,12 @@ function describe(n: NotificationItem): { title: string; text: string; href?: st
         title: 'تحصيل جديد بانتظار الاستلام',
         text: `سُجّل تحصيل من ${customerName || ''}${money ? ` بمبلغ ${money}` : ''}${p.method ? ` — ${p.method}` : ''}${p.collectorName ? ` بواسطة ${p.collectorName}` : ''}`,
         href: customerHref,
+      };
+    case 'collection_reversal_requested':
+      return {
+        title: 'طلب عكس يحتاج موافقة مالية',
+        text: `طُلب عكس تحصيل${money ? ` بمبلغ ${money}` : ''}${p.reason ? ` — ${p.reason}` : ''}`,
+        href: '/collections/reconciliation',
       };
     case 'customer_transferred':
       return {

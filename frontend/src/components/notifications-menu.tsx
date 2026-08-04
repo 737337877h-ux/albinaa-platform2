@@ -18,6 +18,7 @@ function describe(n: NotificationItem): string {
     case 'promise_due': return `تذكير: وعد سداد من ${p.customerName ?? 'عميل'}`;
     case 'promise_overdue': return `وعد متأخر من ${p.customerName ?? 'عميل'}`;
     case 'collection_created': return `تحصيل جديد من ${p.customerName ?? ''}`;
+    case 'collection_reversal_requested': return `طلب عكس تحصيل: ${p.amount ?? ''} ${p.currency ?? ''}`;
     case 'customer_transferred': return `نُقل إليك العميل ${p.customerName ?? ''}`;
     default: return n.kind;
   }

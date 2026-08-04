@@ -24,6 +24,7 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
   let prisma: PrismaService;
   let adminToken: string;
   let collectorToken: string;
+  let checkerToken: string;
   let collectorUserId: string;
   let collectorId: string;
   let customerId: string;      // 90001
@@ -91,6 +92,15 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
       .post('/auth/login')
       .send({ username: `collector_${uniq}`, password: 'Test1234pass' }).expect(200);
     collectorToken = cl.body.accessToken;
+
+    const checker = await request(app.getHttpServer())
+      .post('/users').set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: `checker_${uniq}`, fullName: 'أمين صندوق م5', password: 'Test1234pass' }).expect(201);
+    const cashierRole = await prisma.role.findFirstOrThrow({ where: { name: 'أمين الصندوق' } });
+    await request(app.getHttpServer()).post(`/users/${checker.body.id}/roles`)
+      .set('Authorization', `Bearer ${adminToken}`).send({ roleIds: [cashierRole.id] }).expect(201);
+    checkerToken = (await request(app.getHttpServer()).post('/auth/login')
+      .send({ username: `checker_${uniq}`, password: 'Test1234pass' }).expect(200)).body.accessToken;
 
     methodId = (await prisma.collectionMethod.findFirstOrThrow({ where: { name: 'نقدي' } })).id;
   });
@@ -309,11 +319,18 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
       .expect(403);
 
     const before = await operationalOf();
-    const res = await request(app.getHttpServer())
+    const requested = await request(app.getHttpServer())
       .post(`/collections/${collectionId}/reverse`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ reason: 'خطأ في المبلغ' })
       .expect(200);
+    expect(requested.body.status).toBe('pending');
+    await request(app.getHttpServer())
+      .post(`/collections/reconciliation/reversal-requests/${requested.body.requestId}/review`)
+      .set('Authorization', `Bearer ${adminToken}`).send({ approve: true }).expect(403);
+    const res = await request(app.getHttpServer())
+      .post(`/collections/reconciliation/reversal-requests/${requested.body.requestId}/review`)
+      .set('Authorization', `Bearer ${checkerToken}`).send({ approve: true }).expect(200);
     expect(res.body.reversal).toBeDefined();
 
     const after = await operationalOf();

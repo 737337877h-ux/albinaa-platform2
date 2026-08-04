@@ -11,6 +11,8 @@ import { CollectionsService } from './collections.service';
 import { CreateCollectionDto } from './dto/create-collection.dto';
 import { QueryCollectionsDto } from './dto/query-collections.dto';
 import { ReverseCollectionDto } from './dto/reverse-collection.dto';
+import { CreateHandoverVoucherDto } from './dto/create-handover-voucher.dto';
+import { ReviewReversalRequestDto } from './dto/review-reversal-request.dto';
 
 @ApiTags('Collections')
 @ApiBearerAuth('access-token')
@@ -42,6 +44,58 @@ export class CollectionsController {
     return this.collections.listMethods(user);
   }
 
+  @Get('reconciliation')
+  @RequirePermissions('collections.approve')
+  @ApiOperation({ summary: 'لوحة مطابقة الصندوق: التحصيلات المتاحة، قسائم التسليم، وطلبات العكس المعلقة' })
+  reconciliation(
+    @CurrentUser() user: AuthUser,
+    @Query('collectorId') collectorId?: string,
+    @Query('branchId') branchId?: string,
+    @Query('currency') currency?: string,
+  ) {
+    return this.collections.reconciliationBoard(user, { collectorId, branchId, currency });
+  }
+
+  @Post('reconciliation/vouchers')
+  @RequirePermissions('collections.approve')
+  @ApiOperation({ summary: 'إنشاء قسيمة تسليم جماعية متسلسلة لتحصيلات محصل/فرع/عملة واحدة' })
+  createVoucher(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreateHandoverVoucherDto,
+    @Req() req: Request,
+  ) {
+    return this.collections.createHandoverVoucher(user, dto, req);
+  }
+
+  @Post('reconciliation/vouchers/:id/match')
+  @HttpCode(200)
+  @RequirePermissions('cash.receive')
+  @ApiOperation({ summary: 'مطابقة أمين الصندوق لقسيمة التسليم وتحويل تحصيلاتها إلى matched' })
+  matchVoucher(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Req() req: Request) {
+    return this.collections.matchHandoverVoucher(user, id, req);
+  }
+
+  @Post('reconciliation/vouchers/:id/lock')
+  @HttpCode(200)
+  @RequirePermissions('collections.approve')
+  @ApiOperation({ summary: 'اعتماد القسيمة وقفلها وتحويل تحصيلاتها إلى approved' })
+  lockVoucher(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Req() req: Request) {
+    return this.collections.lockHandoverVoucher(user, id, req);
+  }
+
+  @Post('reconciliation/reversal-requests/:id/review')
+  @HttpCode(200)
+  @RequirePermissions('collections.approve')
+  @ApiOperation({ summary: 'موافقة/رفض طلب عكس بواسطة مستخدم ثانٍ (Maker-Checker)' })
+  reviewReversal(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReviewReversalRequestDto,
+    @Req() req: Request,
+  ) {
+    return this.collections.reviewReversal(user, id, dto, req);
+  }
+
   @Get(':id')
   @RequirePermissions('customers.read')
   @ApiOperation({ summary: 'تفاصيل عملية تحصيل (مع سجل العكس إن وجد)' })
@@ -52,7 +106,7 @@ export class CollectionsController {
   @Post(':id/reverse')
   @HttpCode(200)
   @RequirePermissions('collections.reverse')
-  @ApiOperation({ summary: 'عكس موثق بسبب إلزامي — الأصل يبقى محفوظًا كاملاً' })
+  @ApiOperation({ summary: 'إنشاء طلب عكس بسبب إلزامي — لا ينفذ حتى يعتمد مستخدم ثانٍ' })
   reverse(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,

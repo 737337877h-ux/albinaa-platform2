@@ -293,7 +293,7 @@ export default function CollectionsPage() {
         body: JSON.stringify({ reason }),
       }),
     onSuccess: () => {
-      toast('تم عكس التحصيل بنجاح', 'ok');
+      toast('تم إرسال طلب العكس للموافقة من مستخدم ثانٍ', 'ok');
       setReverseItem(null);
       qc.invalidateQueries({ queryKey: ['collections'] });
     },
@@ -743,7 +743,7 @@ function ReverseDialog({
   }, [item, reset]);
 
   return (
-    <Dialog open={!!item} onClose={onClose} title="عكس التحصيل">
+    <Dialog open={!!item} onClose={onClose} title="طلب عكس التحصيل">
       <form onSubmit={handleSubmit((data) => onSubmit(data.reason))} className="space-y-4">
         {item && (
           <div className="rounded-lg border border-concrete-100 bg-concrete-50 p-3 text-sm dark:border-white/10 dark:bg-iron-700">
@@ -762,14 +762,14 @@ function ReverseDialog({
         </Field>
 
         <p className="text-xs text-concrete-500">
-          سيتم عكس التحصيل وإنشاء سجل عكس مرتبط بالسجل الأصلي.
+          سيُرسل الطلب للمدير المالي، ولن يُنفذ العكس حتى يعتمد مستخدم ثانٍ من شاشة مطابقة الصندوق.
         </p>
 
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>إلغاء</Button>
           <Button variant="danger" type="submit" loading={loading}>
             <RotateCcw className="h-4 w-4" aria-hidden />
-            عكس التحصيل
+            إرسال طلب العكس
           </Button>
         </div>
       </form>

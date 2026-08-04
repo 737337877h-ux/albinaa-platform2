@@ -8,6 +8,7 @@ import {
   CircleDollarSign, ScrollText, ArrowRightLeft, ShieldCheck, Landmark, PackageCheck,
   ChartNoAxesColumnIncreasing,
   Gauge,
+  ClipboardCheck,
 } from 'lucide-react';
 import { useMe, useCan } from '@/lib/auth';
 import { ApiError, tokenStore } from '@/lib/api';
@@ -24,6 +25,7 @@ const NAV = [
   { href: '/followups', label: 'المتابعات', icon: PhoneCall, perm: 'customers.read' },
   { href: '/promises', label: 'وعود السداد', icon: CalendarClock, perm: 'customers.read' },
   { href: '/collections', label: 'التحصيلات', icon: HandCoins, perm: 'customers.read' },
+  { href: '/collections/reconciliation', label: 'مطابقة الصندوق', icon: ClipboardCheck, perm: 'collections.approve' },
   { href: '/imports', label: 'استيراد Excel', icon: FileSpreadsheet, perm: 'imports.read' },
   { href: '/reservations', label: 'حجوزات البضاعة', icon: PackageCheck, perm: 'reservations.read' },
   { href: '/reports/aging', label: 'أعمار الديون', icon: ChartNoAxesColumnIncreasing, perm: 'reports.read' },

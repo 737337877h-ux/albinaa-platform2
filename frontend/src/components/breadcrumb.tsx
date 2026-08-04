@@ -14,6 +14,7 @@ const LABELS: Record<string, string> = {
   reservations: 'حجوزات البضاعة',
   tasks: 'عمل اليوم',
   notifications: 'الإشعارات',
+  reconciliation: 'مطابقة الصندوق',
   admin: 'الإدارة',
   users: 'المستخدمين',
   roles: 'الأدوار والصلاحيات',

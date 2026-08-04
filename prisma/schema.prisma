@@ -45,6 +45,7 @@ model Organization {
   customerAliases    CustomerAlias[]
   customerMerges     CustomerMerge[]
   agingSnapshots     AgingSnapshot[]
+  handoverVouchers   CollectionHandoverVoucher[]
 
   @@map("organizations")
 }
@@ -56,11 +57,14 @@ model Branch {
   active         Boolean  @default(true)
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  users        User[]
-  collectors   Collector[]
-  customers    Customer[]
-  collections  Collection[]
+  organization     Organization                @relation(fields: [organizationId], references: [id])
+  users            User[]
+  collectors       Collector[]
+  customers        Customer[]
+  collections      Collection[]
+  handoverVouchers CollectionHandoverVoucher[]
+  receiptSequence  BranchReceiptSequence[]
+  voucherSequence  BranchVoucherSequence[]
 
   @@unique([organizationId, name], map: "uq_branches_org_name")
   @@map("branches")
@@ -100,6 +104,11 @@ model User {
   ledgerEntries             OperationalLedger[]
   reconciliationsDone       BalanceReconciliation[]      @relation("ReconReviewer")
   cashReceived              CashHandover[]
+  handoverVouchersCreated   CollectionHandoverVoucher[]  @relation("HandoverVoucherCreator")
+  handoverVouchersMatched   CollectionHandoverVoucher[]  @relation("HandoverVoucherMatcher")
+  handoverVouchersApproved  CollectionHandoverVoucher[]  @relation("HandoverVoucherApprover")
+  reversalRequestsMade      CollectionReversalRequest[]  @relation("CollectionReversalRequester")
+  reversalRequestsReviewed  CollectionReversalRequest[]  @relation("CollectionReversalReviewer")
   followups                 Followup[]
   tasksCreated              Task[]                       @relation("TaskCreator")
   reservationsCreated       Reservation[]                @relation("ReservationCreator")
@@ -172,11 +181,12 @@ model Collector {
   user   User    @relation(fields: [userId], references: [id])
   branch Branch? @relation(fields: [branchId], references: [id])
 
-  assignments     CustomerAssignment[]
-  collections     Collection[]
-  paymentPromises PaymentPromise[]
-  tasks           Task[]
-  targets         CollectorTarget[]
+  assignments      CustomerAssignment[]
+  collections      Collection[]
+  paymentPromises  PaymentPromise[]
+  tasks            Task[]
+  targets          CollectorTarget[]
+  handoverVouchers CollectionHandoverVoucher[]
 
   @@map("collectors")
 }
@@ -191,25 +201,26 @@ model Currency {
   decimals   Int     @default(2) @db.SmallInt
   active     Boolean @default(true)
 
-  balances            CustomerBalance[]
-  importedTxns        ImportedTransaction[]
-  ledgerEntries       OperationalLedger[]
-  reconciliations     BalanceReconciliation[]
-  collections         Collection[]
-  cashHandovers       CashHandover[]
-  promises            PaymentPromise[]
-  reservations        Reservation[]
-  tasksExpected       Task[]
-  followupsExpected   Followup[]
-  creditPolicies      CustomerCreditPolicy[]
-  customerCreditLimits CustomerCreditLimit[]
-  collectorTargets     CollectorTarget[]
-  balanceSnapshots    BalanceSnapshot[]
-  agingRows           DebtAgingSummary[]
-  agingDocuments      DebtAgingDetail[]
-  analyticalAccounts  AnalyticalAccount[]
-  analyticalMovements AnalyticalMovement[]
-  agingSnapshots      AgingSnapshot[]
+  balances                   CustomerBalance[]
+  importedTxns               ImportedTransaction[]
+  ledgerEntries              OperationalLedger[]
+  reconciliations            BalanceReconciliation[]
+  collections                Collection[]
+  cashHandovers              CashHandover[]
+  promises                   PaymentPromise[]
+  reservations               Reservation[]
+  tasksExpected              Task[]
+  followupsExpected          Followup[]
+  creditPolicies             CustomerCreditPolicy[]
+  customerCreditLimits       CustomerCreditLimit[]
+  collectorTargets           CollectorTarget[]
+  balanceSnapshots           BalanceSnapshot[]
+  agingRows                  DebtAgingSummary[]
+  agingDocuments             DebtAgingDetail[]
+  analyticalAccounts         AnalyticalAccount[]
+  analyticalMovements        AnalyticalMovement[]
+  agingSnapshots             AgingSnapshot[]
+  collectionHandoverVouchers CollectionHandoverVoucher[]
 
   @@map("currencies")
 }
@@ -627,16 +638,16 @@ model AgingSnapshot {
   organizationId  String   @map("organization_id") @db.Uuid
   customerId      String   @map("customer_id") @db.Uuid
   currencyCode    String   @map("currency_code")
-  asOf             DateTime @map("as_of") @db.Date
-  bucket_0_30      Decimal  @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
-  bucket_31_60     Decimal  @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
-  bucket_61_90     Decimal  @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
-  bucket_91_120    Decimal  @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
-  bucket_120_plus  Decimal  @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
-  undated          Decimal  @default(0) @db.Decimal(18, 4)
-  totalDue         Decimal  @map("total_due") @db.Decimal(18, 4)
+  asOf            DateTime @map("as_of") @db.Date
+  bucket_0_30     Decimal  @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
+  bucket_31_60    Decimal  @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
+  bucket_61_90    Decimal  @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
+  bucket_91_120   Decimal  @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
+  bucket_120_plus Decimal  @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
+  undated         Decimal  @default(0) @db.Decimal(18, 4)
+  totalDue        Decimal  @map("total_due") @db.Decimal(18, 4)
   provisionAmount Decimal  @map("provision_amount") @db.Decimal(18, 4)
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
   organization Organization @relation(fields: [organizationId], references: [id])
   customer     Customer     @relation(fields: [customerId], references: [id])
@@ -733,14 +744,16 @@ model Collection {
   reversedById    String?   @map("reversed_by_id") @db.Uuid
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
 
-  customer   Customer         @relation(fields: [customerId], references: [id])
-  collector  Collector        @relation(fields: [collectorId], references: [id])
-  currency   Currency         @relation(fields: [currencyCode], references: [code])
-  method     CollectionMethod @relation(fields: [methodId], references: [id])
-  reversedBy Collection?      @relation("CollectionReversal", fields: [reversedById], references: [id])
-  reversals  Collection[]     @relation("CollectionReversal")
-  handover   CashHandover?
-  branch     Branch?          @relation(fields: [branchId], references: [id])
+  customer            Customer                    @relation(fields: [customerId], references: [id])
+  collector           Collector                   @relation(fields: [collectorId], references: [id])
+  currency            Currency                    @relation(fields: [currencyCode], references: [code])
+  method              CollectionMethod            @relation(fields: [methodId], references: [id])
+  reversedBy          Collection?                 @relation("CollectionReversal", fields: [reversedById], references: [id])
+  reversals           Collection[]                @relation("CollectionReversal")
+  handover            CashHandover?
+  branch              Branch?                     @relation(fields: [branchId], references: [id])
+  handoverVoucherItem CollectionHandoverItem?
+  reversalRequests    CollectionReversalRequest[]
 
   @@index([customerId, currencyCode, collectedAt], map: "idx_collections_customer")
   @@index([collectorId, collectedAt], map: "idx_collections_collector")
@@ -762,6 +775,94 @@ model CashHandover {
   cashier    User       @relation(fields: [cashierId], references: [id])
 
   @@map("cash_handover")
+}
+
+model BranchReceiptSequence {
+  branchId   String @map("branch_id") @db.Uuid
+  year       Int
+  nextNumber Int    @default(1) @map("next_number")
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@id([branchId, year])
+  @@map("branch_receipt_sequences")
+}
+
+model BranchVoucherSequence {
+  branchId   String @map("branch_id") @db.Uuid
+  year       Int
+  nextNumber Int    @default(1) @map("next_number")
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@id([branchId, year])
+  @@map("branch_voucher_sequences")
+}
+
+model CollectionHandoverVoucher {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  branchId       String    @map("branch_id") @db.Uuid
+  collectorId    String    @map("collector_id") @db.Uuid
+  currencyCode   String    @map("currency_code")
+  serialNumber   String    @map("serial_number")
+  sequenceYear   Int       @map("sequence_year")
+  sequenceNumber Int       @map("sequence_number")
+  totalAmount    Decimal   @map("total_amount") @db.Decimal(18, 4)
+  status         String    @default("submitted")
+  createdBy      String    @map("created_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  matchedBy      String?   @map("matched_by") @db.Uuid
+  matchedAt      DateTime? @map("matched_at") @db.Timestamptz()
+  approvedBy     String?   @map("approved_by") @db.Uuid
+  approvedAt     DateTime? @map("approved_at") @db.Timestamptz()
+
+  organization Organization             @relation(fields: [organizationId], references: [id])
+  branch       Branch                   @relation(fields: [branchId], references: [id])
+  collector    Collector                @relation(fields: [collectorId], references: [id])
+  currency     Currency                 @relation(fields: [currencyCode], references: [code])
+  creator      User                     @relation("HandoverVoucherCreator", fields: [createdBy], references: [id])
+  matcher      User?                    @relation("HandoverVoucherMatcher", fields: [matchedBy], references: [id])
+  approver     User?                    @relation("HandoverVoucherApprover", fields: [approvedBy], references: [id])
+  items        CollectionHandoverItem[]
+
+  @@unique([organizationId, serialNumber], map: "uq_handover_voucher_org_serial")
+  @@unique([branchId, sequenceYear, sequenceNumber], map: "uq_handover_voucher_branch_sequence")
+  @@index([organizationId, status, createdAt], map: "idx_handover_voucher_status")
+  @@map("collection_handover_vouchers")
+}
+
+model CollectionHandoverItem {
+  voucherId    String  @map("voucher_id") @db.Uuid
+  collectionId String  @unique @map("collection_id") @db.Uuid
+  amount       Decimal @db.Decimal(18, 4)
+
+  voucher    CollectionHandoverVoucher @relation(fields: [voucherId], references: [id])
+  collection Collection                @relation(fields: [collectionId], references: [id])
+
+  @@id([voucherId, collectionId])
+  @@map("collection_handover_items")
+}
+
+model CollectionReversalRequest {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  collectionId String    @map("collection_id") @db.Uuid
+  reason       String
+  status       String    @default("pending")
+  requestedBy  String    @map("requested_by") @db.Uuid
+  requestedAt  DateTime  @default(now()) @map("requested_at") @db.Timestamptz()
+  reviewedBy   String?   @map("reviewed_by") @db.Uuid
+  reviewedAt   DateTime? @map("reviewed_at") @db.Timestamptz()
+  reviewNote   String?   @map("review_note")
+  reversalId   String?   @map("reversal_id") @db.Uuid
+
+  collection Collection @relation(fields: [collectionId], references: [id])
+  requester  User       @relation("CollectionReversalRequester", fields: [requestedBy], references: [id])
+  reviewer   User?      @relation("CollectionReversalReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([collectionId, status], map: "idx_collection_reversal_request")
+  @@index([status, requestedAt], map: "idx_collection_reversal_pending")
+  @@map("collection_reversal_requests")
 }
 
 model FollowupType {

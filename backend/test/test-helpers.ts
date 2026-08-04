@@ -31,6 +31,22 @@ export async function cleanupTestCustomers(prisma: PrismaService) {
     await prisma.potentialDuplicateCustomer.deleteMany({
       where: { OR: [{ customerAId: { in: ids } }, { customerBId: { in: ids } }] },
     });
+    const collectionIds = (await prisma.collection.findMany({
+      where: { customerId: { in: ids } }, select: { id: true },
+    })).map((collection) => collection.id);
+    if (collectionIds.length) {
+      const voucherIds = (await prisma.collectionHandoverItem.findMany({
+        where: { collectionId: { in: collectionIds } }, select: { voucherId: true },
+      })).map((item) => item.voucherId);
+      await prisma.collectionReversalRequest.deleteMany({ where: { collectionId: { in: collectionIds } } });
+      await prisma.cashHandover.deleteMany({ where: { collectionId: { in: collectionIds } } });
+      await prisma.collectionHandoverItem.deleteMany({ where: { collectionId: { in: collectionIds } } });
+      if (voucherIds.length) {
+        await prisma.collectionHandoverVoucher.deleteMany({
+          where: { id: { in: voucherIds }, items: { none: {} } },
+        });
+      }
+    }
     await prisma.collection.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.operationalLedger.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.followup.deleteMany({ where: { customerId: { in: ids } } });
