@@ -3,6 +3,14 @@ import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
 export class QueryCustomersDto {
+  @ApiPropertyOptional({
+    description: 'نوع سجل المديونية: العملاء العاديون أو حسابات السلف على الغير',
+    enum: ['customer', 'advance'],
+    default: 'customer',
+  })
+  @IsOptional() @IsIn(['customer', 'advance'])
+  accountClass?: 'customer' | 'advance';
+
   @ApiPropertyOptional({ description: 'بحث: الاسم (بعد التطبيع) أو كود العميل أو الهاتف' })
   @IsOptional() @IsString() @MaxLength(200)
   search?: string;

@@ -32,6 +32,7 @@ export interface StatementPdfOptions {
   fromDate?: string;
   toDate?: string;
   template?: StatementPdfTemplate;
+  printedBy?: string;
 }
 
 const LEFT = 18;
@@ -45,6 +46,18 @@ function dateText(value: Date | string): string {
   return Number.isNaN(date.getTime())
     ? String(value)
     : date.toLocaleDateString('en-GB', { timeZone: 'UTC' });
+}
+
+function dateTimeText(value: Date): string {
+  const date = dateText(value);
+  const time = value.toLocaleTimeString('en-GB', {
+    timeZone: 'Asia/Aden', hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  return `${date}-${time}`;
+}
+
+function balanceSide(value: number): string {
+  return value >= 0 ? 'مدين' : 'دائن';
 }
 
 function registerFonts(document: PDFKit.PDFDocument) {
@@ -144,55 +157,125 @@ function drawClassicHeader(
   options: StatementPdfOptions,
 ) {
   const brand = resolveBranding(customer.organization.name, customer.organization.systemSettings);
-  document.font('ArabicBold').fontSize(15).fillColor('#111111');
-  arabic(document, brand.name, 285, 22, { width: 275, align: 'right' });
-  document.font('ArabicBold').fontSize(9);
-  arabic(document, [brand.subtitle, brand.address].filter(Boolean).join(' - '), 285, 45, { width: 275, align: 'right' });
-  if (brand.phone) document.font('LatinBold').fontSize(8).text(brand.phone, 125, 45, { width: 145, align: 'left' });
-  drawConfiguredLogo(document, customer, 24, 20, 90, 48);
+  document.font('ArabicBold').fontSize(14).fillColor('#000000');
+  arabic(document, brand.name, 285, 20, { width: 292, align: 'right' });
+  document.font('Arabic').fontSize(8);
+  arabic(document, brand.subtitle, 285, 43, { width: 292, align: 'right' });
 
-  document.roundedRect(210, 88, 175, 22, 7).lineWidth(1).stroke('#111111');
-  document.font('ArabicBold').fontSize(12);
-  arabic(document, brand.statementTitle, 210, 91, { width: 175, align: 'center' });
+  document.rect(207, 87, 181, 22).lineWidth(0.7).stroke('#000000');
+  document.font('ArabicBold').fontSize(10.5);
+  arabic(document, brand.statementTitle, 207, 90, {
+    width: 181, align: 'center', underline: true,
+  });
 
-  document.roundedRect(314, 118, 246, 51, 6).stroke('#111111');
-  document.font('ArabicBold').fontSize(8.5);
-  arabic(document, 'اسم الحساب', 455, 126, { width: 96, align: 'right' });
-  tableText(document, customer.name, 323, 126, { width: 128, align: 'right' });
-  document.font('ArabicBold');
-  arabic(document, 'رقم الحساب', 455, 146, { width: 96, align: 'right' });
-  document.font('LatinBold').text(customer.externalCustomerCode, 323, 146, { width: 128, align: 'right' });
+  const customerBoxX = 277;
+  const customerBoxY = 117;
+  const customerBoxWidth = 300;
+  document.rect(customerBoxX, customerBoxY, customerBoxWidth, 44).lineWidth(0.55).stroke('#000000');
+  document.moveTo(customerBoxX, customerBoxY + 22).lineTo(577, customerBoxY + 22).stroke('#000000');
+  document.font('ArabicBold').fontSize(7.8);
+  arabic(document, 'اسم الحساب', 500, customerBoxY + 6, { width: 69, align: 'right' });
+  document.font('ArabicBold').fontSize(7.6);
+  arabic(document, customer.name, 286, customerBoxY + 6, { width: 208, height: 12, align: 'right', ellipsis: true });
+  document.font('ArabicBold').fontSize(7.8);
+  arabic(document, 'رقم الحساب', 500, customerBoxY + 28, { width: 69, align: 'right' });
+  document.font('LatinBold').fontSize(8.2).text(customer.externalCustomerCode, 286, customerBoxY + 28, {
+    width: 208, height: 12, align: 'right', lineBreak: false,
+  });
 
   const from = options.fromDate ? dateText(options.fromDate) : 'البداية';
   const to = options.toDate ? dateText(options.toDate) : dateText(new Date());
-  document.roundedRect(18, 122, 272, 21, 6).stroke('#111111');
-  document.font('ArabicBold').fontSize(8.5);
-  arabic(document, 'للفترة من', 205, 127, { width: 76, align: 'right' });
-  boldText(document, from, 130, 127, { width: 72, align: 'center' });
+  document.rect(18, 117, 247, 20).lineWidth(0.55).stroke('#000000');
+  document.font('ArabicBold').fontSize(7.6);
+  arabic(document, 'للفترة من', 194, 122, { width: 63, align: 'right' });
+  boldText(document, from, 119, 122, { width: 72, align: 'center' });
   document.font('ArabicBold');
-  arabic(document, 'إلى', 103, 127, { width: 25, align: 'center' });
-  document.font('LatinBold').text(to, 27, 127, { width: 74, align: 'center' });
-  document.roundedRect(18, 146, 272, 21, 6).stroke('#111111');
-  const side = summary.currentBalance >= 0 ? 'مدين' : 'دائن';
-  document.font('ArabicBold');
-  arabic(document, 'الرصيد الحالي', 190, 151, { width: 91, align: 'right' });
-  document.font('LatinBold').text(`${fmt(Math.abs(summary.currentBalance))} ${options.currency}`, 66, 151, { width: 121, align: 'center' });
-  document.font('ArabicBold');
-  arabic(document, side, 27, 151, { width: 37, align: 'center' });
+  arabic(document, 'إلى', 93, 122, { width: 24, align: 'center' });
+  document.font('LatinBold').text(to, 20, 122, { width: 72, align: 'center' });
+  document.rect(61, 141, 204, 20).lineWidth(0.55).stroke('#000000');
+  document.font('ArabicBold').fontSize(7.8);
+  arabic(document, 'الرصيد الحالي', 181, 146, { width: 76, align: 'right' });
+  document.fillColor('#c62828').font('LatinBold').fontSize(9).text(fmt(Math.abs(summary.currentBalance)), 70, 145, {
+    width: 106, align: 'right', lineBreak: false,
+  });
+  document.fillColor('#000000').font('Arabic').fontSize(7.5);
+  arabic(document, balanceSide(summary.currentBalance), 18, 146, { width: 38, align: 'center' });
 }
 
-const CLASSIC_COLUMNS = [18, 68, 119, 177, 329, 397, 464];
-const CLASSIC_WIDTHS = [50, 51, 58, 152, 68, 67, 113];
-const CLASSIC_HEADERS = ['التاريخ', 'المستند', 'المرجع', 'البيان', 'مدين', 'دائن', 'الرصيد'];
+const CLASSIC_COLUMNS = [18, 100, 174, 248, 425, 488, 532];
+const CLASSIC_WIDTHS = [82, 74, 74, 177, 63, 44, 45];
+const CLASSIC_HEADERS = ['الرصيد', 'دائن', 'مدين', 'البيان', 'المرجع', 'المستند', 'التاريخ'];
 
 function drawClassicTableHeader(document: PDFKit.PDFDocument, y: number) {
-  document.roundedRect(18, y, 542, 21, 6).lineWidth(0.8).stroke('#111111');
-  document.font('ArabicBold').fontSize(7.5).fillColor('#111111');
+  document.rect(18, y, 559, 18).lineWidth(0.65).stroke('#000000');
+  document.font('ArabicBold').fontSize(7.2).fillColor('#000000');
   CLASSIC_HEADERS.forEach((label, index) => {
-    arabic(document, label, CLASSIC_COLUMNS[index] + 2, y + 5, { width: CLASSIC_WIDTHS[index] - 4, align: 'center' });
-    if (index > 0) document.moveTo(CLASSIC_COLUMNS[index], y).lineTo(CLASSIC_COLUMNS[index], y + 21).stroke('#111111');
+    arabic(document, label, CLASSIC_COLUMNS[index] + 2, y + 4, { width: CLASSIC_WIDTHS[index] - 4, align: 'center' });
+    if (index > 0) document.moveTo(CLASSIC_COLUMNS[index], y).lineTo(CLASSIC_COLUMNS[index], y + 18).stroke('#000000');
   });
-  return y + 22;
+  return y + 18;
+}
+
+function drawClassicBalanceCell(
+  document: PDFKit.PDFDocument,
+  value: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  document.fillColor('#000000').font('Arabic').fontSize(5.8);
+  arabic(document, balanceSide(value), x + 2, y + 4, { width: 23, height: height - 5, align: 'left', lineBreak: false });
+  document.font('Latin').fontSize(6.6).text(fmt(Math.abs(value)), x + 26, y + 4, {
+    width: width - 29, height: height - 5, align: 'right', lineBreak: false,
+  });
+}
+
+function drawClassicRow(
+  document: PDFKit.PDFDocument,
+  values: string[],
+  balance: number,
+  y: number,
+  height = 16,
+) {
+  document.fillColor('#000000').fontSize(6.6);
+  values.forEach((value, index) => {
+    if (index === 0) drawClassicBalanceCell(document, balance, CLASSIC_COLUMNS[index], y, CLASSIC_WIDTHS[index], height);
+    else tableText(document, value, CLASSIC_COLUMNS[index] + 3, y + 4, {
+      width: CLASSIC_WIDTHS[index] - 6,
+      height: height - 5,
+      ellipsis: index !== 3,
+      align: index >= 4 ? 'right' : 'right',
+      lineBreak: false,
+    });
+    if (index > 0) document.moveTo(CLASSIC_COLUMNS[index], y).lineTo(CLASSIC_COLUMNS[index], y + height).lineWidth(0.35).stroke('#000000');
+  });
+  document.save().dash(3, { space: 2 }).moveTo(18, y + height).lineTo(577, y + height)
+    .lineWidth(0.35).stroke('#000000').undash().restore();
+  document.moveTo(18, y).lineTo(18, y + height).lineWidth(0.35).stroke('#000000');
+  document.moveTo(577, y).lineTo(577, y + height).lineWidth(0.35).stroke('#000000');
+  return y + height;
+}
+
+function drawClassicFooters(
+  document: PDFKit.PDFDocument,
+  legalText: string,
+  printedBy: string,
+) {
+  const pages = document.bufferedPageRange();
+  const printedAt = new Date();
+  for (let index = pages.start; index < pages.start + pages.count; index += 1) {
+    document.switchToPage(index);
+    document.fillColor('#000000').font('ArabicBold').fontSize(6.8);
+    arabic(document, legalText, 70, 770, { width: 507, height: 13, align: 'right', lineBreak: false, ellipsis: true });
+    document.moveTo(18, 793).lineTo(577, 793).lineWidth(0.4).stroke('#000000');
+    document.font('Latin').fontSize(6.2).text(`Page :${index + 1}`, 18, 803, {
+      width: 80, height: 10, align: 'left', lineBreak: false,
+    });
+    document.font('Latin').text(`Prepared by: ${printedBy} / ${dateTimeText(printedAt)}`, 292, 803, {
+      width: 285, height: 10, align: 'right', lineBreak: false,
+    });
+  }
 }
 
 async function renderClassic(
@@ -206,55 +289,57 @@ async function renderClassic(
   registerFonts(document);
   const completed = collect(document);
   drawClassicHeader(document, customer, summary, options);
-  let y = drawClassicTableHeader(document, 176);
+  let y = drawClassicTableHeader(document, 165);
   let debitTotal = 0;
   let creditTotal = 0;
+  const openingDate = options.fromDate ?? (rows[0]?.date ?? new Date());
+  y = drawClassicRow(document, [
+    '', '', '', 'الرصيد الافتتاحي', '', '', dateText(openingDate),
+  ], summary.periodStartBalance, y);
   for (const row of rows) {
-    if (y > 746) {
+    if (y > 735) {
       document.addPage();
       drawClassicHeader(document, customer, summary, options);
-      y = drawClassicTableHeader(document, 176);
+      y = drawClassicTableHeader(document, 165);
     }
     debitTotal += row.debit;
     creditTotal += row.credit;
     const values = [
-      dateText(row.date),
-      row.documentType || '-',
-      row.reference || row.documentNumber || '-',
-      row.description || '-',
-      row.debit ? fmt(row.debit) : '',
+      '',
       row.credit ? fmt(row.credit) : '',
-      fmt(row.runningBalance),
+      row.debit ? fmt(row.debit) : '',
+      row.description || '-',
+      row.reference || '-',
+      row.documentNumber || row.documentType || '',
+      dateText(row.date),
     ];
-    document.font('Arabic').fontSize(6.7).fillColor('#111111');
-    values.forEach((value, index) => tableText(document, value, CLASSIC_COLUMNS[index] + 2, y + 3, {
-      width: CLASSIC_WIDTHS[index] - 4,
-      height: 14,
-      ellipsis: index !== 3,
-      align: index === 3 ? 'right' : 'center',
-    }));
-    document.save().dash(3, { space: 3 }).moveTo(18, y + 17).lineTo(560, y + 17).lineWidth(0.35).stroke('#555555').undash().restore();
-    CLASSIC_COLUMNS.slice(1).forEach((x) => document.moveTo(x, y).lineTo(x, y + 17).lineWidth(0.35).stroke('#555555'));
-    y += 17;
+    y = drawClassicRow(document, values, row.runningBalance, y);
   }
 
-  if (y > 680) {
+  if (y > 718) {
     document.addPage();
     drawClassicHeader(document, customer, summary, options);
-    y = drawClassicTableHeader(document, 176);
+    y = drawClassicTableHeader(document, 165);
   }
-  document.font('ArabicBold').fontSize(8);
-  arabic(document, 'المجموع الكلي', 177, y + 5, { width: 152, align: 'right' });
-  document.font('LatinBold').text(fmt(debitTotal), 331, y + 5, { width: 64, align: 'center' });
-  document.text(fmt(creditTotal), 399, y + 5, { width: 63, align: 'center' });
-  document.moveTo(18, y).lineTo(560, y).stroke('#111111');
-  document.moveTo(18, y + 20).lineTo(560, y + 20).stroke('#111111');
-  document.font('ArabicBold');
-  arabic(document, 'الرصيد النهائي', 177, y + 28, { width: 152, align: 'right' });
-  document.fillColor('#c62828').font('LatinBold').fontSize(10).text(fmt(summary.periodEndBalance), 397, y + 27, { width: 163, align: 'center' });
-  document.fillColor('#111111').font('ArabicBold').fontSize(8);
-  arabic(document, brand.statementFooter, 80, 774, { width: 435, align: 'center' });
-  drawPageNumber(document);
+  document.moveTo(18, y).lineTo(577, y).lineWidth(0.65).stroke('#000000');
+  document.moveTo(18, y + 2).lineTo(577, y + 2).lineWidth(0.35).stroke('#000000');
+  CLASSIC_COLUMNS.slice(1).forEach((x) => document.moveTo(x, y).lineTo(x, y + 19).lineWidth(0.35).stroke('#000000'));
+  document.moveTo(18, y).lineTo(18, y + 19).stroke('#000000');
+  document.moveTo(577, y).lineTo(577, y + 19).stroke('#000000');
+  document.font('ArabicBold').fontSize(7.3);
+  arabic(document, 'المجموع الكلي', 251, y + 6, { width: 171, align: 'right' });
+  document.font('LatinBold').fontSize(7).text(fmt(debitTotal), 177, y + 6, { width: 68, align: 'right', lineBreak: false });
+  document.text(fmt(creditTotal), 103, y + 6, { width: 68, align: 'right', lineBreak: false });
+  document.moveTo(18, y + 17).lineTo(577, y + 17).lineWidth(0.35).stroke('#000000');
+  document.moveTo(18, y + 19).lineTo(577, y + 19).lineWidth(0.65).stroke('#000000');
+  y += 19;
+
+  const endingDate = options.toDate ?? (rows.at(-1)?.date ?? new Date());
+  drawClassicRow(document, [
+    '', '', '', 'الرصيد النهائي', '', '', dateText(endingDate),
+  ], summary.periodEndBalance, y, 18);
+  document.moveTo(18, y + 18).lineTo(577, y + 18).lineWidth(0.65).stroke('#000000');
+  drawClassicFooters(document, brand.statementFooter, options.printedBy || 'system');
   document.end();
   return completed;
 }

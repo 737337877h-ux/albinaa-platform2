@@ -6,7 +6,7 @@ import { IsBooleanString, IsIn, IsOptional, ValidateIf } from 'class-validator';
  * - debtor:  account number, analytical account, currency, date, doc type, doc no, description, debit, credit
  * - employee: employee no, employee name, account no/name, currency, date, doc type, doc no, description, debit, credit
  */
-export const ANALYTICAL_IMPORT_LAYOUTS = ['debtor', 'employee', 'employee_statement'] as const;
+export const ANALYTICAL_IMPORT_LAYOUTS = ['debtor', 'employee', 'advance_statement', 'employee_statement'] as const;
 
 /**
  * The employee layout mixes advance and custody accounts on the same sheet
@@ -29,7 +29,7 @@ export class ImportAnalyticalAccountsDto {
   employeeCategory?: (typeof EMPLOYEE_IMPORT_CATEGORIES)[number];
 
   @ApiPropertyOptional({
-    description: 'For employee_statement Excel files: true previews only, false executes the verified import.',
+    description: 'For advance_statement Excel files: true previews only, false executes the verified import.',
     default: 'true',
   })
   @IsOptional()

@@ -16,11 +16,10 @@ import { Table, TD, THead, TRow } from '@/components/ui/table';
 
 interface AdvanceAccount {
   id: string;
-  accountNumber: string;
-  accountName: string;
-  personName: string | null;
-  currencyCode: string;
-  balance: number;
+  externalCustomerCode: string;
+  name: string;
+  customerType: string | null;
+  balances: { currency: string; balance: number }[];
   status: string;
 }
 
@@ -40,7 +39,7 @@ interface ImportPreview {
   profile: string;
   rowsRead: number;
   accountsInFile: number;
-  uniquePeople: number;
+  uniqueAccounts: number;
   movementsInFile: number;
   mainAccountsIgnored: string[];
   byCurrency: Record<string, { accounts: number; movements: number; balance: number }>;
@@ -61,8 +60,8 @@ interface ImportResult {
 
 export default function AdvancesPage() {
   const can = useCan();
-  const canRead = can('analytical_accounts.read');
-  const canManage = can('analytical_accounts.manage');
+  const canRead = can('customers.read');
+  const canManage = can('customers.write');
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
   const [currency, setCurrency] = useState('');
@@ -74,16 +73,16 @@ export default function AdvancesPage() {
   const accounts = useQuery<AccountsResponse>({
     queryKey: ['advances', search, currency, page],
     queryFn: () => {
-      const params = new URLSearchParams({ category: 'employee_advance', page: String(page), limit: '25' });
+      const params = new URLSearchParams({ accountClass: 'advance', page: String(page), limit: '25' });
       if (search) params.set('search', search);
-      if (currency) params.set('currencyCode', currency);
-      return api<AccountsResponse>(`/analytical-accounts?${params.toString()}`);
+      if (currency) params.set('currency', currency);
+      return api<AccountsResponse>(`/customers?${params.toString()}`);
     },
     enabled: canRead,
   });
   const summary = useQuery<AdvanceSummary>({
     queryKey: ['advances-summary'],
-    queryFn: () => api<AdvanceSummary>('/analytical-accounts/summary/by-category?category=employee_advance'),
+    queryFn: () => api<AdvanceSummary>('/customers/advances/summary'),
     enabled: canRead,
   });
 
@@ -91,7 +90,7 @@ export default function AdvancesPage() {
     const body = new FormData();
     body.append('file', file as File);
     return api<ImportResult>(
-      `/analytical-accounts/import?layout=employee_statement&employeeCategory=employee_advance&dryRun=${dryRun}`,
+      `/analytical-accounts/import-advances?dryRun=${dryRun}`,
       { method: 'POST', body },
     );
   };
@@ -158,7 +157,7 @@ export default function AdvancesPage() {
         <div className="flex flex-wrap gap-3 border-b border-concrete-100 p-4 dark:border-white/10">
           <div className="relative min-w-[220px] flex-1">
             <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-concrete-400" />
-            <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="بحث برقم الحساب التحليلي أو اسم الموظف" className="pr-10" />
+            <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="بحث برقم حساب السلفة أو اسم صاحب الحساب" className="pr-10" />
           </div>
           <Select value={currency} onChange={(event) => { setCurrency(event.target.value); setPage(1); }} className="w-44">
             <option value="">كل العملات</option>
@@ -177,14 +176,14 @@ export default function AdvancesPage() {
         >
           {accounts.data && <>
             <Table>
-              <THead cols={['رقم الحساب التحليلي', 'الموظف/صاحب السلفة', 'العملة', 'الرصيد', 'الحالة']} />
+              <THead cols={['رقم حساب السلفة', 'صاحب الحساب', 'الأرصدة', 'الحالة', 'الإجراءات']} />
               <tbody>{accounts.data.items.map((account) => (
                 <TRow key={account.id}>
-                  <TD><Link className="font-semibold text-pine-700 hover:underline" href={`/admin/analytical-accounts/${account.id}`}>{account.accountNumber}</Link></TD>
-                  <TD>{account.personName ?? account.accountName}</TD>
-                  <TD><Badge tone="neutral">{account.currencyCode}</Badge></TD>
-                  <TD><Money value={account.balance} currency={account.currencyCode} signed /></TD>
+                  <TD><Link className="font-semibold text-pine-700 hover:underline" href={`/customers/${account.id}`}>{account.externalCustomerCode}</Link></TD>
+                  <TD>{account.name}</TD>
+                  <TD><div className="flex flex-wrap gap-2">{account.balances.map((balance) => <span key={balance.currency} className="inline-flex items-center gap-1"><Money value={balance.balance} currency={balance.currency} signed /><Badge tone="neutral">{balance.currency}</Badge></span>)}</div></TD>
                   <TD><Badge tone={account.status === 'active' ? 'pine' : 'neutral'}>{account.status === 'active' ? 'نشط' : 'غير نشط'}</Badge></TD>
+                  <TD><Link className="font-semibold text-pine-700 hover:underline" href={`/customers/${account.id}`}>فتح الحساب والمتابعة</Link></TD>
                 </TRow>
               ))}</tbody>
             </Table>
@@ -205,7 +204,7 @@ export default function AdvancesPage() {
           {preview && <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <PreviewStat label="الحسابات" value={preview.accountsInFile} />
-              <PreviewStat label="الأشخاص" value={preview.uniquePeople} />
+              <PreviewStat label="حسابات السلف" value={preview.uniqueAccounts} />
               <PreviewStat label="الحركات" value={preview.movementsInFile} />
               <PreviewStat label="الأخطاء" value={preview.errors.length} danger={preview.errors.length > 0} />
             </div>

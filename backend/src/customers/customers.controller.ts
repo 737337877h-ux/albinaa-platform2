@@ -58,6 +58,13 @@ export class CustomersController {
     return this.customers.dataQuality(user);
   }
 
+  @Get('advances/summary')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'إجمالي حسابات السلف على الغير حسب العملة ضمن نطاق المستخدم' })
+  advancesSummary(@CurrentUser() user: AuthUser) {
+    return this.customers.advancesSummary(user);
+  }
+
   @Patch('duplicates/:pairId')
   @RequirePermissions('duplicates.review')
   @ApiOperation({ summary: 'اعتماد قرار مراجعة حالة تشابه' })

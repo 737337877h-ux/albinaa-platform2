@@ -95,6 +95,8 @@ export class CustomersService {
     const page = q.page ?? 1;
     const limit = q.limit ?? 25;
     const where = await this.scopeWhere(user);
+    if (q.accountClass === 'advance') where.customerType = 'advance';
+    else where.AND = [{ OR: [{ customerType: null }, { customerType: { not: 'advance' } }] }];
 
     if (q.search) {
       const s = q.search.trim();
@@ -113,6 +115,9 @@ export class CustomersService {
     else where.status = { not: 'merged' };
     if (q.collectorId) {
       where.assignments = { some: { collectorId: q.collectorId, effectiveTo: null } };
+    }
+    if (q.currency && !q.balanceState) {
+      where.balances = { some: { currencyCode: q.currency } };
     }
     if (q.balanceState) {
       const balFilter: Prisma.CustomerBalanceWhereInput =
@@ -199,6 +204,7 @@ export class CustomersService {
       phonePrimary: c.phonePrimary,
       region: c.region,
       status: c.status,
+      customerType: c.customerType,
       branch: c.branch,
       currentCollector: c.assignments[0]
         ? { id: c.assignments[0].collectorId, name: c.assignments[0].collector.user.fullName }
@@ -767,6 +773,28 @@ export class CustomersService {
     });
   }
 
+  async advancesSummary(user: AuthUser) {
+    const where = await this.scopeWhere(user);
+    where.customerType = 'advance';
+    where.status = 'active';
+    const rows = await this.prisma.customer.findMany({
+      where,
+      select: {
+        id: true,
+        balances: { select: { currencyCode: true, accountingBalance: true } },
+      },
+    });
+    const byCurrency: Record<string, { accounts: number; balance: number }> = {};
+    for (const row of rows) {
+      for (const balance of row.balances) {
+        byCurrency[balance.currencyCode] ??= { accounts: 0, balance: 0 };
+        byCurrency[balance.currencyCode].accounts += 1;
+        byCurrency[balance.currencyCode].balance += Number(balance.accountingBalance);
+      }
+    }
+    return { accounts: rows.length, byCurrency };
+  }
+
   // --------------------------------------------------------------------------
   // Customer account groups (primary + sub-accounts), without merging data.
   // --------------------------------------------------------------------------
@@ -917,7 +945,10 @@ export class CustomersService {
       items.push(...next.items);
     }
 
-    return renderCustomerStatementPdf(customer, first, items, q);
+    return renderCustomerStatementPdf(customer, first, items, {
+      ...q,
+      printedBy: user.username,
+    });
   }
 
   async updateCreditPolicy(

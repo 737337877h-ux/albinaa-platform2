@@ -35,12 +35,12 @@ export class DashboardService {
   async summary(user: AuthUser) {
     const orgId = user.organizationId;
 
-    const [totalCustomers, activeCustomers, balances, lastImport, pendingDuplicates, advanceAccounts] =
+    const [totalCustomers, activeCustomers, balances, lastImport, pendingDuplicates, advanceBalances] =
       await Promise.all([
-        this.prisma.customer.count({ where: { organizationId: orgId } }),
-        this.prisma.customer.count({ where: { organizationId: orgId, status: 'active' } }),
+        this.prisma.customer.count({ where: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
+        this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
         this.prisma.customerBalance.findMany({
-          where: { customer: { organizationId: orgId } },
+          where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
           select: { customerId: true, currencyCode: true, accountingBalance: true },
         }),
         this.prisma.importJob.findFirst({
@@ -51,9 +51,9 @@ export class DashboardService {
         this.prisma.potentialDuplicateCustomer.count({
           where: { reviewStatus: 'pending', customerA: { organizationId: orgId } },
         }),
-        this.prisma.analyticalAccount.findMany({
-          where: { organizationId: orgId, category: 'employee_advance', status: 'active' },
-          select: { id: true, currencyCode: true },
+        this.prisma.customerBalance.findMany({
+          where: { customer: { organizationId: orgId, customerType: 'advance', status: 'active' } },
+          select: { customerId: true, currencyCode: true, accountingBalance: true },
         }),
       ]);
 
@@ -72,21 +72,11 @@ export class DashboardService {
       else byCurrency[ccy].zero += 1;
     }
 
-    const advanceSums = advanceAccounts.length
-      ? await this.prisma.analyticalMovement.groupBy({
-          by: ['accountId'],
-          where: { accountId: { in: advanceAccounts.map((account) => account.id) }, reversedAt: null },
-          _sum: { debit: true, credit: true },
-        })
-      : [];
-    const advanceMap = new Map(
-      advanceSums.map((row) => [row.accountId, Number(row._sum.debit ?? 0) - Number(row._sum.credit ?? 0)]),
-    );
     const advanceByCurrency: Record<string, { accounts: number; balance: number }> = {};
-    for (const account of advanceAccounts) {
-      advanceByCurrency[account.currencyCode] ??= { accounts: 0, balance: 0 };
-      advanceByCurrency[account.currencyCode].accounts += 1;
-      advanceByCurrency[account.currencyCode].balance += advanceMap.get(account.id) ?? 0;
+    for (const balance of advanceBalances) {
+      advanceByCurrency[balance.currencyCode] ??= { accounts: 0, balance: 0 };
+      advanceByCurrency[balance.currencyCode].accounts += 1;
+      advanceByCurrency[balance.currencyCode].balance += Number(balance.accountingBalance);
     }
 
     return {
@@ -95,7 +85,7 @@ export class DashboardService {
         active: activeCustomers,
         withBalances: new Set(balances.map((b) => b.customerId)).size,
       },
-      advances: { accounts: advanceAccounts.length, byCurrency: advanceByCurrency },
+      advances: { accounts: new Set(advanceBalances.map((row) => row.customerId)).size, byCurrency: advanceByCurrency },
       byCurrency,
       lastImport,
       pendingDuplicateAlerts: pendingDuplicates,

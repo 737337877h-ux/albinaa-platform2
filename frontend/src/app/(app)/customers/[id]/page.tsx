@@ -744,11 +744,11 @@ export default function Customer360Page() {
     <div className="space-y-5">
       {/* Header */}
       <PageHeader
-        title={isLoading ? '...' : c?.name ?? 'العميل'}
+        title={isLoading ? '...' : c?.name ?? 'الحساب'}
         action={
           c ? (
-            <Link href="/customers" className="text-sm text-pine-700 hover:underline dark:text-pine-100">
-              ← العودة للقائمة
+            <Link href={c.customerType === 'advance' ? '/advances' : '/customers'} className="text-sm text-pine-700 hover:underline dark:text-pine-100">
+              ← العودة إلى {c.customerType === 'advance' ? 'السلف' : 'العملاء'}
             </Link>
           ) : undefined
         }
