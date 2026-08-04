@@ -4,6 +4,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -29,6 +30,7 @@ export class CollectionsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly accountingPeriods: AccountingPeriodsService,
     @Optional() private readonly riskRefresh?: RiskRefreshService,
   ) {}
 
@@ -145,8 +147,10 @@ export class CollectionsService {
     const branchId = dto.branchId ?? collector.branchId ?? customer.branchId ?? fallbackBranch?.id ?? null;
     if (!branchId) throw new BadRequestException('لا يوجد فرع نشط لترقيم الإيصال تسلسليًا');
 
+    const collectedAt = dto.collectedAt ? new Date(dto.collectedAt) : new Date();
+    await this.accountingPeriods.assertDatesOpen(actor, [collectedAt], dto.accountingOverrideReason, 'collection_created', req);
+
     const collection = await this.prisma.$transaction(async (tx) => {
-      const collectedAt = dto.collectedAt ? new Date(dto.collectedAt) : new Date();
       const receiptNumber = await this.nextReceiptNumber(tx, branchId, collectedAt.getUTCFullYear());
       const created = await tx.collection.create({
         data: {

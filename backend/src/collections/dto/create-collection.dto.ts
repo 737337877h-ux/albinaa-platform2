@@ -47,4 +47,8 @@ export class CreateCollectionDto {
 
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(2000)
   notes?: string;
+
+  @ApiPropertyOptional({ description: 'سبب تجاوز قفل الفترة المحاسبية — يتطلب periods.override' })
+  @IsOptional() @IsString() @MaxLength(500)
+  accountingOverrideReason?: string;
 }

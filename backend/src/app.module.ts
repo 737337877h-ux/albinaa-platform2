@@ -29,6 +29,7 @@ import { AnalyticalAccountsModule } from './analytical-accounts/analytical-accou
 import { AgingModule } from './aging/aging.module';
 import { ReportsModule } from './reports/reports.module';
 import { SearchModule } from './search/search.module';
+import { AccountingPeriodsModule } from './accounting-periods/accounting-periods.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -65,6 +66,7 @@ import { IdempotencyInterceptor } from './common/interceptors/idempotency.interc
     AgingModule,
     ReportsModule,
     SearchModule,
+    AccountingPeriodsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },         // 1) Rate limiting

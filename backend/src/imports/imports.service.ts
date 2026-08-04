@@ -7,6 +7,7 @@ import { Request } from 'express';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { AuditService } from '../audit/audit.service';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -39,6 +40,7 @@ export class ImportsService {
     private readonly parser: ParserService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly accountingPeriods: AccountingPeriodsService,
     @Optional() private readonly riskRefresh?: RiskRefreshService,
   ) {}
 
@@ -349,7 +351,7 @@ export class ImportsService {
   // --------------------------------------------------------------------------
   // المرحلة 5+6: تنفيذ الاستيراد + التقرير النهائي
   // --------------------------------------------------------------------------
-  async execute(actor: AuthUser, jobId: string, force: boolean, req?: Request) {
+  async execute(actor: AuthUser, jobId: string, force: boolean, req?: Request, accountingOverrideReason?: string) {
     const job = await this.prisma.importJob.findFirst({
       where: { id: jobId, organizationId: actor.organizationId },
     });
@@ -378,6 +380,10 @@ export class ImportsService {
 
     try {
       const parsed: ParseResultJson = JSON.parse(await fs.readFile(report.parsedPath, 'utf-8'));
+      const accountingDates = profile === 'CUSTOMER_STATEMENT_DETAILS'
+        ? parsed.accounts.flatMap((account) => account.transactions.map((transaction) => new Date(transaction.date)))
+        : profile === 'CUSTOMER_BALANCE_SUMMARY' ? [new Date()] : [];
+      await this.accountingPeriods.assertDatesOpen(actor, accountingDates, accountingOverrideReason, 'import_executed', req);
       const rollbackState = await this.captureRollbackBefore(actor, jobId, profile, parsed);
       const started = Date.now();
       await this.prisma.importJob.update({

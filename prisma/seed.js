@@ -144,6 +144,8 @@ async function main() {
     ['reservations.extend', 'تمديد حجوزات البضاعة'],
     ['credit.override', 'تجاوز سقف الائتمان بسبب موثق'],
     ['finance.alerts.receive', 'استلام التنبيهات المالية الفورية'],
+    ['periods.manage', 'إدارة إقفال الفترات المحاسبية'],
+    ['periods.override', 'تجاوز فترة محاسبية مقفلة بسبب موثق'],
     ['analytical_accounts.manage', 'إدارة الحسابات التحليلية'],
     ['analytical_accounts.read', 'عرض الحسابات التحليلية'],
   ];
@@ -163,6 +165,7 @@ async function main() {
       'reservations.create', 'reservations.deliver', 'reservations.cancel', 'reservations.extend',
       'credit.override',
       'finance.alerts.receive',
+      'periods.manage',
       'analytical_accounts.manage', 'analytical_accounts.read',
     ],
     'المحصل': [

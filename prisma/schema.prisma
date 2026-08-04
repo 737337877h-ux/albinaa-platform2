@@ -1106,6 +1106,24 @@ model Notification {
   @@map("notifications")
 }
 
+model AccountingPeriod {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  year           Int
+  month          Int
+  status         String    @default("locked")
+  reason         String
+  lockedBy       String    @map("locked_by") @db.Uuid
+  lockedAt       DateTime  @default(now()) @map("locked_at") @db.Timestamptz()
+  unlockedBy     String?   @map("unlocked_by") @db.Uuid
+  unlockedAt     DateTime? @map("unlocked_at") @db.Timestamptz()
+  unlockReason   String?   @map("unlock_reason")
+
+  @@unique([organizationId, year, month], map: "uq_accounting_period_org_month")
+  @@index([organizationId, status, year, month], map: "idx_accounting_period_status")
+  @@map("accounting_periods")
+}
+
 model AuditLog {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId      String?  @map("user_id") @db.Uuid

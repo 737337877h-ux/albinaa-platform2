@@ -53,7 +53,7 @@ export class ImportsController {
     @Body() dto: ExecuteImportDto,
     @Req() req: Request,
   ) {
-    return this.imports.execute(user, id, dto.force ?? false, req);
+    return this.imports.execute(user, id, dto.force ?? false, req, dto.accountingOverrideReason);
   }
 
   @Post(':id/reverse')
