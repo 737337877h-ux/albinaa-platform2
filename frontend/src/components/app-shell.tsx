@@ -7,6 +7,7 @@ import {
   ListTodo, PhoneCall, Users, Settings, Shield, UserCog, GitBranch,
   CircleDollarSign, ScrollText, ArrowRightLeft, ShieldCheck, Landmark, PackageCheck,
   ChartNoAxesColumnIncreasing,
+  Gauge,
 } from 'lucide-react';
 import { useMe, useCan } from '@/lib/auth';
 import { ApiError, tokenStore } from '@/lib/api';
@@ -26,6 +27,7 @@ const NAV = [
   { href: '/imports', label: 'استيراد Excel', icon: FileSpreadsheet, perm: 'imports.read' },
   { href: '/reservations', label: 'حجوزات البضاعة', icon: PackageCheck, perm: 'reservations.read' },
   { href: '/reports/aging', label: 'أعمار الديون', icon: ChartNoAxesColumnIncreasing, perm: 'reports.read' },
+  { href: '/reports/kpi', label: 'مؤشرات التحصيل', icon: Gauge, perm: 'reports.read' },
 ] as const;
 
 const ADMIN_NAV = [

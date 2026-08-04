@@ -90,6 +90,7 @@ model User {
   assignmentsMade           CustomerAssignment[]         @relation("AssignmentMaker")
   creditDecisions           CustomerCreditPolicy[]       @relation("CreditDecider")
   creditLimitApprovals      CustomerCreditLimit[]        @relation("CreditLimitApprover")
+  collectorTargetsSet       CollectorTarget[]            @relation("CollectorTargetSetter")
   duplicateReviews          PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
   customerMergesCreated     CustomerMerge[]              @relation("CustomerMergeCreator")
   customerMergesReversed    CustomerMerge[]              @relation("CustomerMergeReverser")
@@ -175,6 +176,7 @@ model Collector {
   collections     Collection[]
   paymentPromises PaymentPromise[]
   tasks           Task[]
+  targets         CollectorTarget[]
 
   @@map("collectors")
 }
@@ -201,6 +203,7 @@ model Currency {
   followupsExpected   Followup[]
   creditPolicies      CustomerCreditPolicy[]
   customerCreditLimits CustomerCreditLimit[]
+  collectorTargets     CollectorTarget[]
   balanceSnapshots    BalanceSnapshot[]
   agingRows           DebtAgingSummary[]
   agingDocuments      DebtAgingDetail[]
@@ -209,6 +212,24 @@ model Currency {
   agingSnapshots      AgingSnapshot[]
 
   @@map("currencies")
+}
+
+model CollectorTarget {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  collectorId  String   @map("collector_id") @db.Uuid
+  currencyCode String   @map("currency_code")
+  month        DateTime @db.Date
+  targetAmount Decimal  @map("target_amount") @db.Decimal(18, 4)
+  setBy        String   @map("set_by") @db.Uuid
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  collector Collector @relation(fields: [collectorId], references: [id])
+  currency  Currency  @relation(fields: [currencyCode], references: [code])
+  setter    User      @relation("CollectorTargetSetter", fields: [setBy], references: [id])
+
+  @@unique([collectorId, currencyCode, month], map: "uq_collector_target_month_currency")
+  @@index([month, currencyCode], map: "idx_collector_targets_month_currency")
+  @@map("collector_targets")
 }
 
 model DocumentType {
