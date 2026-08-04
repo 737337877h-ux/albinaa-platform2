@@ -44,6 +44,7 @@ model Organization {
   analyticalAccounts AnalyticalAccount[]
   customerAliases    CustomerAlias[]
   customerMerges     CustomerMerge[]
+  agingSnapshots     AgingSnapshot[]
 
   @@map("organizations")
 }
@@ -203,6 +204,7 @@ model Currency {
   agingDocuments      DebtAgingDetail[]
   analyticalAccounts  AnalyticalAccount[]
   analyticalMovements AnalyticalMovement[]
+  agingSnapshots      AgingSnapshot[]
 
   @@map("currencies")
 }
@@ -277,6 +279,7 @@ model Customer {
   aliasesFromMerge        CustomerAlias[]              @relation("CustomerAliasSource")
   mergeOperationsAsMaster CustomerMerge[]              @relation("CustomerMergeMaster")
   mergeOperationsAsSource CustomerMerge[]              @relation("CustomerMergeSource")
+  agingSnapshots          AgingSnapshot[]
 
   @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
   @@index([organizationId, nameNormalized], map: "idx_customers_name_norm")
@@ -574,6 +577,31 @@ model DebtAgingDetail {
   @@index([customerId, currencyCode], map: "idx_aging_details_customer")
   @@index([importJobId], map: "idx_aging_details_job")
   @@map("debt_aging_details")
+}
+
+model AgingSnapshot {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  String   @map("organization_id") @db.Uuid
+  customerId      String   @map("customer_id") @db.Uuid
+  currencyCode    String   @map("currency_code")
+  asOf             DateTime @map("as_of") @db.Date
+  bucket_0_30      Decimal  @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
+  bucket_31_60     Decimal  @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
+  bucket_61_90     Decimal  @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
+  bucket_91_120    Decimal  @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
+  bucket_120_plus  Decimal  @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
+  undated          Decimal  @default(0) @db.Decimal(18, 4)
+  totalDue         Decimal  @map("total_due") @db.Decimal(18, 4)
+  provisionAmount Decimal  @map("provision_amount") @db.Decimal(18, 4)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  currency     Currency     @relation(fields: [currencyCode], references: [code])
+
+  @@unique([organizationId, customerId, currencyCode, asOf], map: "uq_aging_snapshot_org_customer_currency_date")
+  @@index([organizationId, asOf, currencyCode], map: "idx_aging_snapshot_report")
+  @@map("aging_snapshots")
 }
 
 // ---------------------------------------------------------------------------
