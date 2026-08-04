@@ -5,6 +5,8 @@ import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { calculateCei, calculateDso, safePercent, weightedDebtAge } from './kpi-calculator';
 import { UpdateCollectorTargetDto } from './dto/update-collector-target.dto';
+import ExcelJS from 'exceljs';
+import { AgingService } from '../aging/aging.service';
 
 const key = (a: string, b: string) => `${a}|${b}`;
 const monthKey = (date: Date) => date.toISOString().slice(0, 7);
@@ -13,7 +15,122 @@ const nextMonth = (date: Date) => new Date(Date.UTC(date.getUTCFullYear(), date.
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly aging: AgingService,
+  ) {}
+
+  async summary(actor: AuthUser) {
+    const [balances, reservations] = await Promise.all([
+      this.prisma.customerBalance.findMany({
+        where: {
+          accountingBalance: { gt: 0 },
+          customer: { organizationId: actor.organizationId, status: { notIn: ['merged', 'import_reversed'] } },
+        },
+        include: { customer: { select: { id: true, name: true, externalCustomerCode: true } } },
+      }),
+      this.prisma.reservation.findMany({
+        where: { customer: { organizationId: actor.organizationId }, status: { in: ['open', 'partial'] } },
+        include: { customer: { select: { name: true } } },
+      }),
+    ]);
+    // Aging and KPI each fan out into several queries. Keep them sequential so
+    // a small production connection pool is not exhausted by one report request.
+    const aging = await this.aging.report(actor, {});
+    const kpi = await this.kpi(actor);
+    const currencies = [...new Set([
+      ...balances.map((row) => row.currencyCode),
+      ...reservations.map((row) => row.currencyCode),
+      ...Object.keys(aging.totals),
+      ...Object.keys(kpi.latestByCurrency),
+    ])].sort();
+    const byCurrency = currencies.map((currency) => {
+      const currencyBalances = balances.filter((row) => row.currencyCode === currency);
+      const currencyReservations = reservations.filter((row) => row.currencyCode === currency);
+      return {
+        currency,
+        debtTotal: currencyBalances.reduce((sum, row) => sum + Number(row.accountingBalance), 0),
+        debtorCount: currencyBalances.length,
+        reservationTotal: currencyReservations.reduce((sum, row) => sum + Number(row.totalAmount ?? 0), 0),
+        reservationCount: currencyReservations.length,
+        aging: aging.totals[currency] ?? null,
+        kpi: kpi.latestByCurrency[currency] ?? null,
+      };
+    });
+    const topDebtors = currencies.flatMap((currency) => balances
+      .filter((row) => row.currencyCode === currency)
+      .sort((a, b) => Number(b.accountingBalance) - Number(a.accountingBalance))
+      .slice(0, 10)
+      .map((row, index) => ({
+        rank: index + 1, currency, customerId: row.customerId, customerCode: row.customer.externalCustomerCode,
+        customerName: row.customer.name, balance: Number(row.accountingBalance),
+      })));
+    const activeReservations = reservations.map((row) => ({
+      id: row.id, customerName: row.customer.name, currency: row.currencyCode,
+      itemName: row.itemName ?? '—', totalAmount: Number(row.totalAmount ?? 0),
+      status: row.status, expiresAt: row.expiresAt,
+    }));
+    return {
+      generatedAt: new Date(), currenciesSeparated: true, byCurrency, topDebtors, activeReservations,
+      collectorPerformance: kpi.collectors,
+      aging: { asOf: aging.asOf, snapshot: aging.snapshot, totals: aging.totals },
+    };
+  }
+
+  private styleSheet(sheet: ExcelJS.Worksheet) {
+    sheet.views = [{ state: 'frozen', ySplit: 1, rightToLeft: true }];
+    const header = sheet.getRow(1);
+    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F4C3A' } };
+    header.alignment = { horizontal: 'center', vertical: 'middle' };
+    sheet.eachRow((row) => { row.alignment = { vertical: 'middle', readingOrder: 'rtl' }; });
+    sheet.columns.forEach((column) => {
+      let width = 12;
+      column.eachCell?.({ includeEmpty: true }, (cell) => { width = Math.max(width, String(cell.value ?? '').length + 2); });
+      column.width = Math.min(40, width);
+    });
+    sheet.autoFilter = { from: 'A1', to: `${sheet.getColumn(sheet.columnCount).letter}1` };
+  }
+
+  async summaryWorkbook(actor: AuthUser) {
+    const report = await this.summary(actor);
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'منصة البناء الراقي'; workbook.created = new Date();
+    const overview = workbook.addWorksheet('الملخص');
+    overview.addRow(['العملة', 'إجمالي المديونية', 'عدد المدينين', 'قيمة الحجوزات', 'عدد الحجوزات', 'DSO', 'CEI', 'متوسط عمر الدين']);
+    report.byCurrency.forEach((row) => overview.addRow([
+      row.currency, row.debtTotal, row.debtorCount, row.reservationTotal, row.reservationCount,
+      row.kpi?.dso ?? null, row.kpi?.cei ?? null, row.kpi?.averageDebtAge ?? null,
+    ]));
+    const debtors = workbook.addWorksheet('أعلى المدينين');
+    debtors.addRow(['الترتيب', 'العملة', 'كود العميل', 'اسم العميل', 'الرصيد']);
+    report.topDebtors.forEach((row) => debtors.addRow([row.rank, row.currency, row.customerCode, row.customerName, row.balance]));
+    const collectors = workbook.addWorksheet('أداء المحصلين');
+    collectors.addRow(['المحصل', 'العملة', 'تحصيل اليوم', 'تحصيل الشهر', 'الهدف', 'نسبة الإنجاز', 'نسبة الوفاء بالوعود']);
+    report.collectorPerformance.forEach((row) => collectors.addRow([
+      row.collectorName, row.currency, row.dailyAmount, row.monthlyAmount, row.target,
+      row.attainment, row.promiseRate,
+    ]));
+    const aging = workbook.addWorksheet('أعمار الديون');
+    aging.addRow(['العملة', '0-30', '31-60', '61-90', '91-120', '+120', 'غير مؤرخ', 'الإجمالي', 'المخصص']);
+    Object.entries(report.aging.totals).forEach(([currency, row]) => aging.addRow([
+      currency, row.bucket_0_30, row.bucket_31_60, row.bucket_61_90, row.bucket_91_120,
+      row.bucket_120_plus, row.undated, row.totalDue, row.provisionAmount,
+    ]));
+    const reservations = workbook.addWorksheet('الحجوزات');
+    reservations.addRow(['العميل', 'الصنف', 'العملة', 'القيمة', 'الحالة', 'الانتهاء']);
+    report.activeReservations.forEach((row) => reservations.addRow([
+      row.customerName, row.itemName, row.currency, row.totalAmount, row.status,
+      row.expiresAt ? row.expiresAt.toISOString().slice(0, 10) : '',
+    ]));
+    workbook.worksheets.forEach((sheet) => this.styleSheet(sheet));
+    for (const sheet of workbook.worksheets) {
+      for (let column = 2; column <= sheet.columnCount; column += 1) sheet.getColumn(column).numFmt = '#,##0.00';
+    }
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
+  }
 
   async updateTarget(actor: AuthUser, collectorId: string, currencyCode: string, dto: UpdateCollectorTargetDto, req?: Request) {
     const collector = await this.prisma.collector.findFirst({ where: { id: collectorId, user: { organizationId: actor.organizationId } } });

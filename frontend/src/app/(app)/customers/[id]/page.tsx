@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { ArrowDownUp, CheckCircle2, Download, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, downloadApiFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
@@ -330,6 +330,7 @@ export default function Customer360Page() {
   /* ──────── Statement queries (lazy per tab) ──────── */
   const [stmtCurrency, setStmtCurrency] = useState('YER');
   const [stmtPage, setStmtPage] = useState(1);
+  const [pdfDownloading, setPdfDownloading] = useState(false);
   const statement = useQuery<StatementResponse>({
     queryKey: ['statement', id, stmtCurrency, stmtPage],
     queryFn: () => api<StatementResponse>(
@@ -611,6 +612,21 @@ export default function Customer360Page() {
       document.body.appendChild(link);
       link.click();
       setTimeout(() => document.body.removeChild(link), 200);
+    }
+  };
+
+  const exportStatementPdf = async () => {
+    setPdfDownloading(true);
+    try {
+      await downloadApiFile(
+        `/customers/${id}/statement.pdf?currency=${encodeURIComponent(stmtCurrency)}`,
+        `statement-${c?.externalCustomerCode ?? id}-${stmtCurrency}.pdf`,
+      );
+      toast('تم تنزيل كشف الحساب PDF', 'ok');
+    } catch (error) {
+      toast(friendlyApiError(error), 'err');
+    } finally {
+      setPdfDownloading(false);
     }
   };
 
@@ -957,7 +973,7 @@ export default function Customer360Page() {
           {!canBalances ? (
             <PermissionNotice message="لا تملك صلاحية عرض الأرصدة (balances.read)" />
           ) : (
-            <Card>
+            <Card className="report-print">
               <div className="flex items-center gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
                 <label className="flex items-center gap-2 text-sm">
                   <span className="text-concrete-500">العملة</span>
@@ -978,8 +994,8 @@ export default function Customer360Page() {
                 >
                   <Download className="h-4 w-4" /> تصدير CSV
                 </Button>
-                <Button variant="secondary" onClick={() => window.print()} className="print:hidden">
-                  <Download className="h-4 w-4" /> تصدير PDF / طباعة
+                <Button variant="secondary" onClick={exportStatementPdf} loading={pdfDownloading} className="print:hidden">
+                  <Download className="h-4 w-4" /> كشف PDF معتمد للطباعة
                 </Button>
               </div>
 
@@ -996,6 +1012,11 @@ export default function Customer360Page() {
               >
                 {statement.data && (
                   <>
+                    <div className="hidden border-b border-concrete-100 px-4 py-4 text-right print:block">
+                      <p className="text-xl font-extrabold text-pine-800">البناء الراقي</p>
+                      <p className="mt-1 font-semibold">كشف حساب العميل: {c?.name}</p>
+                      <p className="text-xs text-concrete-500">العملة: {stmtCurrency} • تاريخ الطباعة: {new Date().toLocaleDateString('ar-YE')}</p>
+                    </div>
                     {/* Summary */}
                     <div className="flex flex-wrap gap-4 border-b border-concrete-100 px-4 py-2 text-xs dark:border-white/10">
                       <span className="text-concrete-500">الرصيد الافتتاحي: <Money value={statement.data.openingBalance} signed /></span>
@@ -1025,6 +1046,7 @@ export default function Customer360Page() {
                       </tbody>
                     </Table>
                     <Pagination page={statement.data.page} totalPages={statement.data.totalPages} onPage={setStmtPage} />
+                    <p className="hidden py-5 text-center font-bold text-debt-600 print:block">كشف غير معتمد ما لم يُختم</p>
                   </>
                 )}
               </DataState>

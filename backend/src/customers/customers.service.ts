@@ -3,6 +3,8 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
+import PDFDocument from 'pdfkit';
+import path from 'node:path';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -760,6 +762,87 @@ export class CustomersService {
         },
       },
     });
+  }
+
+  async statementPdf(user: AuthUser, id: string, q: StatementQueryDto): Promise<Buffer> {
+    await this.assertAccess(user, id);
+    const customer = await this.prisma.customer.findUniqueOrThrow({
+      where: { id },
+      include: { organization: { select: { name: true } } },
+    });
+    const first = await this.statement(user, id, { ...q, page: 1, limit: 200 });
+    const items = [...first.items];
+    for (let page = 2; page <= first.totalPages; page += 1) {
+      const next = await this.statement(user, id, { ...q, page, limit: 200 });
+      items.push(...next.items);
+    }
+
+    const fontDir = path.dirname(require.resolve('@fontsource/noto-sans-arabic/package.json'));
+    const regularFont = path.join(fontDir, 'files', 'noto-sans-arabic-arabic-400-normal.woff');
+    const boldFont = path.join(fontDir, 'files', 'noto-sans-arabic-arabic-700-normal.woff');
+    const document = new PDFDocument({ size: 'A4', margin: 36, bufferPages: true, info: { Title: `كشف حساب ${customer.name}` } });
+    const chunks: Buffer[] = [];
+    document.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const completed = new Promise<Buffer>((resolve, reject) => {
+      document.on('end', () => resolve(Buffer.concat(chunks)));
+      document.on('error', reject);
+    });
+    document.registerFont('Arabic', regularFont).registerFont('ArabicBold', boldFont);
+
+    const right = 559;
+    const drawHeader = () => {
+      document.font('ArabicBold').fontSize(18).fillColor('#0f4c3a').text(customer.organization.name || 'البناء الراقي', 36, 32, { width: 523, align: 'right' });
+      document.font('ArabicBold').fontSize(14).fillColor('#172426').text('كشف حساب عميل', 36, 62, { width: 523, align: 'right' });
+      document.moveTo(36, 88).lineTo(right, 88).strokeColor('#0f4c3a').lineWidth(1).stroke();
+      document.font('Arabic').fontSize(9).fillColor('#475569');
+      document.text(`العميل: ${customer.name} — الكود: ${customer.externalCustomerCode}`, 36, 96, { width: 523, align: 'right' });
+      document.text(`العملة: ${q.currency} — تاريخ الإصدار: ${new Date().toLocaleDateString('ar-YE')}`, 36, 112, { width: 523, align: 'right' });
+      const period = q.fromDate || q.toDate ? `الفترة: ${q.fromDate ?? 'البداية'} إلى ${q.toDate ?? 'اليوم'}` : 'الفترة: جميع الحركات';
+      document.text(period, 36, 128, { width: 523, align: 'right' });
+      document.moveDown(1);
+    };
+    const columns = [36, 104, 170, 252, 368, 432, 496];
+    const widths = [68, 66, 82, 116, 64, 64, 63];
+    const headers = ['الرصيد', 'دائن', 'مدين', 'البيان', 'رقم المستند', 'النوع', 'التاريخ'];
+    const drawTableHeader = (y: number) => {
+      document.rect(36, y, 523, 22).fill('#0f4c3a');
+      document.font('ArabicBold').fontSize(7.5).fillColor('#ffffff');
+      headers.forEach((label, index) => document.text(label, columns[index] + 2, y + 6, { width: widths[index] - 4, align: 'center' }));
+      return y + 22;
+    };
+    drawHeader();
+    let y = drawTableHeader(154);
+    document.font('Arabic').fontSize(7).fillColor('#172426');
+    for (const item of items) {
+      if (y > 730) {
+        document.addPage(); drawHeader(); y = drawTableHeader(154); document.font('Arabic').fontSize(7).fillColor('#172426');
+      }
+      const values = [
+        item.runningBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }),
+        item.credit ? item.credit.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—',
+        item.debit ? item.debit.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—',
+        item.description || '—', item.documentNumber || '—', item.documentType,
+        new Date(item.date).toLocaleDateString('ar-YE'),
+      ];
+      document.rect(36, y, 523, 21).strokeColor('#d8dedc').lineWidth(0.4).stroke();
+      values.forEach((value, index) => document.text(value, columns[index] + 2, y + 5, { width: widths[index] - 4, height: 12, ellipsis: true, align: index === 3 ? 'right' : 'center' }));
+      y += 21;
+    }
+    if (!items.length) document.font('Arabic').fontSize(10).fillColor('#64748b').text('لا توجد حركات ضمن الفترة المحددة', 36, y + 18, { width: 523, align: 'center' });
+    y = Math.min(Math.max(y + 14, 200), 748);
+    document.font('ArabicBold').fontSize(9).fillColor('#172426').text(
+      `رصيد بداية الفترة: ${first.periodStartBalance.toLocaleString('en-US')}   |   رصيد نهاية الفترة: ${first.periodEndBalance.toLocaleString('en-US')} ${q.currency}`,
+      36, y, { width: 523, align: 'right' },
+    );
+    document.font('ArabicBold').fontSize(10).fillColor('#b42318').text('كشف غير معتمد ما لم يُختم', 36, y + 26, { width: 523, align: 'center' });
+
+    const pages = document.bufferedPageRange();
+    for (let index = pages.start; index < pages.start + pages.count; index += 1) {
+      document.switchToPage(index);
+      document.font('Arabic').fontSize(7).fillColor('#64748b').text(`صفحة ${index + 1} من ${pages.count}`, 36, 806, { width: 523, align: 'center' });
+    }
+    document.end();
+    return completed;
   }
 
   async updateCreditPolicy(

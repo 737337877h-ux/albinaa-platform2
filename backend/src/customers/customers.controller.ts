@@ -1,8 +1,8 @@
 import {
-  Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req,
+  Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
@@ -156,6 +156,21 @@ export class CustomersController {
     @Query() q: StatementQueryDto,
   ) {
     return this.customers.statement(user, id, q);
+  }
+
+  @Get(':id/statement.pdf')
+  @RequirePermissions('customers.read', 'balances.read')
+  @ApiOperation({ summary: 'كشف حساب PDF عربي بالترويسة وختم عدم الاعتماد' })
+  async statementPdf(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() q: StatementQueryDto,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.customers.statementPdf(user, id, q);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="customer-statement-${id}-${q.currency}.pdf"`);
+    res.send(buffer);
   }
 
   @Post()

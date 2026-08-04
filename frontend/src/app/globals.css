@@ -29,8 +29,14 @@ body {
 }
 
 @media print {
-  body { background: #fff !important; color: #0f1a1c !important; }
-  header, nav, .print\:hidden { display: none !important; }
+  @page { size: A4; margin: 12mm; }
+  html, body { background: #fff !important; color: #0f1a1c !important; }
+  aside, header, nav, button, .print\:hidden { display: none !important; }
   main { padding: 0 !important; margin: 0 !important; }
-  * { box-shadow: none !important; }
+  .report-print { display: block !important; width: 100% !important; }
+  .report-print input, .report-print select, .report-print label { display: none !important; }
+  .report-print table { width: 100% !important; border-collapse: collapse !important; }
+  .report-print tr, .report-print article { break-inside: avoid; }
+  .report-print th, .report-print td { border-color: #cbd5e1 !important; color: #0f1a1c !important; }
+  * { box-shadow: none !important; text-shadow: none !important; }
 }

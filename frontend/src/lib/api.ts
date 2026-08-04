@@ -113,3 +113,28 @@ export async function api<T = unknown>(
   if (res.status === 204) return undefined as T;
   return res.json();
 }
+
+export async function downloadApiFile(path: string, filename: string): Promise<void> {
+  const doFetch = () => fetch(`${API}${path}`, {
+    headers: store.access ? { Authorization: `Bearer ${store.access}` } : {},
+  });
+  let res: Response;
+  try {
+    res = await doFetch();
+  } catch {
+    throw new ApiError(0, 'تعذّر الاتصال بالخادم');
+  }
+  if (res.status === 401) {
+    const refreshed = await tryRefresh();
+    if (refreshed) res = await doFetch();
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(res.status, (body as { message?: string } | null)?.message ?? 'تعذّر تنزيل الملف', body);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement('a');
+  link.href = url; link.download = filename; link.style.display = 'none';
+  document.body.appendChild(link); link.click(); link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

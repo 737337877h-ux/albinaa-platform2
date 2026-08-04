@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Req, Res } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
+import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
@@ -10,6 +11,19 @@ import { ReportsService } from './reports.service';
 @ApiTags('Reports') @ApiBearerAuth('access-token') @Controller('reports')
 export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
+
+  @Get('summary') @RequirePermissions('reports.read')
+  @ApiOperation({ summary: 'ملخص شامل مفصول بالعملة: المديونية، أعلى المدينين، الحجوزات، المحصلون، والتعتيق' })
+  summary(@CurrentUser() user: AuthUser) { return this.reports.summary(user); }
+
+  @Get('summary.xlsx') @RequirePermissions('reports.export')
+  @ApiOperation({ summary: 'تصدير التقرير الشامل إلى Excel منسق مع تجميد الرأس وعرض أعمدة تلقائي' })
+  async summaryExcel(@CurrentUser() user: AuthUser, @Res() res: Response) {
+    const buffer = await this.reports.summaryWorkbook(user);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="albinaa-report-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.send(buffer);
+  }
 
   @Get('kpi') @RequirePermissions('reports.read')
   @ApiOperation({ summary: 'DSO وCEI وأداء التحصيل والوعود وترتيب المحصلين خلال 12 شهرًا' })
