@@ -15,6 +15,20 @@ services:
       POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=ar --encoding=UTF8"
     volumes:
       - albinaa_pgdata:/var/lib/postgresql/data
+      - albinaa_wal_archive:/wal-archive
+      - ./docker/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_timeout=3600
+      - -c
+      - archive_command=test ! -f /wal-archive/%f && cp %p /wal-archive/%f
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-albinaa} -d ${POSTGRES_DB:-albinaa}"]
       interval: 10s
@@ -136,13 +150,19 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-albinaa}
       POSTGRES_DB: ${POSTGRES_DB:-albinaa}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      DIFF_RETENTION_DAYS: ${DIFF_RETENTION_DAYS:-7}
     volumes:
       - albinaa_backups:/backups
-      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - albinaa_wal_archive:/wal-archive
+      - ./scripts/backup-runner.sh:/usr/local/bin/backup-runner.sh:ro
+      - ./scripts/restore-test.sh:/usr/local/bin/restore-test.sh:ro
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        echo "0 2 * * * /usr/local/bin/backup.sh" | crontab -
+        printf '%s\n' \
+          '0 2 * * * /bin/sh /usr/local/bin/backup-runner.sh full' \
+          '5 * * * * /bin/sh /usr/local/bin/backup-runner.sh differential' \
+          '0 4 1 * * /bin/sh /usr/local/bin/restore-test.sh' | crontab -
         crond -f -L /dev/stdout
     networks:
       - albinaa-internal
@@ -156,6 +176,7 @@ volumes:
   albinaa_pgdata:
   albinaa_uploads:
   albinaa_backups:
+  albinaa_wal_archive:
   nginx_logs:
 
 networks:

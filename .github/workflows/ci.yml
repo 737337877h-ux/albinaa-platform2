@@ -135,6 +135,15 @@ jobs:
           NEXT_PUBLIC_API_URL: https://example.invalid/api
         run: docker compose -f docker-compose.prod.yml config --quiet
 
+      - name: Validate backup and restore scripts
+        run: |
+          sh -n scripts/backup-runner.sh
+          sh -n scripts/restore-test.sh
+          sh -n scripts/restore.sh
+          grep -F "0 2 * * * /bin/sh /usr/local/bin/backup-runner.sh full" docker-compose.prod.yml
+          grep -F "5 * * * * /bin/sh /usr/local/bin/backup-runner.sh differential" docker-compose.prod.yml
+          grep -F "0 4 1 * * /bin/sh /usr/local/bin/restore-test.sh" docker-compose.prod.yml
+
       - name: Build backend image
         run: |
           for attempt in 1 2 3; do
