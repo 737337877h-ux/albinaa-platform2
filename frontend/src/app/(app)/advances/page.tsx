@@ -2,8 +2,9 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Banknote, Search, Upload } from 'lucide-react';
+import { Banknote, Plus, Search, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { CCY_AR } from '@/lib/format';
@@ -13,6 +14,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
 import { Badge, Button, Card, Field, Input, Money, Pagination, Select } from '@/components/ui/primitives';
 import { Table, TD, THead, TRow } from '@/components/ui/table';
+import { CustomerFormDialog } from '@/components/customer-form-dialog';
 
 interface AdvanceAccount {
   id: string;
@@ -63,10 +65,12 @@ export default function AdvancesPage() {
   const canRead = can('customers.read');
   const canManage = can('customers.write');
   const qc = useQueryClient();
+  const router = useRouter();
   const [search, setSearch] = useState('');
   const [currency, setCurrency] = useState('');
   const [page, setPage] = useState(1);
   const [importOpen, setImportOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
 
@@ -123,7 +127,7 @@ export default function AdvancesPage() {
     <div className="space-y-5">
       <PageHeader
         title="السلف"
-        action={canManage ? <Button onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> استيراد كشف السلف</Button> : undefined}
+        action={canManage ? <div className="flex gap-2"><Button variant="secondary" onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" />إضافة حساب سلفة</Button><Button onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> استيراد كشف السلف</Button></div> : undefined}
       />
 
       <DataState
@@ -191,6 +195,8 @@ export default function AdvancesPage() {
           </>}
         </DataState>
       </Card>
+
+      <CustomerFormDialog open={createOpen} onClose={() => setCreateOpen(false)} defaultCustomerType="advance" onSaved={(saved) => router.push(`/customers/${saved.id}`)} />
 
       <Dialog open={importOpen} onClose={() => { setImportOpen(false); setPreview(null); }} title="استيراد كشف السلف والعهد التحليلي">
         <div className="space-y-4">

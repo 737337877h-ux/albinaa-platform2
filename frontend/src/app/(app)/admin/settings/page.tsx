@@ -191,6 +191,39 @@ const GROUPS: SettingsGroup[] = [
       },
     ],
   },
+  {
+    title: 'التهيئة للتكاملات المستقبلية (متوقفة افتراضيًا)',
+    items: [
+      {
+        key: 'messaging.autoReminders.enabled',
+        label: 'الرسائل التلقائية الخارجية',
+        description: 'مفتاح أمان مستقبلي لإرسال تذكيرات WhatsApp/SMS عبر مزود معتمد. لا يرسل شيئًا قبل تركيب المزود واعتماد القوالب والموافقة.',
+        type: 'boolean',
+        defaultValue: 'false',
+      },
+      {
+        key: 'messaging.provider',
+        label: 'مزود الرسائل',
+        description: 'اسم المزود المعتمد مستقبلًا؛ اتركه none حتى اكتمال الربط والاختبار.',
+        type: 'string',
+        defaultValue: 'none',
+      },
+      {
+        key: 'ai.analysis.enabled',
+        label: 'تحليل الذكاء الاصطناعي',
+        description: 'بوابة تشغيل مستقبلية للتحليل بعد تحديد المزود وسياسة الخصوصية والمراجعة البشرية.',
+        type: 'boolean',
+        defaultValue: 'false',
+      },
+      {
+        key: 'inventory.integration.enabled',
+        label: 'تكامل المخزون',
+        description: 'بوابة تشغيل مستقبلية لاستيراد الأصناف والحركات قبل بناء قرارات البيع والشراء الذكية.',
+        type: 'boolean',
+        defaultValue: 'false',
+      },
+    ],
+  },
 ];
 
 /* ────────────────────────────── Helpers ──────────────────────────────── */

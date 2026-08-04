@@ -196,11 +196,12 @@ model Collector {
 // 3) البيانات المرجعية: العملات وأنواع المستندات
 // ---------------------------------------------------------------------------
 model Currency {
-  code       String  @id
-  sourceCode String  @map("source_code")
-  nameAr     String  @map("name_ar")
-  decimals   Int     @default(2) @db.SmallInt
-  active     Boolean @default(true)
+  code         String  @id
+  sourceCode   String  @map("source_code")
+  nameAr       String  @map("name_ar")
+  decimals     Int     @default(2) @db.SmallInt
+  active       Boolean @default(true)
+  exchangeRate Decimal @default(1) @map("exchange_rate") @db.Decimal(18, 6)
 
   balances                   CustomerBalance[]
   importedTxns               ImportedTransaction[]

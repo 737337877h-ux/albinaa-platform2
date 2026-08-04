@@ -16,6 +16,7 @@ import { ReviewDuplicateDto } from './dto/review-duplicate.dto';
 import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
 import { LinkCustomerAccountDto } from './dto/link-customer-account.dto';
+import { LinkCustomerAccountsDto } from './dto/link-customer-accounts.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
@@ -127,6 +128,18 @@ export class CustomersController {
     @Req() req: Request,
   ) {
     return this.customers.linkChildAccount(user, id, dto.childCustomerId, req);
+  }
+
+  @Post(':id/account-group/children/bulk')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'ربط عدة حسابات فرعية محددة دفعة واحدة دون نقل الحركات أو دمجها' })
+  linkChildAccounts(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LinkCustomerAccountsDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.linkChildAccounts(user, id, dto.childCustomerIds, req);
   }
 
   @Delete(':id/account-group/children/:childId')

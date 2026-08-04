@@ -2,8 +2,8 @@
 import { X } from 'lucide-react';
 import { useEffect } from 'react';
 
-export function Dialog({ open, onClose, title, children }: {
-  open: boolean; onClose: () => void; title: string; children: React.ReactNode;
+export function Dialog({ open, onClose, title, children, className = '' }: {
+  open: boolean; onClose: () => void; title: string; children: React.ReactNode; className?: string;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -19,7 +19,7 @@ export function Dialog({ open, onClose, title, children }: {
       aria-modal
     >
       <div
-        className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl dark:bg-iron-800 dark:ring-1 dark:ring-white/10 sm:max-w-lg sm:rounded-2xl"
+        className={`max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl dark:bg-iron-800 dark:ring-1 dark:ring-white/10 sm:max-w-lg sm:rounded-2xl ${className}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">

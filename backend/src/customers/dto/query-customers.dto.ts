@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
 export class QueryCustomersDto {
   @ApiPropertyOptional({
@@ -18,6 +18,10 @@ export class QueryCustomersDto {
   @ApiPropertyOptional({ description: 'تصفية حسب حالة الرصيد', enum: ['debtor', 'creditor', 'zero'] })
   @IsOptional() @IsIn(['debtor', 'creditor', 'zero'])
   balanceState?: 'debtor' | 'creditor' | 'zero';
+
+  @ApiPropertyOptional({ description: 'استبعاد الحسابات التي لا تملك أي رصيد غير صفري', default: false })
+  @IsOptional() @Transform(({ value }) => value === true || value === 'true') @IsBoolean()
+  excludeZero?: boolean;
 
   @ApiPropertyOptional({ description: 'عملة التصفية/الترتيب بالرصيد (إلزامية مع sortBy=balance)' })
   @IsOptional() @IsString() @MaxLength(3)

@@ -16,6 +16,7 @@ interface Currency {
   sourceCode: string;
   nameAr: string;
   decimals: number;
+  exchangeRate: number | string;
   active: boolean;
 }
 
@@ -23,6 +24,7 @@ interface EditForm {
   nameAr: string;
   sourceCode: string;
   decimals: string;
+  exchangeRate: string;
   active: boolean;
 }
 
@@ -32,7 +34,7 @@ export default function AdminCurrenciesPage() {
   const qc = useQueryClient();
 
   const [editTarget, setEditTarget] = useState<Currency | null>(null);
-  const [form, setForm] = useState<EditForm>({ nameAr: '', sourceCode: '', decimals: '2', active: true });
+  const [form, setForm] = useState<EditForm>({ nameAr: '', sourceCode: '', decimals: '2', exchangeRate: '1', active: true });
 
   const query = useQuery<Currency[]>({
     queryKey: ['currencies'],
@@ -57,7 +59,7 @@ export default function AdminCurrenciesPage() {
   });
 
   const openEdit = (c: Currency) => {
-    setForm({ nameAr: c.nameAr, sourceCode: c.sourceCode, decimals: String(c.decimals), active: c.active });
+    setForm({ nameAr: c.nameAr, sourceCode: c.sourceCode, decimals: String(c.decimals), exchangeRate: String(c.exchangeRate), active: c.active });
     setEditTarget(c);
   };
 
@@ -69,6 +71,7 @@ export default function AdminCurrenciesPage() {
         nameAr: form.nameAr,
         sourceCode: form.sourceCode,
         decimals: Number(form.decimals),
+        exchangeRate: Number(form.exchangeRate),
         active: form.active,
       },
     });
@@ -85,6 +88,9 @@ export default function AdminCurrenciesPage() {
   return (
     <div className="space-y-5">
       <PageHeader title="إدارة العملات" />
+      <Card className="p-4 text-sm text-concrete-600 dark:text-concrete-300">
+        سعر الصرف هو عدد وحدات العملة الأساسية المقابلة لوحدة واحدة من العملة. لا تجمع اللوحات عملات مختلفة تلقائيًا؛ تُعرض كل عملة مستقلة حتى تعتمد الإدارة الأسعار وتختار تقريرًا موحدًا.
+      </Card>
 
       <Card>
         <DataState
@@ -99,13 +105,14 @@ export default function AdminCurrenciesPage() {
         >
           {query.data && (
             <Table>
-              <THead cols={['العملة', 'الاسم العربي', 'كود المصدر', 'الخانات العشرية', 'الحالة', '']} />
+              <THead cols={['العملة', 'الاسم العربي', 'كود المصدر', 'سعر الصرف', 'الخانات العشرية', 'الحالة', '']} />
               <tbody>
                 {query.data.map((c) => (
                   <TRow key={c.code}>
                     <TD className="font-medium">{c.code}</TD>
                     <TD>{c.nameAr}</TD>
                     <TD className="font-mono text-concrete-500">{c.sourceCode}</TD>
+                    <TD className="tnum">{Number(c.exchangeRate).toLocaleString('en-US', { maximumFractionDigits: 6 })}</TD>
                     <TD>{c.decimals}</TD>
                     <TD>
                       <Badge tone={c.active ? 'pine' : 'neutral'}>
@@ -141,6 +148,15 @@ export default function AdminCurrenciesPage() {
                 max={6}
                 value={form.decimals}
                 onChange={(e) => setForm((f) => ({ ...f, decimals: e.target.value }))}
+              />
+            </Field>
+            <Field label="سعر الصرف إلى العملة الأساسية" hint="يجب أن يكون أكبر من صفر، ويُحدّث يدويًا من الإدارة">
+              <Input
+                type="number"
+                min="0.000001"
+                step="0.000001"
+                value={form.exchangeRate}
+                onChange={(e) => setForm((f) => ({ ...f, exchangeRate: e.target.value }))}
               />
             </Field>
             <label className="flex items-center gap-3">

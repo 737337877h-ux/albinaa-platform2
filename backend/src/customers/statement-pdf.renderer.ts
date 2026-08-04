@@ -48,6 +48,12 @@ function dateText(value: Date | string): string {
     : date.toLocaleDateString('en-GB', { timeZone: 'UTC' });
 }
 
+function classicRowDateText(value: Date | string): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('en-CA', { timeZone: 'UTC' }).replaceAll('-', '/');
+}
+
 function dateTimeText(value: Date): string {
   const date = dateText(value);
   const time = value.toLocaleTimeString('en-GB', {
@@ -165,63 +171,63 @@ function drawClassicHeader(
   options: StatementPdfOptions,
 ) {
   const brand = resolveBranding(customer.organization.name, customer.organization.systemSettings);
-  document.font('ArabicBold').fontSize(14).fillColor('#000000');
-  arabic(document, brand.name, 285, 20, { width: 292, align: 'right' });
-  document.font('Arabic').fontSize(8);
-  arabic(document, brand.subtitle, 285, 43, { width: 292, align: 'right' });
+  document.font('ArabicBold').fontSize(13.4).fillColor('#000000');
+  arabic(document, brand.name, 342, 18, { width: 220, align: 'right' });
+  document.font('Arabic').fontSize(7.4);
+  arabic(document, brand.subtitle, 342, 40, { width: 220, align: 'right' });
 
-  document.rect(207, 87, 181, 22).lineWidth(0.7).stroke('#000000');
-  document.font('ArabicBold').fontSize(10.5);
-  arabic(document, brand.statementTitle, 207, 90, {
-    width: 181, align: 'center', underline: true,
+  document.roundedRect(214, 104, 140, 18, 6).lineWidth(0.65).stroke('#000000');
+  document.font('ArabicBold').fontSize(8.7);
+  arabic(document, brand.statementTitle, 214, 106, {
+    width: 140, align: 'center', underline: true,
   });
 
-  const customerBoxX = 277;
-  const customerBoxY = 117;
-  const customerBoxWidth = 300;
-  document.rect(customerBoxX, customerBoxY, customerBoxWidth, 44).lineWidth(0.55).stroke('#000000');
-  document.moveTo(customerBoxX, customerBoxY + 22).lineTo(577, customerBoxY + 22).stroke('#000000');
-  document.font('ArabicBold').fontSize(7.8);
-  arabic(document, 'اسم الحساب', 500, customerBoxY + 6, { width: 69, align: 'right' });
-  document.font('ArabicBold').fontSize(7.6);
-  arabic(document, customer.name, 286, customerBoxY + 6, { width: 208, height: 12, align: 'right', ellipsis: true });
-  document.font('ArabicBold').fontSize(7.8);
-  arabic(document, 'رقم الحساب', 500, customerBoxY + 28, { width: 69, align: 'right' });
-  document.font('LatinBold').fontSize(8.2).text(customer.externalCustomerCode, 286, customerBoxY + 28, {
-    width: 208, height: 12, align: 'right', lineBreak: false,
+  const customerBoxX = 314;
+  const customerBoxY = 126;
+  const customerBoxWidth = 249;
+  document.roundedRect(customerBoxX, customerBoxY, customerBoxWidth, 37, 7).lineWidth(0.55).stroke('#000000');
+  document.font('Arabic').fontSize(7.4);
+  arabic(document, 'اسم الحساب', 497, customerBoxY + 4, { width: 58, align: 'right' });
+  document.font('ArabicBold').fontSize(7.5);
+  arabic(document, customer.name, 322, customerBoxY + 4, { width: 172, height: 12, align: 'right', ellipsis: true });
+  document.font('Arabic').fontSize(7.4);
+  arabic(document, 'رقم الحساب', 497, customerBoxY + 20, { width: 58, align: 'right' });
+  document.font('LatinBold').fontSize(8.2).text(customer.externalCustomerCode, 322, customerBoxY + 20, {
+    width: 172, height: 12, align: 'right', lineBreak: false,
   });
 
   const from = options.fromDate ? dateText(options.fromDate) : 'البداية';
   const to = options.toDate ? dateText(options.toDate) : dateText(new Date());
-  document.rect(18, 117, 247, 20).lineWidth(0.55).stroke('#000000');
-  document.font('ArabicBold').fontSize(7.6);
-  arabic(document, 'للفترة من', 194, 122, { width: 63, align: 'right' });
-  boldText(document, from, 119, 122, { width: 72, align: 'center' });
+  document.roundedRect(2, 131, 273, 15, 6).lineWidth(0.55).stroke('#000000');
+  document.font('ArabicBold').fontSize(7.1);
+  arabic(document, 'للفترة من', 205, 133, { width: 62, align: 'right' });
+  boldText(document, from, 125, 133, { width: 76, align: 'center' });
   document.font('ArabicBold');
-  arabic(document, 'إلى', 93, 122, { width: 24, align: 'center' });
-  document.font('LatinBold').text(to, 20, 122, { width: 72, align: 'center' });
-  document.rect(61, 141, 204, 20).lineWidth(0.55).stroke('#000000');
-  document.font('ArabicBold').fontSize(7.8);
-  arabic(document, 'الرصيد الحالي', 181, 146, { width: 76, align: 'right' });
-  document.fillColor('#c62828').font('LatinBold').fontSize(9).text(fmt(Math.abs(summary.currentBalance)), 70, 145, {
-    width: 106, align: 'right', lineBreak: false,
+  arabic(document, 'إلى', 98, 133, { width: 24, align: 'center' });
+  document.font('LatinBold').text(to, 13, 133, { width: 82, align: 'center' });
+  document.roundedRect(2, 148, 273, 15, 6).lineWidth(0.55).stroke('#000000');
+  document.font('ArabicBold').fontSize(7.2);
+  arabic(document, 'الرصيد الحالي', 194, 150, { width: 73, align: 'right' });
+  document.fillColor('#c62828').font('LatinBold').fontSize(8.4).text(fmt(Math.abs(summary.currentBalance)), 48, 149.5, {
+    width: 140, align: 'right', lineBreak: false,
   });
   document.fillColor('#000000').font('Arabic').fontSize(7.5);
-  arabic(document, balanceSide(summary.currentBalance), 18, 146, { width: 38, align: 'center' });
+  arabic(document, balanceSide(summary.currentBalance), 7, 150, { width: 37, align: 'center' });
 }
 
-const CLASSIC_COLUMNS = [18, 100, 174, 248, 425, 488, 532];
-const CLASSIC_WIDTHS = [82, 74, 74, 177, 63, 44, 45];
+const CLASSIC_COLUMNS = [2, 91, 165, 236, 406, 470, 509];
+const CLASSIC_WIDTHS = [89, 74, 71, 170, 64, 39, 55];
 const CLASSIC_HEADERS = ['الرصيد', 'دائن', 'مدين', 'البيان', 'المرجع', 'المستند', 'التاريخ'];
 
 function drawClassicTableHeader(document: PDFKit.PDFDocument, y: number) {
-  document.rect(18, y, 559, 18).lineWidth(0.65).stroke('#000000');
-  document.font('ArabicBold').fontSize(7.2).fillColor('#000000');
+  document.roundedRect(2, y, 562, 19, 7).lineWidth(0.8).stroke('#000000');
+  document.font('ArabicBold').fontSize(8.3).fillColor('#000000');
   CLASSIC_HEADERS.forEach((label, index) => {
     arabic(document, label, CLASSIC_COLUMNS[index] + 2, y + 4, { width: CLASSIC_WIDTHS[index] - 4, align: 'center' });
-    if (index > 0) document.moveTo(CLASSIC_COLUMNS[index], y).lineTo(CLASSIC_COLUMNS[index], y + 18).stroke('#000000');
+    if (index > 0) document.moveTo(CLASSIC_COLUMNS[index], y).lineTo(CLASSIC_COLUMNS[index], y + 19).lineWidth(0.45).stroke('#000000');
   });
-  return y + 18;
+  document.moveTo(2, y + 19).lineTo(564, y + 19).lineWidth(0.8).stroke('#000000');
+  return y + 19;
 }
 
 function drawClassicBalanceCell(
@@ -233,9 +239,9 @@ function drawClassicBalanceCell(
   height: number,
 ) {
   document.fillColor('#000000').font('Arabic').fontSize(5.8);
-  arabic(document, balanceSide(value), x + 2, y + 4, { width: 23, height: height - 5, align: 'left', lineBreak: false });
-  document.font('Latin').fontSize(6.6).text(fmt(Math.abs(value)), x + 26, y + 4, {
-    width: width - 29, height: height - 5, align: 'right', lineBreak: false,
+  arabic(document, balanceSide(value), x + 2, y + 4, { width: 20, height: height - 5, align: 'left', lineBreak: false });
+  document.font('Latin').fontSize(8.2).text(fmt(Math.abs(value)), x + 23, y + 3, {
+    width: width - 26, height: height - 4, align: 'right', lineBreak: false,
   });
 }
 
@@ -246,22 +252,25 @@ function drawClassicRow(
   y: number,
   height = 16,
 ) {
-  document.fillColor('#000000').fontSize(6.6);
+  document.fillColor('#000000');
   values.forEach((value, index) => {
     if (index === 0) drawClassicBalanceCell(document, balance, CLASSIC_COLUMNS[index], y, CLASSIC_WIDTHS[index], height);
-    else tableText(document, value, CLASSIC_COLUMNS[index] + 3, y + 4, {
-      width: CLASSIC_WIDTHS[index] - 6,
-      height: height - 5,
-      ellipsis: index !== 3,
-      align: index >= 4 ? 'right' : 'right',
-      lineBreak: false,
-    });
+    else {
+      document.fontSize(index === 3 ? 8 : index >= 5 ? 8.5 : 8.2);
+      tableText(document, value, CLASSIC_COLUMNS[index] + 3, y + 3, {
+        width: CLASSIC_WIDTHS[index] - 6,
+        height: height - 4,
+        ellipsis: index !== 3,
+        align: 'right',
+        lineBreak: false,
+      });
+    }
     if (index > 0) document.moveTo(CLASSIC_COLUMNS[index], y).lineTo(CLASSIC_COLUMNS[index], y + height).lineWidth(0.35).stroke('#000000');
   });
-  document.save().dash(3, { space: 2 }).moveTo(18, y + height).lineTo(577, y + height)
+  document.save().dash(3, { space: 2 }).moveTo(2, y + height).lineTo(564, y + height)
     .lineWidth(0.35).stroke('#000000').undash().restore();
-  document.moveTo(18, y).lineTo(18, y + height).lineWidth(0.35).stroke('#000000');
-  document.moveTo(577, y).lineTo(577, y + height).lineWidth(0.35).stroke('#000000');
+  document.moveTo(2, y).lineTo(2, y + height).lineWidth(0.35).stroke('#000000');
+  document.moveTo(564, y).lineTo(564, y + height).lineWidth(0.35).stroke('#000000');
   return y + height;
 }
 
@@ -275,12 +284,12 @@ function drawClassicFooters(
   for (let index = pages.start; index < pages.start + pages.count; index += 1) {
     document.switchToPage(index);
     document.fillColor('#000000').font('ArabicBold').fontSize(6.8);
-    arabic(document, legalText, 70, 770, { width: 507, height: 13, align: 'right', lineBreak: false, ellipsis: true });
-    document.moveTo(18, 793).lineTo(577, 793).lineWidth(0.4).stroke('#000000');
-    document.font('Latin').fontSize(6.2).text(`Page :${index + 1}`, 18, 803, {
+    arabic(document, legalText, 55, 792, { width: 509, height: 13, align: 'right', lineBreak: false, ellipsis: true });
+    document.moveTo(2, 812).lineTo(564, 812).lineWidth(0.4).stroke('#000000');
+    document.font('Latin').fontSize(6.2).text(`Page :${index + 1}`, 2, 822, {
       width: 80, height: 10, align: 'left', lineBreak: false,
     });
-    document.font('Latin').text(`Prepared by: ${printedBy} / ${dateTimeText(printedAt)}`, 292, 803, {
+    document.font('Latin').text(`Prepared by: ${printedBy} / ${dateTimeText(printedAt)}`, 279, 822, {
       width: 285, height: 10, align: 'right', lineBreak: false,
     });
   }
@@ -297,18 +306,18 @@ async function renderClassic(
   registerFonts(document);
   const completed = collect(document);
   drawClassicHeader(document, customer, summary, options);
-  let y = drawClassicTableHeader(document, 165);
+  let y = drawClassicTableHeader(document, 165.5);
   let debitTotal = 0;
   let creditTotal = 0;
   const openingDate = options.fromDate ?? (rows[0]?.date ?? new Date());
   y = drawClassicRow(document, [
-    '', '', '', 'الرصيد الافتتاحي', '', '', dateText(openingDate),
+    '', '', '', 'الرصيد الافتتاحي', '', '', classicRowDateText(openingDate),
   ], summary.periodStartBalance, y);
   for (const row of rows) {
     if (y > 735) {
       document.addPage();
       drawClassicHeader(document, customer, summary, options);
-      y = drawClassicTableHeader(document, 165);
+      y = drawClassicTableHeader(document, 165.5);
     }
     debitTotal += row.debit;
     creditTotal += row.credit;
@@ -319,7 +328,7 @@ async function renderClassic(
       row.description || '-',
       row.reference || '-',
       row.documentNumber || row.documentType || '',
-      dateText(row.date),
+      classicRowDateText(row.date),
     ];
     y = drawClassicRow(document, values, row.runningBalance, y);
   }
@@ -327,26 +336,27 @@ async function renderClassic(
   if (y > 718) {
     document.addPage();
     drawClassicHeader(document, customer, summary, options);
-    y = drawClassicTableHeader(document, 165);
+    y = drawClassicTableHeader(document, 165.5);
   }
-  document.moveTo(18, y).lineTo(577, y).lineWidth(0.65).stroke('#000000');
-  document.moveTo(18, y + 2).lineTo(577, y + 2).lineWidth(0.35).stroke('#000000');
+  document.moveTo(2, y).lineTo(564, y).lineWidth(0.65).stroke('#000000');
+  document.moveTo(2, y + 2).lineTo(564, y + 2).lineWidth(0.35).stroke('#000000');
   CLASSIC_COLUMNS.slice(1).forEach((x) => document.moveTo(x, y).lineTo(x, y + 19).lineWidth(0.35).stroke('#000000'));
-  document.moveTo(18, y).lineTo(18, y + 19).stroke('#000000');
-  document.moveTo(577, y).lineTo(577, y + 19).stroke('#000000');
-  document.font('ArabicBold').fontSize(7.3);
-  arabic(document, 'المجموع الكلي', 251, y + 6, { width: 171, align: 'right' });
-  document.font('LatinBold').fontSize(7).text(fmt(debitTotal), 177, y + 6, { width: 68, align: 'right', lineBreak: false });
-  document.text(fmt(creditTotal), 103, y + 6, { width: 68, align: 'right', lineBreak: false });
-  document.moveTo(18, y + 17).lineTo(577, y + 17).lineWidth(0.35).stroke('#000000');
-  document.moveTo(18, y + 19).lineTo(577, y + 19).lineWidth(0.65).stroke('#000000');
+  document.moveTo(2, y).lineTo(2, y + 19).stroke('#000000');
+  document.moveTo(564, y).lineTo(564, y + 19).stroke('#000000');
+  document.font('ArabicBold').fontSize(8);
+  arabic(document, 'المجموع الكلي', 239, y + 5, { width: 164, align: 'right' });
+  document.font('LatinBold').fontSize(8.2).text(fmt(debitTotal), 168, y + 5, { width: 65, align: 'right', lineBreak: false });
+  document.text(fmt(creditTotal), 94, y + 5, { width: 68, align: 'right', lineBreak: false });
+  document.moveTo(2, y + 17).lineTo(564, y + 17).lineWidth(0.35).stroke('#000000');
+  document.moveTo(2, y + 19).lineTo(564, y + 19).lineWidth(0.65).stroke('#000000');
   y += 19;
 
   const endingDate = options.toDate ?? (rows.at(-1)?.date ?? new Date());
   drawClassicRow(document, [
-    '', '', '', 'الرصيد النهائي', '', '', dateText(endingDate),
+    '', '', '', 'الرصيد النهائي', '', '', classicRowDateText(endingDate),
   ], summary.periodEndBalance, y, 18);
-  document.moveTo(18, y + 18).lineTo(577, y + 18).lineWidth(0.65).stroke('#000000');
+  document.moveTo(2, y + 18).lineTo(564, y + 18).lineWidth(0.65).stroke('#000000');
+  document.roundedRect(2, 165.5, 562, y + 18 - 165.5, 7).lineWidth(0.65).stroke('#000000');
   drawClassicFooters(document, brand.statementFooter, options.printedBy || 'system');
   document.end();
   return completed;

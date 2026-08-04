@@ -12,6 +12,7 @@ import {
   History,
   Clock,
   RotateCcw,
+  Download,
 } from 'lucide-react';
 import { API, api, tokenStore } from '@/lib/api';
 import { useCan } from '@/lib/auth';
@@ -107,9 +108,13 @@ interface SampleCustomer {
   rowNumber: number;
   customerCode: string;
   customerName: string;
+  accountNumber: string | null;
   phone: string | null;
+  whatsapp: string | null;
   region: string | null;
+  address: string | null;
   customerType: string | null;
+  collector: string | null;
 }
 
 interface SampleBalance {
@@ -351,10 +356,15 @@ export default function ImportsPage() {
         title="استيراد Excel"
         action={
           canRun ? (
-            <Button onClick={() => document.getElementById('file-upload-input')?.click()}>
-              <Upload className="h-4 w-4" aria-hidden />
-              رفع ملف جديد
-            </Button>
+            <div className="flex gap-2">
+              <a href="/templates/customer-master-import.xlsx" download className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-concrete-200 bg-white px-4 py-2 text-sm font-semibold text-iron-900 hover:bg-concrete-100 dark:border-line dark:bg-surface-2 dark:text-ink-hi">
+                <Download className="h-4 w-4" aria-hidden />تحميل قالب العملاء والسلف
+              </a>
+              <Button onClick={() => document.getElementById('file-upload-input')?.click()}>
+                <Upload className="h-4 w-4" aria-hidden />
+                رفع ملف جديد
+              </Button>
+            </div>
           ) : null
         }
       />
@@ -924,7 +934,10 @@ function PreviewDialog({
                   <th className="pb-1 font-medium">الكود</th>
                   <th className="pb-1 font-medium">الاسم</th>
                   <th className="pb-1 font-medium">الجوال</th>
+                  <th className="pb-1 font-medium">واتساب</th>
                   <th className="pb-1 font-medium">المنطقة</th>
+                  <th className="pb-1 font-medium">العنوان</th>
+                  <th className="pb-1 font-medium">المحصل</th>
                   <th className="pb-1 font-medium">النوع</th>
                 </tr>
               </thead>
@@ -934,7 +947,10 @@ function PreviewDialog({
                     <td className="tnum pb-1 pr-0" dir="ltr">{c.customerCode}</td>
                     <td className="pb-1 pr-2">{c.customerName}</td>
                     <td className="pb-1" dir="ltr">{c.phone ?? '—'}</td>
+                    <td className="pb-1" dir="ltr">{c.whatsapp ?? '—'}</td>
                     <td className="pb-1">{c.region ?? '—'}</td>
+                    <td className="pb-1">{c.address ?? '—'}</td>
+                    <td className="pb-1">{c.collector ?? '—'}</td>
                     <td className="pb-1">{c.customerType ?? '—'}</td>
                   </tr>
                 ))}

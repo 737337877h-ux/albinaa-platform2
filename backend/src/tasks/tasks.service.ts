@@ -220,7 +220,7 @@ export class TasksService {
               : {}),
       },
       include: {
-        customer: { select: { id: true, name: true, phonePrimary: true, externalCustomerCode: true } },
+        customer: { select: { id: true, name: true, phonePrimary: true, externalCustomerCode: true, customerType: true } },
       },
       orderBy: { dueDate: 'asc' },
     });
@@ -247,7 +247,7 @@ export class TasksService {
     tasks: {
       id: string; customerId: string | null; assignedTo: string | null; taskType: string;
       priorityReason: string | null; expectedAmount: unknown; expectedCurrency: string | null;
-      customer: { id: string; name: string; phonePrimary: string | null; externalCustomerCode: string | null } | null;
+      customer: { id: string; name: string; phonePrimary: string | null; externalCustomerCode: string | null; customerType: string | null } | null;
     }[],
   ) {
     const customerIds = [...new Set(tasks.map((t) => t.customerId).filter((x): x is string => !!x))];
@@ -279,6 +279,7 @@ export class TasksService {
       customerName: t.customer?.name ?? '',
       phone: t.customer?.phonePrimary ?? null,
       customerCode: t.customer?.externalCustomerCode ?? null,
+      accountClass: t.customer?.customerType === 'advance' ? 'advance' : 'customer',
       reason: t.priorityReason ?? t.taskType,
       priority: priorityOfTaskType(t.taskType),
       taskId: t.id,
@@ -288,19 +289,36 @@ export class TasksService {
       currency: t.expectedCurrency ?? undefined,
       balances: balByCustomer.get(t.customerId ?? '') ?? [],
       lastFollowupAt: lastFollowupOf.get(t.customerId ?? '') ?? null,
-    }));
+    })).filter((item) => item.balances.length > 0);
     items.sort((a, b) => a.priority - b.priority
       || (b.expectedAmount ?? 0) - (a.expectedAmount ?? 0));
 
-    const expectedByCurrency: Record<string, number> = {};
-    const totalBalanceByCurrency: Record<string, number> = {};
+    const expectedTargets = new Map<string, number>();
     for (const i of items) {
       if (i.expectedAmount && i.currency) {
-        expectedByCurrency[i.currency] = (expectedByCurrency[i.currency] ?? 0) + i.expectedAmount;
+        const positiveBalance = i.balances.find((b) => b.currency === i.currency)?.balance;
+        const capped = positiveBalance == null ? i.expectedAmount : Math.min(i.expectedAmount, positiveBalance);
+        const key = `${i.customerId}|${i.currency}`;
+        expectedTargets.set(key, Math.max(expectedTargets.get(key) ?? 0, capped));
       }
-      for (const b of i.balances) {
-        totalBalanceByCurrency[b.currency] = (totalBalanceByCurrency[b.currency] ?? 0) + b.balance;
-      }
+    }
+    const expectedByCurrency: Record<string, number> = {};
+    for (const [key, amount] of expectedTargets) {
+      const currency = key.split('|')[1];
+      expectedByCurrency[currency] = (expectedByCurrency[currency] ?? 0) + amount;
+    }
+    const totalBalanceByCurrency: Record<string, number> = {};
+    const customerBalanceByCurrency: Record<string, number> = {};
+    const advanceBalanceByCurrency: Record<string, number> = {};
+    const accountClassByCustomer = new Map(items.map((item) => [item.customerId, item.accountClass]));
+    for (const balance of balances) {
+      const currency = balance.currencyCode;
+      const amount = Number(balance.accountingBalance);
+      totalBalanceByCurrency[currency] = (totalBalanceByCurrency[currency] ?? 0) + amount;
+      const target = accountClassByCustomer.get(balance.customerId) === 'advance'
+        ? advanceBalanceByCurrency
+        : customerBalanceByCurrency;
+      target[currency] = (target[currency] ?? 0) + amount;
     }
 
     return {
@@ -314,7 +332,13 @@ export class TasksService {
         tasksToday: items.length,
         expectedByCurrency,
         totalBalanceByCurrency,
+        customerBalanceByCurrency,
+        advanceBalanceByCurrency,
         unassignedTasks: items.filter((i) => !i.assignedTo).length,
+        methodology: {
+          expected: 'أعلى مبلغ مستهدف لكل حساب وعملة، بحد أقصى الرصيد المدين، دون تكرار المهام',
+          balances: 'أرصدة مدينة فريدة للحسابات الموجودة في قائمة عمل اليوم فقط، دون تكرار الحساب',
+        },
       },
       items,
     };
@@ -833,15 +857,27 @@ export class TasksService {
     items.sort((a, b) => a.priority - b.priority
       || (b.balances[0]?.balance ?? 0) - (a.balances[0]?.balance ?? 0));
 
-    const expectedByCurrency: Record<string, number> = {};
+    const expectedTargets = new Map<string, number>();
     for (const i of items) {
       if (i.expectedAmount && i.currency) {
-        expectedByCurrency[i.currency] = (expectedByCurrency[i.currency] ?? 0) + i.expectedAmount;
+        const positiveBalance = i.balances.find((b) => b.currency === i.currency)?.balance;
+        const capped = positiveBalance == null ? i.expectedAmount : Math.min(i.expectedAmount, positiveBalance);
+        const key = `${i.customerId}|${i.currency}`;
+        expectedTargets.set(key, Math.max(expectedTargets.get(key) ?? 0, capped));
       }
     }
+    const expectedByCurrency: Record<string, number> = {};
+    for (const [key, amount] of expectedTargets) {
+      const currency = key.split('|')[1];
+      expectedByCurrency[currency] = (expectedByCurrency[currency] ?? 0) + amount;
+    }
     const totalBalanceByCurrency: Record<string, number> = {};
+    const seenBalances = new Set<string>();
     for (const i of items) {
       for (const b of i.balances) {
+        const key = `${i.customerId}|${b.currency}`;
+        if (seenBalances.has(key)) continue;
+        seenBalances.add(key);
         totalBalanceByCurrency[b.currency] = (totalBalanceByCurrency[b.currency] ?? 0) + b.balance;
       }
     }
@@ -855,6 +891,10 @@ export class TasksService {
         tasksToday: items.length,
         expectedByCurrency,
         totalBalanceByCurrency,
+        methodology: {
+          expected: 'أعلى مبلغ مستهدف لكل حساب وعملة، بحد أقصى الرصيد المدين، دون تكرار المهام',
+          balances: 'أرصدة مدينة فريدة للحسابات الموجودة في قائمة عمل اليوم فقط، دون تكرار الحساب',
+        },
       },
       items,
     };

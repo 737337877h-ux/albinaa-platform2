@@ -128,6 +128,10 @@ export class CustomersService {
             : { accountingBalance: 0 };
       if (q.currency) balFilter.currencyCode = q.currency;
       where.balances = { some: balFilter };
+    } else if (q.excludeZero) {
+      const nonZero: Prisma.CustomerBalanceWhereInput = { accountingBalance: { not: 0 } };
+      if (q.currency) nonZero.currencyCode = q.currency;
+      where.balances = { some: nonZero };
     }
 
     // الترتيب بالرصيد يتطلب عملة محددة (رصيد العميل معرّف لكل عملة، لا إجمالي مخلوط)
@@ -193,6 +197,11 @@ export class CustomersService {
         include: { collector: { include: { user: { select: { fullName: true } } } } },
       },
       branch: { select: { id: true, name: true } },
+      scores: {
+        orderBy: { computedAt: 'desc' as const },
+        take: 1,
+        select: { score: true, riskLevel: true, computedAt: true },
+      },
     } satisfies Prisma.CustomerInclude;
   }
 
@@ -208,6 +217,13 @@ export class CustomersService {
       branch: c.branch,
       currentCollector: c.assignments[0]
         ? { id: c.assignments[0].collectorId, name: c.assignments[0].collector.user.fullName }
+        : null,
+      riskRating: c.scores[0]
+        ? {
+            score: Number(c.scores[0].score),
+            level: c.scores[0].riskLevel,
+            computedAt: c.scores[0].computedAt,
+          }
         : null,
       balances: c.balances.map((b: any) => ({
         currency: b.currencyCode,
@@ -894,6 +910,84 @@ export class CustomersService {
       req,
     });
     return this.accountGroup(actor, primaryCustomerId);
+  }
+
+  async linkChildAccounts(
+    actor: AuthUser,
+    primaryCustomerId: string,
+    childCustomerIds: string[],
+    req?: Request,
+  ) {
+    const uniqueIds = [...new Set(childCustomerIds)].filter((id) => id !== primaryCustomerId);
+    if (uniqueIds.length === 0) throw new BadRequestException('حدد حسابًا فرعيًا واحدًا على الأقل');
+
+    const primary = await this.assertAccess(actor, primaryCustomerId);
+    const scope = await this.scopeWhere(actor);
+    const [children, primaryAsChild, currentLinks, childPrimaryLinks] = await Promise.all([
+      this.prisma.customer.findMany({
+        where: { ...scope, id: { in: uniqueIds }, status: { not: 'merged' } },
+        select: { id: true, externalCustomerCode: true, name: true, organizationId: true, customerType: true },
+      }),
+      this.prisma.customerAccountLink.findUnique({ where: { childCustomerId: primaryCustomerId } }),
+      this.prisma.customerAccountLink.findMany({ where: { childCustomerId: { in: uniqueIds } } }),
+      this.prisma.customerAccountLink.findMany({
+        where: { primaryCustomerId: { in: uniqueIds } },
+        select: { primaryCustomerId: true },
+      }),
+    ]);
+
+    if (children.length !== uniqueIds.length) {
+      throw new BadRequestException('بعض الحسابات المحددة غير موجودة أو خارج نطاق صلاحيتك');
+    }
+    if (primaryAsChild) {
+      throw new ConflictException('الحساب المختار كرئيسي هو حساب فرعي حاليًا؛ فك ارتباطه أولًا');
+    }
+    const childPrimaryIds = new Set(childPrimaryLinks.map((link) => link.primaryCustomerId));
+    const conflicts = children.filter((child) => {
+      const current = currentLinks.find((link) => link.childCustomerId === child.id);
+      return child.organizationId !== primary.organizationId
+        || (child.customerType === 'advance') !== (primary.customerType === 'advance')
+        || childPrimaryIds.has(child.id)
+        || (!!current && current.primaryCustomerId !== primaryCustomerId);
+    });
+    if (conflicts.length > 0) {
+      throw new ConflictException(
+        `تعذر ربط حسابات من نوع مختلف أو مرتبطة بمجموعات أخرى: ${conflicts.map((c) => c.externalCustomerCode).join('، ')}`,
+      );
+    }
+
+    const alreadyLinked = new Set(
+      currentLinks
+        .filter((link) => link.primaryCustomerId === primaryCustomerId)
+        .map((link) => link.childCustomerId),
+    );
+    const toCreate = children.filter((child) => !alreadyLinked.has(child.id));
+    if (toCreate.length > 0) {
+      await this.prisma.customerAccountLink.createMany({
+        data: toCreate.map((child) => ({
+          organizationId: actor.organizationId,
+          primaryCustomerId,
+          childCustomerId: child.id,
+        })),
+      });
+      for (const child of toCreate) {
+        await this.audit.log({
+          userId: actor.id,
+          action: 'customer_sub_account_linked',
+          entityTable: 'customers',
+          entityId: primaryCustomerId,
+          newValue: {
+            primaryCustomerId,
+            primaryCode: primary.externalCustomerCode,
+            childCustomerId: child.id,
+            childCode: child.externalCustomerCode,
+            bulk: true,
+          },
+          req,
+        });
+      }
+    }
+    return { linkedCount: toCreate.length, ...(await this.accountGroup(actor, primaryCustomerId)) };
   }
 
   async unlinkChildAccount(

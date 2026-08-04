@@ -31,6 +31,10 @@ function normalizeName(s: string): string {
     .trim();
 }
 
+function normalizeCollectorKey(value: string): string {
+  return normalizeName(value).toLowerCase();
+}
+
 @Injectable()
 export class ImportsService {
   private readonly logger = new Logger(ImportsService.name);
@@ -76,10 +80,21 @@ export class ImportsService {
     const profile = parsed.profile ?? 'CUSTOMER_STATEMENT_DETAILS';
 
     // أخطاء إضافية على مستوى القواعد (لا توقف الاستيراد — تُسجَّل ويُتابع)
-    const knownCurrencies = new Set(
-      (await this.prisma.currency.findMany({ where: { active: true } })).map((c) => c.code),
+    const [currencyRows, collectorRows] = await Promise.all([
+      this.prisma.currency.findMany({ where: { active: true }, select: { code: true } }),
+      this.prisma.collector.findMany({
+        where: { active: true, user: { organizationId: actor.organizationId } },
+        select: { user: { select: { username: true, fullName: true } } },
+      }),
+    ]);
+    const knownCurrencies = new Set(currencyRows.map((c) => c.code));
+    const knownCollectors = new Set(
+      collectorRows.flatMap((collector) => [
+        normalizeCollectorKey(collector.user.username),
+        normalizeCollectorKey(collector.user.fullName),
+      ]),
     );
-    const validation = this.validateProfile(profile, parsed, knownCurrencies);
+    const validation = this.validateProfile(profile, parsed, knownCurrencies, knownCollectors);
 
     // حفظ ناتج التحليل بجانب الملف — التنفيذ لاحقًا لا يعيد التحليل
     const parsedPath = `${storedPath}.parsed.json`;
@@ -137,6 +152,7 @@ export class ImportsService {
     profile: ImportProfile,
     parsed: ParseResultJson,
     knownCurrencies: Set<string>,
+    knownCollectors: Set<string> = new Set(),
   ): {
     ruleErrors: { rowNumber: number | null; message: string; context?: string }[];
     importable: Record<string, number>;
@@ -191,6 +207,14 @@ export class ImportsService {
           ruleErrors.push({
             rowNumber: row.rowNumber,
             message: 'اسم عميل ناقص — الصف مستبعد',
+            context: row.customerCode,
+          });
+          continue;
+        }
+        if (row.collector && !knownCollectors.has(normalizeCollectorKey(row.collector))) {
+          ruleErrors.push({
+            rowNumber: row.rowNumber,
+            message: `المحصل غير معروف أو غير نشط (${row.collector}) — الصف مستبعد`,
             context: row.customerCode,
           });
           continue;
@@ -722,7 +746,17 @@ export class ImportsService {
     const executeErrors: { account: string; message: string }[] = [];
     let customersNew = 0;
     let customersUpdated = 0;
+    let assignmentsUpdated = 0;
     const seenCustomerIds = new Map<string, string>(); // code -> id
+    const collectorRows = await this.prisma.collector.findMany({
+      where: { active: true, user: { organizationId: actor.organizationId } },
+      select: { id: true, user: { select: { username: true, fullName: true } } },
+    });
+    const collectorsByKey = new Map<string, string>();
+    for (const collector of collectorRows) {
+      collectorsByKey.set(normalizeCollectorKey(collector.user.username), collector.id);
+      collectorsByKey.set(normalizeCollectorKey(collector.user.fullName), collector.id);
+    }
 
     for (const row of parsed.customers) {
       try {
@@ -793,6 +827,42 @@ export class ImportsService {
           customerId = resolvedId;
           seenCustomerIds.set(row.customerCode, resolvedId);
         }
+
+        if (row.collector) {
+          const collectorId = collectorsByKey.get(normalizeCollectorKey(row.collector));
+          if (!collectorId) {
+            throw new Error(`المحصل غير معروف أو غير نشط: ${row.collector}`);
+          }
+          const current = await this.prisma.customerAssignment.findFirst({
+            where: { customerId, effectiveTo: null },
+            select: { id: true, collectorId: true },
+          });
+          if (current?.collectorId !== collectorId) {
+            const now = new Date();
+            await this.prisma.$transaction(async (tx) => {
+              if (current) {
+                await tx.customerAssignment.update({
+                  where: { id: current.id },
+                  data: { effectiveTo: now },
+                });
+              }
+              await tx.customerAssignment.create({
+                data: {
+                  customerId,
+                  collectorId,
+                  effectiveFrom: now,
+                  reason: `استيراد بيانات العملاء (${jobId})`,
+                  assignedBy: actor.id,
+                },
+              });
+              await tx.task.updateMany({
+                where: { customerId, status: 'open' },
+                data: { assignedTo: collectorId },
+              });
+            });
+            assignmentsUpdated += 1;
+          }
+        }
       } catch (e) {
         executeErrors.push({
           account: row.customerCode,
@@ -803,6 +873,7 @@ export class ImportsService {
 
     return {
       customersNew, customersUpdated, txnsInserted: 0, txnsSkipped: 0,
+      assignmentsUpdated,
       executeErrors, dupPairs: 0, reconciliations: 0,
       totalsBefore: {}, totalsAfter: {},
     };

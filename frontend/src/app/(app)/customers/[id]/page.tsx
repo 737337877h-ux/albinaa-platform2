@@ -1,10 +1,10 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
-import { ArrowDownUp, CheckCircle2, Download, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX, Link2, Unlink } from 'lucide-react';
-import { api, ApiError, downloadApiFile } from '@/lib/api';
+import { ArrowDownUp, CheckCircle2, Download, Eye, Pencil, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX, Link2, Unlink } from 'lucide-react';
+import { api, apiFileBlob, ApiError, downloadApiFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
@@ -17,6 +17,7 @@ import { toast } from '@/components/ui/toast';
 import { Badge, Button, Card, Empty, ErrorNote, Field, Input, Money, Pagination, Select, Skeleton, Textarea } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsPanel } from '@/components/ui/tabs';
+import { CustomerFormDialog } from '@/components/customer-form-dialog';
 
 /* ──────────────────────────────────────────── Types ───────────────────────────────────── */
 
@@ -373,6 +374,7 @@ export default function Customer360Page() {
 
   const [tab, setTab] = useState(searchParams.get('tab') ?? 'overview');
   const [messageChannel, setMessageChannel] = useState<'whatsapp' | 'sms' | null>(null);
+  const [editCustomerOpen, setEditCustomerOpen] = useState(false);
 
   const setTabSafe = (v: string) => {
     setTab(v);
@@ -389,16 +391,33 @@ export default function Customer360Page() {
   /* ──────── Statement queries (lazy per tab) ──────── */
   const [stmtCurrency, setStmtCurrency] = useState('YER');
   const [stmtPage, setStmtPage] = useState(1);
+  const [stmtFromDate, setStmtFromDate] = useState('');
+  const [stmtToDate, setStmtToDate] = useState('');
   const [pdfDownloading, setPdfDownloading] = useState(false);
-  const [pdfTemplate, setPdfTemplate] = useState<'classic' | 'branded'>('branded');
+  const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const previewFrame = useRef<HTMLIFrameElement>(null);
+  const [pdfTemplate, setPdfTemplate] = useState<'classic' | 'branded'>('classic');
+  const statementParams = () => {
+    const params = new URLSearchParams({ currency: stmtCurrency });
+    if (stmtFromDate) params.set('fromDate', stmtFromDate);
+    if (stmtToDate) params.set('toDate', stmtToDate);
+    return params;
+  };
   const statement = useQuery<StatementResponse>({
-    queryKey: ['statement', id, stmtCurrency, stmtPage],
-    queryFn: () => api<StatementResponse>(
-      `/customers/${id}/statement?currency=${stmtCurrency}&page=${stmtPage}&limit=50`,
-    ),
+    queryKey: ['statement', id, stmtCurrency, stmtFromDate, stmtToDate, stmtPage],
+    queryFn: () => {
+      const params = statementParams();
+      params.set('page', String(stmtPage)); params.set('limit', '50');
+      return api<StatementResponse>(`/customers/${id}/statement?${params.toString()}`);
+    },
     enabled: canRead && canBalances && tab === 'statement',
     retry: false,
   });
+
+  useEffect(() => () => {
+    if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+  }, [pdfPreviewUrl]);
   const accountGroup = useQuery<CustomerAccountGroup>({
     queryKey: ['customer-account-group', id],
     queryFn: () => api<CustomerAccountGroup>(`/customers/${id}/account-group`),
@@ -406,22 +425,29 @@ export default function Customer360Page() {
   });
   const [linkAccountOpen, setLinkAccountOpen] = useState(false);
   const [linkAccountSearch, setLinkAccountSearch] = useState('');
+  const [selectedLinkedAccounts, setSelectedLinkedAccounts] = useState<Record<string, CustomerSearchResponse['items'][number]>>({});
   const linkedCandidates = useQuery<CustomerSearchResponse>({
-    queryKey: ['customer-link-candidates', linkAccountSearch],
-    queryFn: () => api<CustomerSearchResponse>(`/customers?search=${encodeURIComponent(linkAccountSearch)}&limit=10`),
+    queryKey: ['customer-link-candidates', linkAccountSearch, customer.data?.customerType],
+    queryFn: () => api<CustomerSearchResponse>(`/customers?search=${encodeURIComponent(linkAccountSearch)}&limit=10${customer.data?.customerType === 'advance' ? '&accountClass=advance' : ''}`),
     enabled: linkAccountOpen && linkAccountSearch.trim().length >= 2,
   });
   const linkAccount = useMutation({
-    mutationFn: (childCustomerId: string) => api(`/customers/${id}/account-group/children`, {
-      method: 'POST', body: JSON.stringify({ childCustomerId }),
+    mutationFn: (childCustomerIds: string[]) => api(`/customers/${id}/account-group/children/bulk`, {
+      method: 'POST', body: JSON.stringify({ childCustomerIds }),
     }),
     onSuccess: () => {
       toast('تم ربط الحساب الفرعي مع إبقاء بياناته وحركاته مستقلة', 'ok');
       setLinkAccountOpen(false);
       setLinkAccountSearch('');
+      setSelectedLinkedAccounts({});
       qc.invalidateQueries({ queryKey: ['customer-account-group'] });
     },
     onError: (error: Error) => toast(error.message, 'err'),
+  });
+  const toggleLinkedAccount = (item: CustomerSearchResponse['items'][number]) => setSelectedLinkedAccounts((current) => {
+    const next = { ...current };
+    if (next[item.id]) delete next[item.id]; else next[item.id] = item;
+    return next;
   });
   const unlinkAccount = useMutation({
     mutationFn: (childCustomerId: string) => api(`/customers/${id}/account-group/children/${childCustomerId}`, { method: 'DELETE' }),
@@ -672,12 +698,13 @@ export default function Customer360Page() {
 
   /* ──────── CSV Export ──────── */
   const exportCsv = () => {
-    if (statement.data?.items?.length) {
+    if (statement.data) {
       const headers = ['التاريخ', 'نوع المستند', 'رقم المستند', 'البيان', 'المرجع', 'مدين', 'دائن', 'الرصيد الجاري'];
-      const rows = statement.data.items.map(r => [
+      const openingDate = stmtFromDate || statement.data.items[0]?.date || '';
+      const rows = [[openingDate, '', '', 'الرصيد الافتتاحي', '', '', '', statement.data.periodStartBalance], ...statement.data.items.map(r => [
         r.date, r.documentType, r.documentNumber, r.description, r.reference,
         r.debit || '', r.credit || '', r.runningBalance,
-      ]);
+      ])];
       const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\r\n');
       const BOM = '\uFEFF';
       const dataUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(BOM + csv);
@@ -711,7 +738,7 @@ export default function Customer360Page() {
     setPdfDownloading(true);
     try {
       await downloadApiFile(
-        `/customers/${id}/statement.pdf?currency=${encodeURIComponent(stmtCurrency)}&template=${pdfTemplate}`,
+        `/customers/${id}/statement.pdf?${statementParams().toString()}&template=${pdfTemplate}`,
         `statement-${c?.externalCustomerCode ?? id}-${stmtCurrency}-${pdfTemplate}.pdf`,
       );
       toast('تم تنزيل كشف الحساب PDF', 'ok');
@@ -719,6 +746,18 @@ export default function Customer360Page() {
       toast(friendlyApiError(error), 'err');
     } finally {
       setPdfDownloading(false);
+    }
+  };
+
+  const previewStatementPdf = async () => {
+    setPdfPreviewLoading(true);
+    try {
+      const blob = await apiFileBlob(`/customers/${id}/statement.pdf?${statementParams().toString()}&template=${pdfTemplate}`);
+      setPdfPreviewUrl(URL.createObjectURL(blob));
+    } catch (error) {
+      toast(friendlyApiError(error), 'err');
+    } finally {
+      setPdfPreviewLoading(false);
     }
   };
 
@@ -747,11 +786,25 @@ export default function Customer360Page() {
         title={isLoading ? '...' : c?.name ?? 'الحساب'}
         action={
           c ? (
-            <Link href={c.customerType === 'advance' ? '/advances' : '/customers'} className="text-sm text-pine-700 hover:underline dark:text-pine-100">
-              ← العودة إلى {c.customerType === 'advance' ? 'السلف' : 'العملاء'}
-            </Link>
+            <div className="flex items-center gap-3">
+              {canWrite && <Button variant="secondary" onClick={() => setEditCustomerOpen(true)}><Pencil className="h-4 w-4" />تعديل البيانات</Button>}
+              <Link href={c.customerType === 'advance' ? '/advances' : '/customers'} className="text-sm text-pine-700 hover:underline dark:text-pine-100">
+                ← العودة إلى {c.customerType === 'advance' ? 'السلف' : 'العملاء'}
+              </Link>
+            </div>
           ) : undefined
         }
+      />
+      <CustomerFormDialog
+        open={editCustomerOpen}
+        onClose={() => setEditCustomerOpen(false)}
+        customer={c}
+        defaultCustomerType={c?.customerType ?? 'customer'}
+        onSaved={() => {
+          qc.invalidateQueries({ queryKey: ['customer360', id] });
+          qc.invalidateQueries({ queryKey: ['customers'] });
+          toast('تم حفظ بيانات الحساب', 'ok');
+        }}
       />
 
       {/* Customer Info Bar */}
@@ -916,18 +969,43 @@ export default function Customer360Page() {
 
                 <Dialog open={linkAccountOpen} onClose={() => setLinkAccountOpen(false)} title="ربط حساب فرعي">
                   <div className="space-y-4">
-                    <p className="text-sm text-concrete-600 dark:text-concrete-400">ابحث برقم الحساب أو الاسم. لن يتم دمج أو نقل أي حركة.</p>
-                    <Field label="الحساب الفرعي">
+                    <p className="text-sm text-concrete-600 dark:text-concrete-400">يمكن تحديد عدة حسابات عبر عمليات بحث متتالية. يبقى التحديد محفوظًا عند تغيير كلمة البحث، ولن تُنقل أو تُدمج أي حركة.</p>
+                    {Object.keys(selectedLinkedAccounts).length > 0 && (
+                      <div className="rounded-lg bg-pine-50 p-3 dark:bg-pine-900/20">
+                        <div className="mb-2 flex items-center justify-between text-sm font-semibold">
+                          <span>المحدد: {Object.keys(selectedLinkedAccounts).length}</span>
+                          <button type="button" onClick={() => setSelectedLinkedAccounts({})} className="text-xs text-debt-600">مسح التحديد</button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.values(selectedLinkedAccounts).map((item) => (
+                            <button key={item.id} type="button" onClick={() => toggleLinkedAccount(item)} className="rounded-full bg-white px-2.5 py-1 text-xs shadow-sm dark:bg-iron-800">
+                              {item.externalCustomerCode} — {item.name} ×
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <Field label="البحث عن الحسابات الفرعية">
                       <Input value={linkAccountSearch} onChange={(event) => setLinkAccountSearch(event.target.value)} placeholder="مثال: 10005 أو اسم العميل" />
                     </Field>
                     <div className="max-h-72 space-y-2 overflow-auto">
-                      {(linkedCandidates.data?.items ?? []).filter((item) => item.id !== id).map((item) => (
-                        <button key={item.id} type="button" onClick={() => linkAccount.mutate(item.id)} disabled={linkAccount.isPending} className="flex w-full items-center justify-between rounded-lg border border-concrete-100 p-3 text-right hover:bg-pine-50 disabled:opacity-50 dark:border-white/10 dark:hover:bg-white/5">
+                      {(linkedCandidates.data?.items ?? []).filter((item) => item.id !== id && !accountGroup.data?.children.some((child) => child.id === item.id)).map((item) => (
+                        <button key={item.id} type="button" onClick={() => toggleLinkedAccount(item)} className={`flex w-full items-center justify-between rounded-lg border p-3 text-right ${selectedLinkedAccounts[item.id] ? 'border-pine-600 bg-pine-50 dark:bg-pine-900/20' : 'border-concrete-100 hover:bg-pine-50 dark:border-white/10 dark:hover:bg-white/5'}`}>
                           <span><span className="font-semibold">{item.externalCustomerCode}</span><span className="mr-2">{item.name}</span></span>
-                          <span className="text-xs text-pine-700">اختيار</span>
+                          <span className="text-xs text-pine-700">{selectedLinkedAccounts[item.id] ? 'محدد ✓' : 'تحديد'}</span>
                         </button>
                       ))}
                       {linkAccountSearch.trim().length >= 2 && !linkedCandidates.isLoading && !(linkedCandidates.data?.items ?? []).filter((item) => item.id !== id).length && <p className="py-4 text-center text-sm text-concrete-500">لا توجد نتائج مطابقة</p>}
+                    </div>
+                    <div className="flex justify-end gap-2 border-t border-concrete-100 pt-3 dark:border-white/10">
+                      <Button variant="secondary" onClick={() => setLinkAccountOpen(false)}>إلغاء</Button>
+                      <Button
+                        loading={linkAccount.isPending}
+                        disabled={!Object.keys(selectedLinkedAccounts).length}
+                        onClick={() => linkAccount.mutate(Object.keys(selectedLinkedAccounts))}
+                      >
+                        ربط الحسابات المحددة ({Object.keys(selectedLinkedAccounts).length})
+                      </Button>
                     </div>
                   </div>
                 </Dialog>
@@ -1137,7 +1215,7 @@ export default function Customer360Page() {
             <PermissionNotice message="لا تملك صلاحية عرض الأرصدة (balances.read)" />
           ) : (
             <Card className="report-print">
-              <div className="flex items-center gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+              <div className="flex flex-wrap items-end gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
                 <label className="flex items-center gap-2 text-sm">
                   <span className="text-concrete-500">العملة</span>
                   <Select
@@ -1149,11 +1227,19 @@ export default function Customer360Page() {
                     ))}
                   </Select>
                 </label>
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs text-concrete-500">من تاريخ</span>
+                  <Input type="date" value={stmtFromDate} max={stmtToDate || undefined} onChange={(event) => { setStmtFromDate(event.target.value); setStmtPage(1); }} />
+                </label>
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs text-concrete-500">إلى تاريخ</span>
+                  <Input type="date" value={stmtToDate} min={stmtFromDate || undefined} onChange={(event) => { setStmtToDate(event.target.value); setStmtPage(1); }} />
+                </label>
                 <Button
                   variant="secondary"
                   onClick={exportCsv}
                   className="mr-auto"
-                  disabled={!statement.data?.items?.length && !c?.balances?.length}
+                  disabled={!statement.data && !c?.balances?.length}
                 >
                   <Download className="h-4 w-4" /> تصدير CSV
                 </Button>
@@ -1164,6 +1250,9 @@ export default function Customer360Page() {
                     <option value="classic">الكلاسيكي</option>
                   </Select>
                 </label>
+                <Button variant="secondary" onClick={previewStatementPdf} loading={pdfPreviewLoading} className="print:hidden">
+                  <Eye className="h-4 w-4" /> معاينة قبل الطباعة
+                </Button>
                 <Button variant="secondary" onClick={exportStatementPdf} loading={pdfDownloading} className="print:hidden">
                   <Download className="h-4 w-4" /> تنزيل PDF
                 </Button>
@@ -1175,7 +1264,7 @@ export default function Customer360Page() {
                 error={statement.error}
                 onRetry={() => statement.refetch()}
                 isFetching={statement.isFetching}
-                isEmpty={!statement.data?.items?.length}
+                isEmpty={!statement.data}
                 emptyTitle="لا توجد حركات"
                 emptyHint={`لا توجد حركات بهذه العملة${stmtCurrency ? ` (${CCY_AR[stmtCurrency] ?? stmtCurrency})` : ''}`}
                 skeletonClassName="h-64"
@@ -1201,6 +1290,13 @@ export default function Customer360Page() {
                     <Table>
                       <THead cols={['التاريخ', 'نوع المستند', 'الرقم', 'البيان', 'المرجع', 'مدين', 'دائن', 'الرصيد']} />
                       <tbody>
+                        <TRow>
+                          <TD>{stmtFromDate ? fmtDate(stmtFromDate) : statement.data.items[0]?.date ? fmtDate(statement.data.items[0].date) : '—'}</TD>
+                          <TD>—</TD><TD>—</TD>
+                          <TD className="font-semibold">الرصيد الافتتاحي</TD>
+                          <TD>—</TD><TD>—</TD><TD>—</TD>
+                          <TD className="font-semibold"><Money value={statement.data.periodStartBalance} signed /></TD>
+                        </TRow>
                         {statement.data.items.map((r, i) => (
                           <TRow key={i}>
                             <TD>{fmtDate(r.date)}</TD>
@@ -1215,11 +1311,24 @@ export default function Customer360Page() {
                         ))}
                       </tbody>
                     </Table>
+                    {!statement.data.items.length && <p className="px-4 py-3 text-center text-sm text-concrete-500">لا توجد حركات خلال الفترة المحددة؛ يظهر رصيد بداية الفترة فقط.</p>}
                     <Pagination page={statement.data.page} totalPages={statement.data.totalPages} onPage={setStmtPage} />
                     <p className="hidden py-5 text-center font-bold text-debt-600 print:block">كشف غير معتمد ما لم يُختم</p>
                   </>
                 )}
               </DataState>
+              <Dialog open={!!pdfPreviewUrl} onClose={() => setPdfPreviewUrl(null)} title="معاينة كشف الحساب قبل الطباعة" className="sm:max-w-6xl">
+                {pdfPreviewUrl && (
+                  <div className="space-y-3">
+                    <iframe ref={previewFrame} src={pdfPreviewUrl} title="معاينة كشف الحساب" className="h-[72vh] w-full rounded-lg border border-concrete-200 bg-white" />
+                    <div className="flex justify-end gap-2">
+                      <Button variant="secondary" onClick={() => setPdfPreviewUrl(null)}>إغلاق</Button>
+                      <Button variant="secondary" onClick={() => previewFrame.current?.contentWindow?.print()}>طباعة</Button>
+                      <Button onClick={exportStatementPdf} loading={pdfDownloading}><Download className="h-4 w-4" />تنزيل PDF</Button>
+                    </div>
+                  </div>
+                )}
+              </Dialog>
             </Card>
           )}
         </TabsPanel>

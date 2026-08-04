@@ -138,3 +138,22 @@ export async function downloadApiFile(path: string, filename: string): Promise<v
   document.body.appendChild(link); link.click(); link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+/** Fetches an authenticated file without downloading it, for an in-app preview. */
+export async function apiFileBlob(path: string): Promise<Blob> {
+  const doFetch = () => fetch(`${API}${path}`, {
+    headers: store.access ? { Authorization: `Bearer ${store.access}` } : {},
+  });
+  let res: Response;
+  try {
+    res = await doFetch();
+  } catch {
+    throw new ApiError(0, 'تعذّر الاتصال بالخادم');
+  }
+  if (res.status === 401 && await tryRefresh()) res = await doFetch();
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(res.status, (body as { message?: string } | null)?.message ?? 'تعذّر جلب الملف', body);
+  }
+  return res.blob();
+}

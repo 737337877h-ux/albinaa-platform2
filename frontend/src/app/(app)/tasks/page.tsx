@@ -36,6 +36,9 @@ interface TodayResponse {
     tasksToday: number;
     expectedByCurrency: Record<string, number>;
     totalBalanceByCurrency: Record<string, number>;
+    customerBalanceByCurrency?: Record<string, number>;
+    advanceBalanceByCurrency?: Record<string, number>;
+    methodology?: { expected: string; balances: string };
   };
   items: TodayItem[];
 }
@@ -61,10 +64,21 @@ interface StoredTask {
 
 const PRIORITY_CONFIG: Record<number, { color: string; icon: typeof AlertTriangle; label: string }> = {
   1: { color: 'border-r-red-500 bg-red-50/50 dark:bg-red-900/10', icon: ArrowUpCircle, label: 'عاجل' },
+  1.5: { color: 'border-r-red-500 bg-red-50/50 dark:bg-red-900/10', icon: ArrowUpCircle, label: 'إنذار قانوني' },
   2: { color: 'border-r-amber-500 bg-amber-50/50 dark:bg-amber-900/10', icon: AlertTriangle, label: 'مهم' },
+  2.5: { color: 'border-r-amber-500 bg-amber-50/50 dark:bg-amber-900/10', icon: AlertTriangle, label: 'زيارة ميدانية' },
   3: { color: 'border-r-orange-400 bg-orange-50/30 dark:bg-orange-900/10', icon: Clock, label: 'متابعة متأخرة' },
   4: { color: 'border-r-blue-400 bg-blue-50/30 dark:bg-blue-900/10', icon: TrendingUp, label: 'رصيد مرتفع' },
+  4.5: { color: 'border-r-blue-400 bg-blue-50/30 dark:bg-blue-900/10', icon: Phone, label: 'مكالمة تحصيل' },
   5: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: TrendingUp, label: 'مخاطر' },
+  6: { color: 'border-r-orange-400 bg-orange-50/30 dark:bg-orange-900/10', icon: TrendingUp, label: 'مديونية كبيرة' },
+  6.5: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: AlertTriangle, label: 'رسالة تذكير' },
+  7: { color: 'border-r-red-500 bg-red-50/50 dark:bg-red-900/10', icon: ArrowUpCircle, label: 'متقادم +120' },
+  8: { color: 'border-r-orange-400 bg-orange-50/30 dark:bg-orange-900/10', icon: TrendingUp, label: 'دون متابعة' },
+  9: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: Phone, label: 'لا يرد' },
+  10: { color: 'border-r-amber-500 bg-amber-50/50 dark:bg-amber-900/10', icon: AlertTriangle, label: 'يحتاج زيارة' },
+  11: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: Clock, label: 'متابعة دورية' },
+  12: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: Clock, label: 'عادية' },
 };
 
 const STATUS_BADGE: Record<string, string> = {
@@ -164,7 +178,7 @@ export default function TasksPage() {
                     <SummaryCard
                       key={ccy}
                       icon={<AlertTriangle className="h-5 w-5 text-amber-500" />}
-                      label={`المتوقع (${CCY_AR[ccy] ?? ccy})`}
+                      label={`هدف التحصيل للحسابات المدرجة (${CCY_AR[ccy] ?? ccy})`}
                       value={<Money value={amt} currency={ccy} />}
                     />
                   ))}
@@ -177,6 +191,24 @@ export default function TasksPage() {
                     />
                   ))}
                 </div>
+
+                {s?.methodology && (
+                  <Card className="p-4 text-sm">
+                    <h3 className="font-semibold">كيف حُسبت المؤشرات؟</h3>
+                    <p className="mt-1 text-concrete-600 dark:text-concrete-300"><strong>هدف التحصيل:</strong> {s.methodology.expected}. هذا هدف تشغيلي مبني على الرصيد/التقادم، وليس تنبؤًا احتماليًا.</p>
+                    <p className="mt-1 text-concrete-600 dark:text-concrete-300"><strong>إجمالي أرصدة عمل اليوم:</strong> {s.methodology.balances}. لذلك لا يلزم أن يساوي إجمالي مديونية لوحة التحكم التي تشمل جميع العملاء.</p>
+                  </Card>
+                )}
+
+                <Card className="p-4 text-sm">
+                  <h3 className="font-semibold">نموذج أولوية المتابعة المعتمد</h3>
+                  <div className="mt-2 grid gap-2 text-concrete-600 sm:grid-cols-2 xl:grid-cols-4 dark:text-concrete-300">
+                    <p><strong>1.</strong> وعد متأخر أو مستحق اليوم.</p>
+                    <p><strong>2.</strong> متابعة متأخرة أو مخاطرة حرجة.</p>
+                    <p><strong>3.</strong> دين كبير مضى عليه 7 أيام أو متقادم +120.</p>
+                    <p><strong>4.</strong> رصيد مرتفع بلا متابعة، تكرار عدم الرد، أو زيارة.</p>
+                  </div>
+                </Card>
 
                 {/* Items */}
                 <Card>
