@@ -27,7 +27,7 @@ const NAV = [
   { href: '/dashboard', label: 'لوحة التحكم', icon: LayoutDashboard, perm: 'reports.read' },
   { href: '/tasks', label: 'عمل اليوم', icon: ListTodo, perm: 'tasks.manage' },
   { href: '/customers', label: 'العملاء', icon: Users, perm: 'customers.read' },
-  { href: '/advances', label: 'السلف', icon: Banknote, perm: 'analytical_accounts.read' },
+  { href: '/advances', label: 'السلف', icon: Banknote, perm: 'customers.read' },
   { href: '/followups', label: 'المتابعات', icon: PhoneCall, perm: 'customers.read' },
   { href: '/promises', label: 'وعود السداد', icon: CalendarClock, perm: 'customers.read' },
   { href: '/collections', label: 'التحصيلات', icon: HandCoins, perm: 'customers.read' },

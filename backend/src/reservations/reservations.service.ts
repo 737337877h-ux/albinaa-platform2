@@ -13,6 +13,10 @@ export function reservationWeightTons(quantity: number, weightKg: number | null)
   return weightKg === null ? null : quantity * weightKg / 1000;
 }
 
+export function reservationAverageTonPrice(totalAmount: number, totalTons: number): number | null {
+  return totalTons > 0 ? totalAmount / totalTons : null;
+}
+
 // Goods reservations: operational tracking only.
 // Never touches customer accountingBalance/operationalBalance or collections —
 // issuing only moves quantity between issuedQty/remainingQty on the reservation itself.
@@ -87,6 +91,11 @@ export class ReservationsService {
       total_tons: Prisma.Decimal;
       expiring_in_7_days: bigint;
       totals_by_currency: Array<{ currency: string; amount: number | string }>;
+      ton_price_basis_by_currency: Array<{
+        currency: string;
+        totalAmount: number | string;
+        totalTons: number | string;
+      }>;
       unweighted_units: Array<{ unitName: string; qty: number | string }>;
     }>>(Prisma.sql`
       WITH active AS (
@@ -113,6 +122,21 @@ export class ReservationsService {
         (SELECT COALESCE(jsonb_agg(jsonb_build_object('currency', currency_code, 'amount', amount) ORDER BY currency_code), '[]'::jsonb)
           FROM (SELECT currency_code, SUM(qty * unit_price) AS amount FROM active GROUP BY currency_code) currency_totals
         ) AS totals_by_currency,
+        (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+            'currency', currency_code,
+            'totalAmount', total_amount,
+            'totalTons', total_tons
+          ) ORDER BY currency_code), '[]'::jsonb)
+          FROM (
+            SELECT
+              currency_code,
+              SUM(qty * unit_price) AS total_amount,
+              SUM(qty * weight_kg / 1000) AS total_tons
+            FROM active
+            WHERE weight_kg IS NOT NULL
+            GROUP BY currency_code
+          ) ton_price_basis
+        ) AS ton_price_basis_by_currency,
         (SELECT COALESCE(jsonb_agg(jsonb_build_object('unitName', unit_name, 'qty', qty) ORDER BY unit_name), '[]'::jsonb)
           FROM (SELECT COALESCE(unit_name, 'بانتظار التصنيف') AS unit_name, SUM(qty) AS qty FROM active WHERE weight_kg IS NULL GROUP BY COALESCE(unit_name, 'بانتظار التصنيف')) unweighted
         ) AS unweighted_units
@@ -125,6 +149,11 @@ export class ReservationsService {
       totalsByCurrency: (row.totals_by_currency ?? []).map((item) => ({
         currency: item.currency,
         amount: Number(item.amount),
+      })),
+      averageTonPriceByCurrency: (row.ton_price_basis_by_currency ?? []).map((item) => ({
+        currency: item.currency,
+        averageTonPrice: reservationAverageTonPrice(Number(item.totalAmount), Number(item.totalTons)) ?? 0,
+        totalTons: Number(item.totalTons),
       })),
       unweightedUnits: (row.unweighted_units ?? []).map((item) => ({
         unitName: item.unitName,

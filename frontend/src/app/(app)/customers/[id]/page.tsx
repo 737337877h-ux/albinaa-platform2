@@ -177,13 +177,14 @@ interface CustomerAccountGroupMember {
   id: string;
   externalCustomerCode: string;
   name: string;
-  balances: { currencyCode: string; accountingBalance: string | number }[];
+  balances: { currencyCode: string; accountingBalance: number; operationalBalance: number }[];
 }
 
 interface CustomerAccountGroup {
   role: 'standalone' | 'primary' | 'child';
   primary: CustomerAccountGroupMember | null;
   children: CustomerAccountGroupMember[];
+  childBalances: { currency: string; balance: number }[];
   aggregateBalances: { currency: string; balance: number }[];
 }
 
@@ -936,14 +937,25 @@ export default function Customer360Page() {
                         <Button variant="secondary" onClick={() => setLinkAccountOpen(true)}><Link2 className="h-4 w-4" /> ربط حساب فرعي</Button>
                       )}
                     </div>
-                    {accountGroup.data.aggregateBalances.length > 0 && (
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {accountGroup.data.aggregateBalances.map((balance) => (
-                          <div key={balance.currency} className="rounded-lg bg-pine-50 px-3 py-2 text-sm dark:bg-pine-900/20">
-                            <span className="ml-2 text-xs text-concrete-500">الرصيد المجمع</span>
-                            <Money value={balance.balance} currency={balance.currency} signed />
+                    {accountGroup.data.role === 'primary' && accountGroup.data.aggregateBalances.length > 0 && (
+                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-lg bg-pine-50 p-3 dark:bg-pine-900/20">
+                          <p className="mb-2 text-xs font-semibold text-concrete-500">إجمالي أرصدة الحسابات الفرعية</p>
+                          <div className="space-y-1">
+                            {accountGroup.data.childBalances.map((balance) => (
+                              <div key={balance.currency}><Money value={balance.balance} currency={balance.currency} signed /></div>
+                            ))}
+                            {accountGroup.data.childBalances.length === 0 && <span className="text-xs text-concrete-400">لا توجد أرصدة فرعية</span>}
                           </div>
-                        ))}
+                        </div>
+                        <div className="rounded-lg bg-pine-50 p-3 dark:bg-pine-900/20">
+                          <p className="mb-2 text-xs font-semibold text-concrete-500">إجمالي المجموعة مع الحساب الرئيسي</p>
+                          <div className="space-y-1">
+                            {accountGroup.data.aggregateBalances.map((balance) => (
+                              <div key={balance.currency}><Money value={balance.balance} currency={balance.currency} signed /></div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     )}
                     {accountGroup.data.role === 'child' && accountGroup.data.primary && (
@@ -961,7 +973,7 @@ export default function Customer360Page() {
                             <div className="flex items-start justify-between gap-2">
                               <div>
                                 <Link href={`/customers/${child.id}`} className="font-semibold text-pine-700 hover:underline dark:text-pine-200">{child.externalCustomerCode} — {child.name}</Link>
-                                <div className="mt-2 space-y-1 text-xs">{child.balances.map((balance) => <div key={balance.currencyCode}><Money value={Number(balance.accountingBalance)} currency={balance.currencyCode} signed /></div>)}</div>
+                                <div className="mt-2 space-y-1 text-xs">{child.balances.map((balance) => <div key={balance.currencyCode}><Money value={balance.operationalBalance} currency={balance.currencyCode} signed /></div>)}</div>
                               </div>
                               {canWrite && <button type="button" title="فك الارتباط" onClick={() => unlinkAccount.mutate(child.id)} className="rounded p-1 text-concrete-400 hover:bg-red-50 hover:text-red-600"><Unlink className="h-4 w-4" /></button>}
                             </div>

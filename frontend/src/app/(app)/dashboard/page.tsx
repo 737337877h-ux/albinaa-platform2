@@ -57,6 +57,7 @@ interface ReservationSummary {
   customerCount: number;
   totalTons: number;
   totalsByCurrency: { currency: string; amount: number }[];
+  averageTonPriceByCurrency: { currency: string; averageTonPrice: number; totalTons: number }[];
   unweightedUnits: { unitName: string; qty: number }[];
   expiringIn7Days: number;
 }
@@ -357,7 +358,14 @@ export default function DashboardPage() {
                   <div className="min-w-[190px] space-y-2">
                     {reservationSummary.data.totalsByCurrency.map((total) => (
                       <div key={total.currency} className="flex items-center justify-between gap-4 rounded-lg bg-concrete-50 px-3 py-2 dark:bg-white/5">
-                        <span className="tnum font-bold">{fmtMoney(total.amount)}</span>
+                        <div>
+                          <span className="tnum font-bold">{fmtMoney(total.amount)}</span>
+                          {reservationSummary.data.averageTonPriceByCurrency.find((item) => item.currency === total.currency) && (
+                            <p className="mt-0.5 text-[11px] text-concrete-500">
+                              متوسط سعر الطن: {fmtMoney(reservationSummary.data.averageTonPriceByCurrency.find((item) => item.currency === total.currency)!.averageTonPrice)}
+                            </p>
+                          )}
+                        </div>
                         <Badge tone="neutral">{total.currency}</Badge>
                       </div>
                     ))}

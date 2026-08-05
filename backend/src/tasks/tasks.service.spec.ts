@@ -29,6 +29,11 @@ describe('daily work queue helpers (PR 5)', () => {
       expect(priorityOfTaskType('promise_due')).toBe(2);
     });
 
+    it('ranks a primary account group with the high-balance follow-up tier', () => {
+      expect(priorityOfTaskType('account_group_priority'))
+        .toBe(priorityOfTaskType('high_balance_no_followup'));
+    });
+
     it('falls back to 100 for unknown task types', () => {
       expect(priorityOfTaskType('whatever')).toBe(100);
     });

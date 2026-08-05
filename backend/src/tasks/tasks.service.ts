@@ -38,6 +38,7 @@ export const TASK_TYPE_PRIORITY: Record<string, number> = {
   escalation_message_30: 6.5,
   debt_120plus: 7,
   high_balance_no_followup: 8,
+  account_group_priority: 8,
   repeated_no_answer: 9,
   needs_visit: 10,
   followup_periodic_medium: 11,
@@ -251,7 +252,17 @@ export class TasksService {
     }[],
   ) {
     const customerIds = [...new Set(tasks.map((t) => t.customerId).filter((x): x is string => !!x))];
-    const [balances, followups, portfolioCustomerBalances] = await Promise.all([
+    const groupPrimaryIds = [...new Set(tasks
+      .filter((task) => task.taskType === 'account_group_priority' && task.customerId)
+      .map((task) => task.customerId as string))];
+    const groupLinks = groupPrimaryIds.length > 0
+      ? await this.prisma.customerAccountLink.findMany({
+        where: { organizationId: user.organizationId, primaryCustomerId: { in: groupPrimaryIds } },
+        select: { primaryCustomerId: true, childCustomerId: true },
+      })
+      : [];
+    const groupMemberIds = [...new Set([...groupPrimaryIds, ...groupLinks.map((link) => link.childCustomerId)])];
+    const [balances, followups, portfolioCustomerBalances, groupMemberBalances] = await Promise.all([
       this.prisma.customerBalance.findMany({
         where: { customerId: { in: customerIds }, accountingBalance: { gt: 0 } },
         select: { customerId: true, currencyCode: true, accountingBalance: true },
@@ -272,6 +283,12 @@ export class TasksService {
         },
         select: { customerId: true, currencyCode: true, accountingBalance: true },
       }),
+      groupMemberIds.length > 0
+        ? this.prisma.customerBalance.findMany({
+          where: { customerId: { in: groupMemberIds }, accountingBalance: { gt: 0 } },
+          select: { customerId: true, currencyCode: true, accountingBalance: true },
+        })
+        : Promise.resolve([]),
     ]);
 
     const balByCustomer = new Map<string, { currency: string; balance: number }[]>();
@@ -279,6 +296,20 @@ export class TasksService {
       const list = balByCustomer.get(b.customerId) ?? [];
       list.push({ currency: b.currencyCode, balance: Number(b.accountingBalance) });
       balByCustomer.set(b.customerId, list);
+    }
+    const primaryByMember = new Map<string, string>();
+    for (const primaryId of groupPrimaryIds) primaryByMember.set(primaryId, primaryId);
+    for (const link of groupLinks) primaryByMember.set(link.childCustomerId, link.primaryCustomerId);
+    const groupBalancesByPrimary = new Map<string, Map<string, number>>();
+    for (const balance of groupMemberBalances) {
+      const primaryId = primaryByMember.get(balance.customerId);
+      if (!primaryId) continue;
+      const byCurrency = groupBalancesByPrimary.get(primaryId) ?? new Map<string, number>();
+      byCurrency.set(
+        balance.currencyCode,
+        (byCurrency.get(balance.currencyCode) ?? 0) + Number(balance.accountingBalance),
+      );
+      groupBalancesByPrimary.set(primaryId, byCurrency);
     }
     const lastFollowupOf = new Map<string, Date | null>();
     for (const f of followups) {
@@ -298,7 +329,10 @@ export class TasksService {
       assignedTo: t.assignedTo,
       expectedAmount: t.expectedAmount === null ? undefined : Number(t.expectedAmount),
       currency: t.expectedCurrency ?? undefined,
-      balances: balByCustomer.get(t.customerId ?? '') ?? [],
+      balances: t.taskType === 'account_group_priority'
+        ? [...(groupBalancesByPrimary.get(t.customerId ?? '') ?? new Map<string, number>()).entries()]
+          .map(([currency, balance]) => ({ currency, balance }))
+        : balByCustomer.get(t.customerId ?? '') ?? [],
       lastFollowupAt: lastFollowupOf.get(t.customerId ?? '') ?? null,
     })).filter((item) => item.balances.length > 0);
     items.sort((a, b) => a.priority - b.priority
@@ -306,7 +340,7 @@ export class TasksService {
 
     const expectedTargets = new Map<string, number>();
     for (const i of items) {
-      if (i.expectedAmount && i.currency) {
+      if (i.taskType !== 'account_group_priority' && i.expectedAmount && i.currency) {
         const positiveBalance = i.balances.find((b) => b.currency === i.currency)?.balance;
         const capped = positiveBalance == null ? i.expectedAmount : Math.min(i.expectedAmount, positiveBalance);
         const key = `${i.customerId}|${i.currency}`;
@@ -408,6 +442,7 @@ export class TasksService {
       followupResults,
       promiseTasks,
       existingToday,
+      accountLinks,
     ] = await Promise.all([
       this.prisma.customer.findMany({
         where: { organizationId: orgId, status: 'active' },
@@ -462,6 +497,10 @@ export class TasksService {
           customer: { organizationId: orgId },
         },
         select: { customerId: true, expectedCurrency: true, taskType: true },
+      }),
+      this.prisma.customerAccountLink.findMany({
+        where: { organizationId: orgId },
+        select: { primaryCustomerId: true, childCustomerId: true },
       }),
     ]);
 
@@ -698,6 +737,42 @@ export class TasksService {
           priorityReason: texts.join('؛ ') + (collectorId ? '' : ' — غير مسند لمحصل حالي'),
           expectedAmount: expectedAmount ?? undefined,
           expectedCurrency: ccy ?? undefined,
+          status: 'open',
+        });
+      }
+    }
+
+    // الحساب الرئيسي يدخل قائمة الأولوية بمديونية مجموعته، دون نقل أو دمج
+    // أي رصيد أو حركة من الحسابات الفرعية. هذه مهمة عرض/متابعة إضافية فقط،
+    // ولا تدخل في إجمالي التحصيل المتوقع حتى لا يتكرر احتساب دين الفرعيات.
+    const membersByPrimary = new Map<string, Set<string>>();
+    for (const link of accountLinks) {
+      const members = membersByPrimary.get(link.primaryCustomerId) ?? new Set<string>([link.primaryCustomerId]);
+      members.add(link.childCustomerId);
+      membersByPrimary.set(link.primaryCustomerId, members);
+    }
+    for (const [primaryCustomerId, memberIds] of membersByPrimary) {
+      const totals = new Map<string, number>();
+      for (const memberId of memberIds) {
+        for (const [key, amount] of balanceByKey) {
+          const [customerId, currency] = key.split('|');
+          if (customerId !== memberId || !currency || amount <= 0) continue;
+          totals.set(currency, (totals.get(currency) ?? 0) + amount);
+        }
+      }
+      const collectorId = collectorByCustomer.get(primaryCustomerId) ?? null;
+      for (const [currency, amount] of totals) {
+        const key = queueTaskKey(primaryCustomerId, currency, 'account_group_priority', today);
+        if (existingKeys.has(key)) continue;
+        rows.push({
+          customerId: primaryCustomerId,
+          assignedTo: collectorId,
+          createdBy: user.id,
+          taskType: 'account_group_priority',
+          dueDate: today,
+          priorityReason: `حساب رئيسي — إجمالي مديونية المجموعة (${fmtAmount(amount)} ${currency})${collectorId ? '' : ' — غير مسند لمحصل حالي'}`,
+          expectedAmount: amount,
+          expectedCurrency: currency,
           status: 'open',
         });
       }

@@ -41,6 +41,7 @@ interface ReservationSummary {
   customerCount: number;
   totalTons: number;
   totalsByCurrency: { currency: string; amount: number }[];
+  averageTonPriceByCurrency: { currency: string; averageTonPrice: number; totalTons: number }[];
   unweightedUnits: { unitName: string; qty: number }[];
   expiringIn7Days: number;
 }
@@ -122,7 +123,17 @@ export default function ReservationsPage() {
             </Card>
             <Card className="p-4">
               <p className="text-xs text-concrete-500">القيمة حسب العملة</p>
-              <div className="mt-2 space-y-1">{summary.data.totalsByCurrency.map((total) => <Money key={total.currency} value={total.amount} currency={total.currency} />)}</div>
+              <div className="mt-2 space-y-2">
+                {summary.data.totalsByCurrency.map((total) => {
+                  const average = summary.data.averageTonPriceByCurrency.find((item) => item.currency === total.currency);
+                  return (
+                    <div key={total.currency}>
+                      <Money value={total.amount} currency={total.currency} />
+                      {average && <p className="text-[11px] text-concrete-500">متوسط سعر الطن: {fmtMoney(average.averageTonPrice)} {total.currency}</p>}
+                    </div>
+                  );
+                })}
+              </div>
             </Card>
             <Card className="p-4">
               <p className="text-xs text-concrete-500">الحجوزات النشطة</p>

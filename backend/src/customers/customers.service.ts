@@ -65,17 +65,25 @@ export class CustomersService {
   // --------------------------------------------------------------------------
   private async scopeWhere(user: AuthUser): Promise<Prisma.CustomerWhereInput> {
     const base: Prisma.CustomerWhereInput = { organizationId: user.organizationId };
-    if (user.permissions.includes('customers.read_all')) return base;
-
     const collector = await this.prisma.collector.findUnique({ where: { userId: user.id } });
-    if (!collector) {
-      // ليس محصلاً ولا يملك رؤية شاملة → لا يرى أي عميل
-      return { ...base, id: 'no-access' };
+    const isCollectorOnly = user.roles.includes('المحصل')
+      && !user.roles.some((role) => ['مدير النظام', 'مدير المديونية', 'المحاسب'].includes(role));
+    if (isCollectorOnly) {
+      if (!collector) return { ...base, id: 'no-access' };
+      return {
+        ...base,
+        assignments: { some: { collectorId: collector.id, effectiveTo: null } },
+      };
     }
-    return {
-      ...base,
-      assignments: { some: { collectorId: collector.id, effectiveTo: null } },
-    };
+    if (user.permissions.includes('customers.read_all')) return base;
+    if (collector) {
+      return {
+        ...base,
+        assignments: { some: { collectorId: collector.id, effectiveTo: null } },
+      };
+    }
+    // ليس محصلاً ولا يملك رؤية شاملة → لا يرى أي عميل
+    return { ...base, id: 'no-access' };
   }
 
   private async assertAccess(user: AuthUser, customerId: string) {
@@ -866,30 +874,63 @@ export class CustomersService {
         id: true,
         externalCustomerCode: true,
         name: true,
-        balances: { select: { currencyCode: true, accountingBalance: true } },
+        balances: {
+          select: {
+            currencyCode: true,
+            accountingBalance: true,
+            lastImportJob: { select: { importedAt: true } },
+          },
+        },
       },
     });
-    const memberMap = new Map(members.map((member) => [member.id, member]));
+    const enrichedMembers = await Promise.all(members.map(async (member) => ({
+      ...member,
+      balances: await Promise.all(member.balances.map(async (balance) => {
+        const ledger = await this.prisma.operationalLedger.aggregate({
+          _sum: { amountSigned: true },
+          where: {
+            customerId: member.id,
+            currencyCode: balance.currencyCode,
+            ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
+          },
+        });
+        return {
+          currencyCode: balance.currencyCode,
+          accountingBalance: Number(balance.accountingBalance),
+          operationalBalance: Number(balance.accountingBalance) + Number(ledger._sum.amountSigned ?? 0),
+        };
+      })),
+    })));
+    const memberMap = new Map(enrichedMembers.map((member) => [member.id, member]));
     const primary = memberMap.get(primaryId) ?? null;
     const children = links
       .map((link) => memberMap.get(link.childCustomerId))
       .filter((member): member is NonNullable<typeof member> => !!member);
-    const totals = new Map<string, number>();
-    for (const member of members) {
+    const groupTotals = new Map<string, number>();
+    const childTotals = new Map<string, number>();
+    for (const member of enrichedMembers) {
       for (const balance of member.balances) {
-        totals.set(
+        groupTotals.set(
           balance.currencyCode,
-          (totals.get(balance.currencyCode) ?? 0) + Number(balance.accountingBalance),
+          (groupTotals.get(balance.currencyCode) ?? 0) + balance.operationalBalance,
         );
+        if (member.id !== primaryId) {
+          childTotals.set(
+            balance.currencyCode,
+            (childTotals.get(balance.currencyCode) ?? 0) + balance.operationalBalance,
+          );
+        }
       }
     }
+    const sortedBalances = (totals: Map<string, number>) => [...totals.entries()]
+      .map(([currency, balance]) => ({ currency, balance }))
+      .sort((a, b) => a.currency.localeCompare(b.currency));
     return {
       role: id === primaryId ? (links.length ? 'primary' : 'standalone') : 'child',
       primary,
       children,
-      aggregateBalances: [...totals.entries()]
-        .map(([currency, balance]) => ({ currency, balance }))
-        .sort((a, b) => a.currency.localeCompare(b.currency)),
+      childBalances: sortedBalances(childTotals),
+      aggregateBalances: sortedBalances(groupTotals),
     };
   }
 
