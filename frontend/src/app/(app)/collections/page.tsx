@@ -8,7 +8,10 @@ import Link from 'next/link';
 import { Download, Plus, RotateCcw, HandCoins } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
-import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, COLLECTION_STATUS_AR } from '@/lib/format';
+import {
+  fmtDate, fmtDateTime, fmtMoney, CCY_AR, COLLECTION_STATUS_AR,
+  orgDateTimeLocalToIso, orgDateTimeLocalValue,
+} from '@/lib/format';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Dialog } from '@/components/ui/dialog';
@@ -269,7 +272,7 @@ export default function CollectionsPage() {
         methodId: data.methodId,
       };
       if (data.branchId) body.branchId = data.branchId;
-      if (data.collectedAt) body.collectedAt = data.collectedAt;
+      if (data.collectedAt) body.collectedAt = orgDateTimeLocalToIso(data.collectedAt);
       if (data.referenceNumber) body.referenceNumber = data.referenceNumber;
       if (data.notes) body.notes = data.notes;
       return api<CollectionItem>('/collections', {
@@ -577,7 +580,7 @@ function CreateDialog({
 }) {
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
-    defaultValues: { collectedAt: new Date().toISOString().slice(0, 16) },
+    defaultValues: { collectedAt: orgDateTimeLocalValue() },
   });
 
   const [custSearch, setCustSearch] = useState('');
@@ -587,13 +590,15 @@ function CreateDialog({
   const debouncedCust = useDebounced(custSearch, 300);
 
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      setValue('collectedAt', orgDateTimeLocalValue());
+    } else {
       reset();
       setCustSearch('');
       setCustResults([]);
       setSelectedCust(null);
     }
-  }, [open, reset]);
+  }, [open, reset, setValue]);
 
   useEffect(() => {
     if (!debouncedCust || debouncedCust.length < 2) {
@@ -700,7 +705,7 @@ function CreateDialog({
           </Field>
         </div>
 
-        <Field label="تاريخ التحصيل" error={errors.collectedAt?.message}>
+        <Field label="تاريخ التحصيل (بتوقيت صنعاء)" error={errors.collectedAt?.message}>
           <Input type="datetime-local" {...register('collectedAt')} />
         </Field>
 

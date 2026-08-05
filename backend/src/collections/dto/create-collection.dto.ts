@@ -21,7 +21,7 @@ export class CreateCollectionDto {
   @IsNumber() @Min(0.01)
   amount!: number;
 
-  @ApiPropertyOptional({ description: 'وقت التحصيل (افتراضي: الآن)' })
+  @ApiPropertyOptional({ description: 'وقت التحصيل مع المنطقة الزمنية صراحةً، مثال: 2026-08-05T15:08:00+03:00 (افتراضي: الآن)' })
   @IsOptional() @IsDateString()
   collectedAt?: string;
 

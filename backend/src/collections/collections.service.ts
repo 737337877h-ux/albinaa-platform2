@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
-import { startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
+import { hasExplicitTimeZone, orgYear, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -147,11 +147,15 @@ export class CollectionsService {
     const branchId = dto.branchId ?? collector.branchId ?? customer.branchId ?? fallbackBranch?.id ?? null;
     if (!branchId) throw new BadRequestException('لا يوجد فرع نشط لترقيم الإيصال تسلسليًا');
 
+    if (dto.collectedAt && !hasExplicitTimeZone(dto.collectedAt)) {
+      throw new BadRequestException('تاريخ التحصيل يجب أن يتضمن المنطقة الزمنية صراحةً');
+    }
     const collectedAt = dto.collectedAt ? new Date(dto.collectedAt) : new Date();
+    if (Number.isNaN(collectedAt.getTime())) throw new BadRequestException('تاريخ التحصيل غير صالح');
     await this.accountingPeriods.assertDatesOpen(actor, [collectedAt], dto.accountingOverrideReason, 'collection_created', req);
 
     const collection = await this.prisma.$transaction(async (tx) => {
-      const receiptNumber = await this.nextReceiptNumber(tx, branchId, collectedAt.getUTCFullYear());
+      const receiptNumber = await this.nextReceiptNumber(tx, branchId, orgYear(collectedAt));
       const created = await tx.collection.create({
         data: {
           customerId: dto.customerId,
@@ -493,7 +497,7 @@ export class CollectionsService {
       throw new BadRequestException('القسيمة الواحدة تقبل محصلاً وفرعًا وعملة واحدة فقط');
     }
     const total = collections.reduce((sum, c) => sum + Number(c.amount), 0);
-    const year = new Date().getUTCFullYear();
+    const year = orgYear();
     const voucher = await this.prisma.$transaction(async (tx) => {
       const sequence = await this.nextVoucherSequence(tx, first.branchId!, year);
       const serialNumber = `H-${year}-${String(sequence).padStart(6, '0')}`;

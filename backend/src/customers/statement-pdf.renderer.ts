@@ -251,6 +251,8 @@ function drawClassicRow(
   balance: number,
   y: number,
   height = 16,
+  drawBottomDivider = true,
+  drawOuterEdges = true,
 ) {
   document.fillColor('#000000');
   values.forEach((value, index) => {
@@ -267,10 +269,14 @@ function drawClassicRow(
     }
     if (index > 0) document.moveTo(CLASSIC_COLUMNS[index], y).lineTo(CLASSIC_COLUMNS[index], y + height).lineWidth(0.35).stroke('#000000');
   });
-  document.save().dash(3, { space: 2 }).moveTo(2, y + height).lineTo(564, y + height)
-    .lineWidth(0.35).stroke('#000000').undash().restore();
-  document.moveTo(2, y).lineTo(2, y + height).lineWidth(0.35).stroke('#000000');
-  document.moveTo(564, y).lineTo(564, y + height).lineWidth(0.35).stroke('#000000');
+  if (drawBottomDivider) {
+    document.save().dash(3, { space: 2 }).moveTo(2, y + height).lineTo(564, y + height)
+      .lineWidth(0.35).stroke('#000000').undash().restore();
+  }
+  if (drawOuterEdges) {
+    document.moveTo(2, y).lineTo(2, y + height).lineWidth(0.35).stroke('#000000');
+    document.moveTo(564, y).lineTo(564, y + height).lineWidth(0.35).stroke('#000000');
+  }
   return y + height;
 }
 
@@ -354,8 +360,7 @@ async function renderClassic(
   const endingDate = options.toDate ?? (rows.at(-1)?.date ?? new Date());
   drawClassicRow(document, [
     '', '', '', 'الرصيد النهائي', '', '', classicRowDateText(endingDate),
-  ], summary.periodEndBalance, y, 18);
-  document.moveTo(2, y + 18).lineTo(564, y + 18).lineWidth(0.65).stroke('#000000');
+  ], summary.periodEndBalance, y, 18, false, false);
   document.roundedRect(2, 165.5, 562, y + 18 - 165.5, 7).lineWidth(0.65).stroke('#000000');
   drawClassicFooters(document, brand.statementFooter, options.printedBy || 'system');
   document.end();

@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { priorityOfTaskType } from '../tasks/tasks.service';
+import { orgDateOnly, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
 
 /**
  * Dashboard API — المؤشرات الأساسية المتاحة من بيانات المرحلة الحالية.
@@ -213,8 +214,9 @@ export class DashboardService {
    */
   async kpis(user: AuthUser) {
     const orgId = user.organizationId;
-    const today = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
-    const tomorrow = new Date(today.getTime() + 86_400_000);
+    const todayDate = orgDateOnly();
+    const today = startOfOrgDay(todayDate);
+    const tomorrow = startOfNextOrgDay(todayDate);
 
     const [totalCustomers, activeCustomers, balances, scores, todayTasks, aging] = await Promise.all([
       this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' } } }),
@@ -329,8 +331,8 @@ export class DashboardService {
     // Collector performance today: today's collections grouped by collector + currency.
     // Amounts stay separated by currency (no cross-currency summing), consistent with the rest
     // of this service. Uses only existing Collection/Collector data — no schema changes.
-    const today0 = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
-    const tomorrow0 = new Date(today0.getTime() + 86_400_000);
+    const today0 = today;
+    const tomorrow0 = tomorrow;
     const collectionsByCollector = await this.prisma.collection.groupBy({
       by: ['collectorId', 'currencyCode'],
       where: {
@@ -388,7 +390,8 @@ export class DashboardService {
       collectorId = own.id;
     }
 
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const today = startOfOrgDay(orgDateOnly());
+    const tomorrow = startOfNextOrgDay(orgDateOnly());
     const weekAgo = new Date(today.getTime() - 6 * 86_400_000);
 
     const [assignedCount, assignedCustomerIds] = await Promise.all([
@@ -423,7 +426,7 @@ export class DashboardService {
           by: ['currencyCode'],
           where: {
             collectorId, status: { not: 'reversed' },
-            collectedAt: { gte: today },
+            collectedAt: { gte: today, lt: tomorrow },
           },
           _sum: { amount: true }, _count: true,
         }),

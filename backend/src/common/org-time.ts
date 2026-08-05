@@ -11,6 +11,23 @@
  */
 export const ORG_UTC_OFFSET = '+03:00';
 
+/** تاريخ اليوم في المنشأة بصيغة YYYY-MM-DD، مستقل عن TZ الخاص بالخادم. */
+export function orgDateOnly(value: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Aden', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(value);
+}
+
+/** السنة المحاسبية حسب توقيت المنشأة، بما في ذلك الساعات القريبة من رأس السنة. */
+export function orgYear(value: Date = new Date()): number {
+  return Number(orgDateOnly(value).slice(0, 4));
+}
+
+/** يمنع تفسير تاريخ ووقت بلا منطقة زمنية بشكل مختلف بين البيئات. */
+export function hasExplicitTimeZone(value: string): boolean {
+  return /(?:Z|[+-]\d{2}:\d{2})$/i.test(value);
+}
+
 /** بداية اليوم المحلي (شاملة) — لاستخدامها في fromDate/gte. */
 export function startOfOrgDay(dateOnly: string): Date {
   return new Date(`${dateOnly}T00:00:00.000${ORG_UTC_OFFSET}`);

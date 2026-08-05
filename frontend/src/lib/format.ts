@@ -2,11 +2,37 @@
 export const fmtMoney = (v: number | string | null | undefined) =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number(v ?? 0));
 
+export const ORG_TIME_ZONE = 'Asia/Aden';
+export const ORG_UTC_OFFSET = '+03:00';
+
 export const fmtDate = (v: string | Date) =>
-  new Intl.DateTimeFormat('ar', { dateStyle: 'medium' }).format(new Date(v));
+  new Intl.DateTimeFormat('ar', { dateStyle: 'medium', timeZone: ORG_TIME_ZONE }).format(new Date(v));
 
 export const fmtDateTime = (v: string | Date) =>
-  new Intl.DateTimeFormat('ar', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(v));
+  new Intl.DateTimeFormat('ar', {
+    dateStyle: 'medium', timeStyle: 'short', timeZone: ORG_TIME_ZONE,
+  }).format(new Date(v));
+
+/** قيمة صريحة بتوقيت المنشأة مناسبة لحقل datetime-local. */
+export function orgDateTimeLocalValue(value: string | Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ORG_TIME_ZONE,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:${part('minute')}`;
+}
+
+/** يحول الساعة التي اختارها المستخدم في صنعاء إلى لحظة UTC غير ملتبسة للإرسال إلى API. */
+export function orgDateTimeLocalToIso(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)) {
+    throw new Error('Invalid organization local date-time');
+  }
+  const parsed = new Date(`${value.length === 16 ? `${value}:00` : value}${ORG_UTC_OFFSET}`);
+  if (Number.isNaN(parsed.getTime())) throw new Error('Invalid organization local date-time');
+  return parsed.toISOString();
+}
 
 export const CCY_AR: Record<string, string> = { YER: 'ريال يمني', SAR: 'ريال سعودي', USD: 'دولار' };
 
