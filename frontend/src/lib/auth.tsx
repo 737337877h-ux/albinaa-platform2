@@ -1,6 +1,7 @@
 'use client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
+import { useCallback } from 'react';
 import { api, tokenStore } from './api';
 
 export interface Me {
@@ -28,11 +29,11 @@ export function useCan() {
 export function useLogout() {
   const qc = useQueryClient();
   const router = useRouter();
-  return async () => {
+  return useCallback(async () => {
     const rt = tokenStore.refresh;
     if (rt) await api('/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken: rt }) }).catch(() => null);
     tokenStore.clear();
     qc.clear();
     router.replace('/login');
-  };
+  }, [qc, router]);
 }

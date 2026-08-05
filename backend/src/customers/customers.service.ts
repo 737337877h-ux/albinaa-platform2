@@ -258,6 +258,18 @@ export class CustomersService {
     });
 
     const current = c.assignments.find((a) => a.effectiveTo === null) ?? null;
+    const ledgerDeltas = new Map<string, number>();
+    for (const balance of c.balances) {
+      const aggregate = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: id,
+          currencyCode: balance.currencyCode,
+          ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
+        },
+      });
+      ledgerDeltas.set(balance.currencyCode, Number(aggregate._sum.amountSigned ?? 0));
+    }
     return {
       // البيانات الأساسية
       id: c.id,
@@ -280,6 +292,7 @@ export class CustomersService {
       balances: c.balances.map((b) => ({
         currency: b.currencyCode,
         accountingBalance: Number(b.accountingBalance),
+        operationalBalance: Number(b.accountingBalance) + (ledgerDeltas.get(b.currencyCode) ?? 0),
         declaredBalance: b.declaredBalance === null ? null : Number(b.declaredBalance),
         openingDebit: Number(b.openingDebit),
         openingCredit: Number(b.openingCredit),
@@ -440,17 +453,14 @@ export class CustomersService {
     const result: CustomerBalanceResult[] = [];
     for (const b of rows) {
       // الرصيد التشغيلي = المحاسبي + صافي قيود الدفتر بعد آخر استيراد (لا يُعدل يدويًا)
-      let ledgerDelta = 0;
-      if (b.lastImportJob) {
-        const agg = await this.prisma.operationalLedger.aggregate({
-          _sum: { amountSigned: true },
-          where: {
-            customerId: id, currencyCode: b.currencyCode,
-            createdAt: { gt: b.lastImportJob.importedAt },
-          },
-        });
-        ledgerDelta = Number(agg._sum.amountSigned ?? 0);
-      }
+      const agg = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: id, currencyCode: b.currencyCode,
+          ...(b.lastImportJob ? { createdAt: { gt: b.lastImportJob.importedAt } } : {}),
+        },
+      });
+      const ledgerDelta = Number(agg._sum.amountSigned ?? 0);
       result.push({
         currency: b.currencyCode,
         accountingBalance: Number(b.accountingBalance),
@@ -486,69 +496,90 @@ export class CustomersService {
       if (q.toDate) (rangeWhere.txDate as any).lte = new Date(q.toDate);
     }
 
-    // رصيد بداية الفترة = الافتتاحي + كل الحركات السابقة لبداية الفترة
+    const ledgerBaseWhere: Prisma.OperationalLedgerWhereInput = {
+      customerId: id,
+      currencyCode: q.currency,
+      ...(balance?.lastImportJobId
+        ? { createdAt: { gt: (await this.prisma.importJob.findUniqueOrThrow({ where: { id: balance.lastImportJobId }, select: { importedAt: true } })).importedAt } }
+        : {}),
+    };
+    const ledgerRangeWhere: Prisma.OperationalLedgerWhereInput = { ...ledgerBaseWhere };
+    if (q.fromDate || q.toDate) {
+      const createdAt: Prisma.DateTimeFilter = { ...((ledgerBaseWhere.createdAt as Prisma.DateTimeFilter | undefined) ?? {}) };
+      if (q.fromDate) createdAt.gte = new Date(`${q.fromDate}T00:00:00.000+03:00`);
+      if (q.toDate) createdAt.lt = new Date(new Date(`${q.toDate}T00:00:00.000+03:00`).getTime() + 86_400_000);
+      ledgerRangeWhere.createdAt = createdAt;
+    }
+
+    // رصيد بداية الفترة = الافتتاحي + الحركات المحاسبية + القيود التشغيلية غير المستوردة بعد.
     const opening = balance ? Number(balance.openingDebit) - Number(balance.openingCredit) : 0;
     let startBalance = opening;
     if (q.fromDate) {
-      const prior = await this.prisma.importedTransaction.aggregate({
-        _sum: { debit: true, credit: true },
-        where: { ...baseWhere, txDate: { lt: new Date(q.fromDate) } },
-      });
-      startBalance += Number(prior._sum.debit ?? 0) - Number(prior._sum.credit ?? 0);
+      const [prior, priorLedger] = await Promise.all([
+        this.prisma.importedTransaction.aggregate({
+          _sum: { debit: true, credit: true },
+          where: { ...baseWhere, txDate: { lt: new Date(q.fromDate) } },
+        }),
+        this.prisma.operationalLedger.aggregate({
+          _sum: { amountSigned: true },
+          where: { ...ledgerBaseWhere, createdAt: { ...((ledgerBaseWhere.createdAt as Prisma.DateTimeFilter | undefined) ?? {}), lt: new Date(`${q.fromDate}T00:00:00.000+03:00`) } },
+        }),
+      ]);
+      startBalance += Number(prior._sum.debit ?? 0) - Number(prior._sum.credit ?? 0)
+        + Number(priorLedger._sum.amountSigned ?? 0);
     }
 
-    const [total, periodTotals] = await Promise.all([
-      this.prisma.importedTransaction.count({ where: rangeWhere }),
-      this.prisma.importedTransaction.aggregate({
-        _sum: { debit: true, credit: true },
+    const [txns, ledgerRows] = await Promise.all([
+      this.prisma.importedTransaction.findMany({
         where: rangeWhere,
+        orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
+        include: { documentType: { select: { name: true } } },
       }),
+      this.prisma.operationalLedger.findMany({ where: ledgerRangeWhere, orderBy: { createdAt: 'asc' } }),
     ]);
-    const periodEndBalance = startBalance
-      + Number(periodTotals._sum.debit ?? 0)
-      - Number(periodTotals._sum.credit ?? 0);
-    // الرصيد الجاري يتطلب معرفة مجموع ما قبل الصفحة الحالية داخل الفترة
-    const beforePage = await this.prisma.importedTransaction.findMany({
-      where: rangeWhere,
-      orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
-      take: (page - 1) * limit,
-      select: { debit: true, credit: true },
-    });
-    let running = startBalance
-      + beforePage.reduce((s, t) => s + Number(t.debit) - Number(t.credit), 0);
+    const collectionSources = ledgerRows.length ? await this.prisma.collection.findMany({
+      where: { id: { in: ledgerRows.map((row) => row.sourceId) } },
+      select: { id: true, collectedAt: true, receiptNumber: true, referenceNumber: true },
+    }) : [];
+    const collectionById = new Map(collectionSources.map((row) => [row.id, row]));
+    const unified = [
+      ...txns.map((t) => ({
+        date: t.txDate, order: t.sourceRowNumber ?? 0, documentType: t.documentType.name,
+        documentNumber: t.documentNumber, description: t.description, reference: t.referenceNumber,
+        debit: Number(t.debit), credit: Number(t.credit),
+      })),
+      ...ledgerRows.map((entry, index) => ({
+        date: collectionById.get(entry.sourceId)?.collectedAt ?? entry.createdAt, order: 1_000_000 + index,
+        documentType: entry.entryType === 'collection_reversal' ? 'عكس تحصيل' : 'تحصيل',
+        documentNumber: null, description: entry.entryType === 'collection_reversal' ? 'عكس تحصيل موثق' : 'تحصيل مسجل في المنصة',
+        reference: collectionById.get(entry.sourceId)?.receiptNumber ?? collectionById.get(entry.sourceId)?.referenceNumber ?? entry.sourceId,
+        debit: Math.max(0, Number(entry.amountSigned)), credit: Math.max(0, -Number(entry.amountSigned)),
+      })),
+    ].sort((a, b) => a.date.getTime() - b.date.getTime() || a.order - b.order);
 
-    const txns = await this.prisma.importedTransaction.findMany({
-      where: rangeWhere,
-      orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
-      skip: (page - 1) * limit,
-      take: limit,
-      include: { documentType: { select: { name: true } } },
+    const periodTotals = unified.reduce((totals, row) => ({ debit: totals.debit + row.debit, credit: totals.credit + row.credit }), { debit: 0, credit: 0 });
+    const periodEndBalance = startBalance + periodTotals.debit - periodTotals.credit;
+    const beforePage = unified.slice(0, (page - 1) * limit);
+    let running = startBalance + beforePage.reduce((sum, row) => sum + row.debit - row.credit, 0);
+    const items = unified.slice((page - 1) * limit, page * limit).map((row) => {
+      running += row.debit - row.credit;
+      return { ...row, runningBalance: running };
     });
-
-    const items = txns.map((t) => {
-      running += Number(t.debit) - Number(t.credit);
-      return {
-        date: t.txDate,
-        documentType: t.documentType.name,
-        documentNumber: t.documentNumber,
-        description: t.description,
-        reference: t.referenceNumber,
-        debit: Number(t.debit),
-        credit: Number(t.credit),
-        runningBalance: running,
-      };
+    const currentLedger = await this.prisma.operationalLedger.aggregate({
+      _sum: { amountSigned: true }, where: ledgerBaseWhere,
     });
+    const currentBalance = (balance ? Number(balance.accountingBalance) : periodEndBalance)
+      + Number(currentLedger._sum.amountSigned ?? 0);
 
     return {
       currency: q.currency,
       openingBalance: opening,
       periodStartBalance: startBalance,
       periodEndBalance,
-      currentBalance: balance ? Number(balance.accountingBalance) : periodEndBalance,
-      equationClosed: q.fromDate || q.toDate || !balance
-        ? true
-        : Math.abs(periodEndBalance - Number(balance.accountingBalance)) < 0.005,
-      page, limit, total, totalPages: Math.ceil(total / limit),
+      currentBalance,
+      accountingBalance: balance ? Number(balance.accountingBalance) : periodEndBalance,
+      equationClosed: Math.abs(periodEndBalance - currentBalance) < 0.005,
+      page, limit, total: unified.length, totalPages: Math.ceil(unified.length / limit),
       items,
     };
   }

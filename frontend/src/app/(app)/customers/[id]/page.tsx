@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
@@ -41,6 +41,7 @@ interface Customer360 {
   balances: {
     currency: string;
     accountingBalance: number;
+    operationalBalance: number;
     declaredBalance: number | null;
     openingDebit: number;
     openingCredit: number;
@@ -396,7 +397,6 @@ export default function Customer360Page() {
   const [pdfDownloading, setPdfDownloading] = useState(false);
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
-  const previewFrame = useRef<HTMLIFrameElement>(null);
   const [pdfTemplate, setPdfTemplate] = useState<'classic' | 'branded'>('classic');
   const statementParams = () => {
     const params = new URLSearchParams({ currency: stmtCurrency });
@@ -416,7 +416,7 @@ export default function Customer360Page() {
   });
 
   useEffect(() => () => {
-    if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+    if (pdfPreviewUrl?.startsWith('blob:')) URL.revokeObjectURL(pdfPreviewUrl);
   }, [pdfPreviewUrl]);
   const accountGroup = useQuery<CustomerAccountGroup>({
     queryKey: ['customer-account-group', id],
@@ -753,7 +753,12 @@ export default function Customer360Page() {
     setPdfPreviewLoading(true);
     try {
       const blob = await apiFileBlob(`/customers/${id}/statement.pdf?${statementParams().toString()}&template=${pdfTemplate}`);
-      setPdfPreviewUrl(URL.createObjectURL(blob));
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
+      setPdfPreviewUrl(`data:application/pdf;base64,${btoa(binary)}`);
     } catch (error) {
       toast(friendlyApiError(error), 'err');
     } finally {
@@ -774,8 +779,8 @@ export default function Customer360Page() {
   const links = c ? contactLinks(c.phonePrimary) : null;
   const whatsappLink = c ? contactLinks(c.whatsapp ?? c.phonePrimary)?.whatsapp : null;
   const primaryDebt = c?.balances
-    .filter((b) => Number(b.accountingBalance) > 0)
-    .sort((a, b) => Number(b.accountingBalance) - Number(a.accountingBalance))[0];
+    .filter((b) => Number(b.operationalBalance) > 0)
+    .sort((a, b) => Number(b.operationalBalance) - Number(a.operationalBalance))[0];
   const isLoading = customer.isLoading;
   const err = customer.error;
 
@@ -872,7 +877,7 @@ export default function Customer360Page() {
             customerCode={c.externalCustomerCode}
             phone={c.phonePrimary}
             whatsapp={c.whatsapp}
-            balance={primaryDebt ? Number(primaryDebt.accountingBalance) : null}
+            balance={primaryDebt ? Number(primaryDebt.operationalBalance) : null}
             currency={primaryDebt?.currency ?? null}
             collectorName={c.currentCollector?.name ?? null}
           />
@@ -905,7 +910,7 @@ export default function Customer360Page() {
                     label="الرصيد الحالي"
                     value={
                       c.balances.length > 0
-                        ? <div className="space-y-1">{c.balances.map(b => <div key={b.currency}><Money value={b.accountingBalance} currency={b.currency} signed /></div>)}</div>
+                        ? <div className="space-y-1">{c.balances.map(b => <div key={b.currency}><Money value={b.operationalBalance} currency={b.currency} signed /></div>)}</div>
                         : <span className="text-xs font-normal text-concrete-400">لا توجد أرصدة لهذا السجل</span>
                     }
                   />
@@ -944,7 +949,7 @@ export default function Customer360Page() {
                     {accountGroup.data.role === 'child' && accountGroup.data.primary && (
                       <div className="mt-4 rounded-lg border border-concrete-100 p-3 dark:border-white/10">
                         <p className="text-xs text-concrete-500">الحساب الرئيسي</p>
-                        <Link href={`/customers/${accountGroup.data.primary.id}`} className="mt-1 inline-block font-semibold text-pine-700 hover:underline">
+                        <Link href={`/customers/${accountGroup.data.primary.id}`} className="mt-1 inline-block font-semibold text-pine-700 hover:underline dark:text-pine-200">
                           {accountGroup.data.primary.externalCustomerCode} — {accountGroup.data.primary.name}
                         </Link>
                       </div>
@@ -955,7 +960,7 @@ export default function Customer360Page() {
                           <div key={child.id} className="rounded-lg border border-concrete-100 p-3 dark:border-white/10">
                             <div className="flex items-start justify-between gap-2">
                               <div>
-                                <Link href={`/customers/${child.id}`} className="font-semibold text-pine-700 hover:underline">{child.externalCustomerCode} — {child.name}</Link>
+                                <Link href={`/customers/${child.id}`} className="font-semibold text-pine-700 hover:underline dark:text-pine-200">{child.externalCustomerCode} — {child.name}</Link>
                                 <div className="mt-2 space-y-1 text-xs">{child.balances.map((balance) => <div key={balance.currencyCode}><Money value={Number(balance.accountingBalance)} currency={balance.currencyCode} signed /></div>)}</div>
                               </div>
                               {canWrite && <button type="button" title="فك الارتباط" onClick={() => unlinkAccount.mutate(child.id)} className="rounded p-1 text-concrete-400 hover:bg-red-50 hover:text-red-600"><Unlink className="h-4 w-4" /></button>}
@@ -1170,7 +1175,10 @@ export default function Customer360Page() {
                       {c.balances.map(b => (
                         <div key={b.currency} className="rounded-lg border border-concrete-100 p-3 dark:border-white/10">
                           <p className="text-xs text-concrete-500">{CCY_AR[b.currency] ?? b.currency}</p>
-                          <span className="text-lg font-bold"><Money value={b.accountingBalance} currency={b.currency} signed /></span>
+                          <span className="text-lg font-bold"><Money value={b.operationalBalance} currency={b.currency} signed /></span>
+                          {Math.abs(b.operationalBalance - b.accountingBalance) > 0.005 && (
+                            <p className="mt-1 text-xs text-concrete-500">المحاسبي المستورد: <Money value={b.accountingBalance} currency={b.currency} signed /></p>
+                          )}
                           <div className="mt-1 text-xs text-concrete-400">
                             سلف: <Money value={b.openingDebit} /> | دائن: <Money value={b.openingCredit} />
                           </div>
@@ -1179,6 +1187,7 @@ export default function Customer360Page() {
                               آخر استيراد: {b.lastImport.file} — {fmtDateTime(b.lastImport.at)}
                             </p>
                           )}
+                          <p className="mt-2 text-[10px] leading-5 text-concrete-500">الرصيد التشغيلي يشمل تحصيلات المنصة بعد آخر استيراد. عند ورودها في الاستيراد التالي تُصبح ضمن الرصيد المحاسبي ولا تُحتسب مرتين.</p>
                         </div>
                       ))}
                     </div>
@@ -1320,10 +1329,12 @@ export default function Customer360Page() {
               <Dialog open={!!pdfPreviewUrl} onClose={() => setPdfPreviewUrl(null)} title="معاينة كشف الحساب قبل الطباعة" className="sm:max-w-6xl">
                 {pdfPreviewUrl && (
                   <div className="space-y-3">
-                    <iframe ref={previewFrame} src={pdfPreviewUrl} title="معاينة كشف الحساب" className="h-[72vh] w-full rounded-lg border border-concrete-200 bg-white" />
+                    <object data={pdfPreviewUrl} type="application/pdf" className="h-[72vh] w-full rounded-lg border border-concrete-200 bg-white" aria-label="معاينة كشف الحساب">
+                      <p className="p-6 text-center text-sm text-concrete-600">تعذر عرض PDF داخل المتصفح. استخدم زر «فتح المعاينة» أدناه.</p>
+                    </object>
                     <div className="flex justify-end gap-2">
                       <Button variant="secondary" onClick={() => setPdfPreviewUrl(null)}>إغلاق</Button>
-                      <Button variant="secondary" onClick={() => previewFrame.current?.contentWindow?.print()}>طباعة</Button>
+                      <Button variant="secondary" onClick={() => window.open(pdfPreviewUrl, '_blank', 'noopener,noreferrer')}>فتح المعاينة</Button>
                       <Button onClick={exportStatementPdf} loading={pdfDownloading}><Download className="h-4 w-4" />تنزيل PDF</Button>
                     </div>
                   </div>

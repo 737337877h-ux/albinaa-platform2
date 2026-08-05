@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Query, Req, Res } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
@@ -15,12 +15,14 @@ export class ReportsController {
 
   @Get('summary') @RequirePermissions('reports.read')
   @ApiOperation({ summary: 'ملخص شامل مفصول بالعملة: المديونية، أعلى المدينين، الحجوزات، المحصلون، والتعتيق' })
-  summary(@CurrentUser() user: AuthUser) { return this.reports.summary(user); }
+  summary(@CurrentUser() user: AuthUser, @Query('accountClass') accountClass?: string) {
+    return this.reports.summary(user, accountClass === 'advance' ? 'advance' : 'customer');
+  }
 
   @Get('summary.xlsx') @RequirePermissions('reports.export') @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @ApiOperation({ summary: 'تصدير التقرير الشامل إلى Excel منسق مع تجميد الرأس وعرض أعمدة تلقائي' })
-  async summaryExcel(@CurrentUser() user: AuthUser, @Res() res: Response) {
-    const buffer = await this.reports.summaryWorkbook(user);
+  async summaryExcel(@CurrentUser() user: AuthUser, @Query('accountClass') accountClass: string | undefined, @Res() res: Response) {
+    const buffer = await this.reports.summaryWorkbook(user, accountClass === 'advance' ? 'advance' : 'customer');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="albinaa-report-${new Date().toISOString().slice(0, 10)}.xlsx"`);
     res.send(buffer);
@@ -28,7 +30,9 @@ export class ReportsController {
 
   @Get('kpi') @RequirePermissions('reports.read')
   @ApiOperation({ summary: 'DSO وCEI وأداء التحصيل والوعود وترتيب المحصلين خلال 12 شهرًا' })
-  kpi(@CurrentUser() user: AuthUser) { return this.reports.kpi(user); }
+  kpi(@CurrentUser() user: AuthUser, @Query('accountClass') accountClass?: string) {
+    return this.reports.kpi(user, accountClass === 'advance' ? 'advance' : 'customer');
+  }
 
   @Patch('kpi/targets/:collectorId/:currency') @RequirePermissions('reports.export')
   @ApiOperation({ summary: 'اعتماد هدف تحصيل شهري لمحصل وعملة' })

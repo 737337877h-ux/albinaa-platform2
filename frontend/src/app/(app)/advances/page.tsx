@@ -184,11 +184,11 @@ export default function AdvancesPage() {
               <THead cols={['رقم حساب السلفة', 'صاحب الحساب', 'الأرصدة', 'الحالة', 'الإجراءات']} />
               <tbody>{accounts.data.items.map((account) => (
                 <TRow key={account.id}>
-                  <TD><Link className="font-semibold text-pine-700 hover:underline" href={`/customers/${account.id}`}>{account.accountNumber ?? account.externalCustomerCode}</Link></TD>
+                  <TD><Link className="font-semibold text-pine-700 hover:underline dark:text-pine-200" href={`/customers/${account.id}`}>{account.accountNumber ?? account.externalCustomerCode}</Link></TD>
                   <TD>{account.name}</TD>
                   <TD><div className="flex flex-wrap gap-2">{account.balances.map((balance) => <span key={balance.currency} className="inline-flex items-center gap-1"><Money value={balance.balance} currency={balance.currency} signed /><Badge tone="neutral">{balance.currency}</Badge></span>)}</div></TD>
                   <TD><Badge tone={account.status === 'active' ? 'pine' : 'neutral'}>{account.status === 'active' ? 'نشط' : 'غير نشط'}</Badge></TD>
-                  <TD><Link className="font-semibold text-pine-700 hover:underline" href={`/customers/${account.id}`}>فتح الحساب والمتابعة</Link></TD>
+                  <TD><Link className="font-semibold text-pine-700 hover:underline dark:text-pine-200" href={`/customers/${account.id}`}>فتح الحساب والمتابعة</Link></TD>
                 </TRow>
               ))}</tbody>
             </Table>

@@ -1,15 +1,16 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { AlertTriangle, ChevronDown, ChevronLeft, ChevronUp, PackageCheck } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronLeft, ChevronUp, PackageCheck, Plus } from 'lucide-react';
 import { api, tokenStore } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtMoney } from '@/lib/format';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
-import { Badge, Card, Money } from '@/components/ui/primitives';
+import { Badge, Button, Card, Field, Input, Money, Select, Textarea } from '@/components/ui/primitives';
+import { Dialog } from '@/components/ui/dialog';
 import { Table, TD, THead, TRow } from '@/components/ui/table';
 
 const hasToken = () => typeof window !== 'undefined' && !!tokenStore.access;
@@ -43,6 +44,12 @@ interface ReservationSummary {
   unweightedUnits: { unitName: string; qty: number }[];
   expiringIn7Days: number;
 }
+interface CustomerSearchItem { id: string; name: string; externalCustomerCode: string | null }
+
+const EMPTY_CREATE_FORM = {
+  customerId: '', customerLabel: '', itemName: '', itemType: '', quantity: '', unitId: '',
+  unitPrice: '', currencyCode: 'YER', warehouse: '', documentNumber: '', notes: '', expiresAt: '', overrideReason: '',
+};
 
 const STATUS_AR: Record<string, string> = {
   open: 'نشط', partial: 'مسلّم جزئيًا', completed: 'مسلّم بالكامل', cancelled: 'ملغى', expired: 'منتهي',
@@ -56,8 +63,10 @@ function activeReservation(row: Reservation) {
 export default function ReservationsPage() {
   const can = useCan();
   const allowed = can('reservations.read');
+  const canCreate = can('reservations.create');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [expiringOnly, setExpiringOnly] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const summary = useQuery({
     queryKey: ['reservations-summary'],
@@ -89,7 +98,10 @@ export default function ReservationsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="حجوزات البضاعة" />
+      <PageHeader
+        title="حجوزات البضاعة"
+        action={canCreate ? <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" />حجز جديد</Button> : undefined}
+      />
 
       <DataState
         isLoading={summary.isLoading}
@@ -191,7 +203,105 @@ export default function ReservationsPage() {
         </DataState>
       </Card>
       <Link href="/dashboard" className="inline-flex items-center gap-1 text-xs text-pine-700 dark:text-pine-100">العودة للوحة التحكم <ChevronLeft className="h-4 w-4" /></Link>
+      <CreateReservationDialog open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
+  );
+}
+
+function CreateReservationDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const can = useCan();
+  const [form, setForm] = useState(EMPTY_CREATE_FORM);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const customers = useQuery({
+    queryKey: ['reservation-customer-search', customerSearch],
+    queryFn: () => api<{ items: CustomerSearchItem[] }>(`/customers?search=${encodeURIComponent(customerSearch)}&limit=10`),
+    enabled: open && !form.customerId && customerSearch.trim().length >= 2,
+  });
+  const units = useQuery({
+    queryKey: ['reservation-units'],
+    queryFn: () => api<UnitInfo[]>('/reservations/units'),
+    enabled: open,
+    staleTime: 5 * 60_000,
+  });
+  const create = useMutation({
+    mutationFn: () => api('/reservations', {
+      method: 'POST',
+      body: JSON.stringify({
+        customerId: form.customerId,
+        itemName: form.itemName.trim(),
+        itemType: form.itemType.trim() || undefined,
+        quantity: Number(form.quantity),
+        unitId: form.unitId,
+        unitPrice: Number(form.unitPrice),
+        currencyCode: form.currencyCode,
+        warehouse: form.warehouse.trim() || undefined,
+        documentNumber: form.documentNumber.trim() || undefined,
+        notes: form.notes.trim() || undefined,
+        expiresAt: form.expiresAt || undefined,
+        overrideReason: form.overrideReason.trim() || undefined,
+      }),
+    }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['reservations'] }),
+        queryClient.invalidateQueries({ queryKey: ['reservations-summary'] }),
+      ]);
+      setForm(EMPTY_CREATE_FORM);
+      setCustomerSearch('');
+      onClose();
+    },
+  });
+  const valid = !!form.customerId && !!form.itemName.trim() && Number(form.quantity) > 0
+    && !!form.unitId && Number(form.unitPrice) > 0 && !!form.currencyCode;
+  const close = () => {
+    if (create.isPending) return;
+    setForm(EMPTY_CREATE_FORM);
+    setCustomerSearch('');
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onClose={close} title="إنشاء حجز بضاعة جديد">
+      <div className="space-y-4">
+        <Field label="العميل *">
+          {form.customerId ? (
+            <div className="flex min-h-11 items-center justify-between rounded-lg border border-line bg-surface-2 px-3 text-sm">
+              <span className="font-semibold">{form.customerLabel}</span>
+              <button type="button" className="text-xs text-debt-600 hover:underline" onClick={() => setForm((value) => ({ ...value, customerId: '', customerLabel: '' }))}>تغيير</button>
+            </div>
+          ) : (
+            <>
+              <Input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="ابحث باسم العميل أو رقم الحساب…" />
+              {!!customers.data?.items.length && <div className="max-h-40 overflow-y-auto rounded-lg border border-line bg-surface-1">
+                {customers.data.items.map((customer) => <button key={customer.id} type="button" className="block w-full px-3 py-2 text-right text-sm hover:bg-surface-2" onClick={() => { setForm((value) => ({ ...value, customerId: customer.id, customerLabel: `${customer.name}${customer.externalCustomerCode ? ` — ${customer.externalCustomerCode}` : ''}` })); setCustomerSearch(''); }}>
+                  <span className="font-semibold">{customer.name}</span>{customer.externalCustomerCode && <span className="mr-2 text-xs text-concrete-500" dir="ltr">{customer.externalCustomerCode}</span>}
+                </button>)}
+              </div>}
+            </>
+          )}
+        </Field>
+        <Field label="الصنف *"><Input value={form.itemName} onChange={(event) => setForm((value) => ({ ...value, itemName: event.target.value }))} placeholder="مثال: حديد تسليح 12 ملم" /></Field>
+        <Field label="نوع الصنف" hint="اختياري"><Input value={form.itemType} onChange={(event) => setForm((value) => ({ ...value, itemType: event.target.value }))} /></Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="الكمية *"><Input type="number" min="0" step="any" value={form.quantity} onChange={(event) => setForm((value) => ({ ...value, quantity: event.target.value }))} /></Field>
+          <Field label="الوحدة *"><Select value={form.unitId} onChange={(event) => setForm((value) => ({ ...value, unitId: event.target.value }))}><option value="">اختر الوحدة</option>{(units.data ?? []).map((unit) => <option key={unit.id} value={unit.id}>{unit.nameAr}{unit.weightKg == null ? '' : ` — ${unit.weightKg} كجم`}</option>)}</Select></Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="سعر الوحدة *"><Input type="number" min="0" step="any" value={form.unitPrice} onChange={(event) => setForm((value) => ({ ...value, unitPrice: event.target.value }))} /></Field>
+          <Field label="العملة *"><Select value={form.currencyCode} onChange={(event) => setForm((value) => ({ ...value, currencyCode: event.target.value }))}><option value="YER">YER</option><option value="SAR">SAR</option><option value="USD">USD</option></Select></Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="المخزن" hint="اختياري"><Input value={form.warehouse} onChange={(event) => setForm((value) => ({ ...value, warehouse: event.target.value }))} /></Field>
+          <Field label="رقم المستند" hint="اختياري"><Input value={form.documentNumber} onChange={(event) => setForm((value) => ({ ...value, documentNumber: event.target.value }))} /></Field>
+        </div>
+        <Field label="تاريخ الانتهاء" hint="اختياري"><Input type="date" value={form.expiresAt} onChange={(event) => setForm((value) => ({ ...value, expiresAt: event.target.value }))} /></Field>
+        <Field label="ملاحظات" hint="اختياري"><Textarea rows={2} value={form.notes} onChange={(event) => setForm((value) => ({ ...value, notes: event.target.value }))} /></Field>
+        {can('credit.override') && <Field label="سبب تجاوز سقف الائتمان" hint="يُستخدم فقط عند الحاجة"><Textarea rows={2} value={form.overrideReason} onChange={(event) => setForm((value) => ({ ...value, overrideReason: event.target.value }))} /></Field>}
+        {create.isError && <p role="alert" className="text-sm text-debt-600">تعذر إنشاء الحجز. تحقق من البيانات وسقف الائتمان ثم أعد المحاولة.</p>}
+        <div className="flex justify-end gap-2"><Button variant="secondary" onClick={close}>إلغاء</Button><Button disabled={!valid} loading={create.isPending} onClick={() => create.mutate()}>إنشاء الحجز</Button></div>
+      </div>
+    </Dialog>
   );
 }
 

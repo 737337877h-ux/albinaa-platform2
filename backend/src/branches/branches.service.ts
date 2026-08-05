@@ -20,7 +20,7 @@ export class BranchesService {
       select: {
         id: true, name: true, createdAt: true,
         systemSettings: {
-          where: { key: { in: [...BRANDING_KEYS] } },
+          where: { key: { in: [...BRANDING_KEYS, 'session.timeout'] } },
           select: { key: true, value: true },
         },
         _count: { select: { branches: true, users: true, customers: true } },

@@ -21,32 +21,31 @@ export class ReportsService {
     private readonly aging: AgingService,
   ) {}
 
-  async summary(actor: AuthUser) {
-    const [balances, reservations] = await Promise.all([
-      this.prisma.customerBalance.findMany({
-        where: {
-          accountingBalance: { gt: 0 },
-          customer: { organizationId: actor.organizationId, status: { notIn: ['merged', 'import_reversed'] } },
-        },
-        include: { customer: { select: { id: true, name: true, externalCustomerCode: true } } },
-      }),
-      this.prisma.reservation.findMany({
-        where: { customer: { organizationId: actor.organizationId }, status: { in: ['open', 'partial'] } },
+  async summary(actor: AuthUser, accountClass: 'customer' | 'advance' = 'customer') {
+    const accountFilter = accountClass === 'advance'
+      ? { customerType: 'advance' }
+      : { OR: [{ customerType: null }, { customerType: { not: 'advance' } }] };
+    const reservations = await this.prisma.reservation.findMany({
+        where: { customer: { organizationId: actor.organizationId, ...accountFilter }, status: { in: ['open', 'partial'] } },
         include: { customer: { select: { name: true } } },
-      }),
-    ]);
+      });
     // Aging and KPI each fan out into several queries. Keep them sequential so
     // a small production connection pool is not exhausted by one report request.
-    const aging = await this.aging.report(actor, {});
-    const kpi = await this.kpi(actor);
+    const aging = await this.aging.report(actor, { accountClass });
+    const kpi = await this.kpi(actor, accountClass);
+    const operationalBalances = aging.customers.map((row) => ({
+      customerId: String(row.customerId), currencyCode: row.currency,
+      accountingBalance: row.totalDue,
+      customer: { externalCustomerCode: String(row.customerCode ?? ''), name: String(row.customerName ?? '') },
+    }));
     const currencies = [...new Set([
-      ...balances.map((row) => row.currencyCode),
+      ...operationalBalances.map((row) => row.currencyCode),
       ...reservations.map((row) => row.currencyCode),
       ...Object.keys(aging.totals),
       ...Object.keys(kpi.latestByCurrency),
     ])].sort();
     const byCurrency = currencies.map((currency) => {
-      const currencyBalances = balances.filter((row) => row.currencyCode === currency);
+      const currencyBalances = operationalBalances.filter((row) => row.currencyCode === currency);
       const currencyReservations = reservations.filter((row) => row.currencyCode === currency);
       return {
         currency,
@@ -58,7 +57,7 @@ export class ReportsService {
         kpi: kpi.latestByCurrency[currency] ?? null,
       };
     });
-    const topDebtors = currencies.flatMap((currency) => balances
+    const topDebtors = currencies.flatMap((currency) => operationalBalances
       .filter((row) => row.currencyCode === currency)
       .sort((a, b) => Number(b.accountingBalance) - Number(a.accountingBalance))
       .slice(0, 10)
@@ -72,7 +71,7 @@ export class ReportsService {
       status: row.status, expiresAt: row.expiresAt,
     }));
     return {
-      generatedAt: new Date(), currenciesSeparated: true, byCurrency, topDebtors, activeReservations,
+      generatedAt: new Date(), accountClass, currenciesSeparated: true, byCurrency, topDebtors, activeReservations,
       collectorPerformance: kpi.collectors,
       aging: { asOf: aging.asOf, snapshot: aging.snapshot, totals: aging.totals },
     };
@@ -93,8 +92,8 @@ export class ReportsService {
     sheet.autoFilter = { from: 'A1', to: `${sheet.getColumn(sheet.columnCount).letter}1` };
   }
 
-  async summaryWorkbook(actor: AuthUser) {
-    const report = await this.summary(actor);
+  async summaryWorkbook(actor: AuthUser, accountClass: 'customer' | 'advance' = 'customer') {
+    const report = await this.summary(actor, accountClass);
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'منصة البناء الراقي'; workbook.created = new Date();
     const overview = workbook.addWorksheet('الملخص');
@@ -147,7 +146,7 @@ export class ReportsService {
     return target;
   }
 
-  async kpi(actor: AuthUser) {
+  async kpi(actor: AuthUser, accountClass: 'customer' | 'advance' = 'customer') {
     const now = new Date();
     const currentStart = monthStart(now);
     const seriesStart = new Date(Date.UTC(currentStart.getUTCFullYear(), currentStart.getUTCMonth() - 11, 1));
@@ -156,8 +155,12 @@ export class ReportsService {
     const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const tomorrow = new Date(todayStart.getTime() + 86_400_000);
 
+    const accountFilter = accountClass === 'advance'
+      ? { customerType: 'advance' }
+      : { OR: [{ customerType: null }, { customerType: { not: 'advance' } }] };
+    const liveAging = await this.aging.report(actor, { accountClass });
     const balances = await this.prisma.customerBalance.findMany({
-      where: { customer: { organizationId: actor.organizationId, status: { notIn: ['merged', 'import_reversed'] } } },
+      where: { customer: { organizationId: actor.organizationId, status: { notIn: ['merged', 'import_reversed'] }, ...accountFilter } },
       include: { lastImportJob: { select: { id: true, importedAt: true } } },
     });
     const customerIds = [...new Set(balances.map((x) => x.customerId))];
@@ -165,9 +168,9 @@ export class ReportsService {
     const [transactions, ledger, collections, promises, snapshots, targets, collectors] = await Promise.all([
       this.prisma.importedTransaction.findMany({ where: { importJobId: { in: jobIds }, customerId: { in: customerIds }, reversedAt: null, txDate: { lt: seriesEnd } } }),
       this.prisma.operationalLedger.findMany({ where: { customerId: { in: customerIds }, createdAt: { lt: seriesEnd } } }),
-      this.prisma.collection.findMany({ where: { collector: { user: { organizationId: actor.organizationId } }, status: { not: 'reversed' }, collectedAt: { gte: seriesStart, lt: seriesEnd } }, include: { collector: { include: { user: { select: { fullName: true } } } } } }),
-      this.prisma.paymentPromise.findMany({ where: { collector: { user: { organizationId: actor.organizationId } }, dueDate: { gte: seriesStart, lt: seriesEnd } }, include: { collector: { include: { user: { select: { fullName: true } } } } } }),
-      this.prisma.agingSnapshot.findMany({ where: { organizationId: actor.organizationId, asOf: { gte: seriesStart, lt: seriesEnd } } }),
+      this.prisma.collection.findMany({ where: { customer: accountFilter, collector: { user: { organizationId: actor.organizationId } }, status: { not: 'reversed' }, collectedAt: { gte: seriesStart, lt: seriesEnd } }, include: { collector: { include: { user: { select: { fullName: true } } } } } }),
+      this.prisma.paymentPromise.findMany({ where: { customer: accountFilter, collector: { user: { organizationId: actor.organizationId } }, dueDate: { gte: seriesStart, lt: seriesEnd } }, include: { collector: { include: { user: { select: { fullName: true } } } } } }),
+      this.prisma.agingSnapshot.findMany({ where: { organizationId: actor.organizationId, customer: accountFilter, asOf: { gte: seriesStart, lt: seriesEnd } } }),
       this.prisma.collectorTarget.findMany({ where: { collector: { user: { organizationId: actor.organizationId } }, month: { gte: seriesStart, lt: seriesEnd } } }),
       this.prisma.collector.findMany({ where: { active: true, user: { organizationId: actor.organizationId } }, include: { user: { select: { fullName: true } } } }),
     ]);
@@ -195,19 +198,33 @@ export class ReportsService {
         sales += txs.filter((x) => x.txDate >= start && x.txDate < end).reduce((sum, x) => sum + Number(x.debit), 0);
       }
       const monthSnapshots = snapshotByMonthCurrency.get(key(monthKey(month), currency)) ?? [];
-      const currentReceivables = monthSnapshots.length ? monthSnapshots.reduce((sum, x) => sum + Number(x.bucket_0_30), 0) : null;
+      const isCurrentMonth = monthKey(month) === monthKey(currentStart);
+      const liveTotals = liveAging.totals[currency];
+      const currentReceivables = monthSnapshots.length
+        ? monthSnapshots.reduce((sum, x) => sum + Number(x.bucket_0_30), 0)
+        : isCurrentMonth && liveTotals ? liveTotals.bucket_0_30 : null;
       const buckets = monthSnapshots.reduce((acc, x) => ({
         bucket_0_30: acc.bucket_0_30 + Number(x.bucket_0_30), bucket_31_60: acc.bucket_31_60 + Number(x.bucket_31_60),
         bucket_61_90: acc.bucket_61_90 + Number(x.bucket_61_90), bucket_91_120: acc.bucket_91_120 + Number(x.bucket_91_120),
         bucket_120_plus: acc.bucket_120_plus + Number(x.bucket_120_plus), undated: acc.undated + Number(x.undated),
       }), { bucket_0_30: 0, bucket_31_60: 0, bucket_61_90: 0, bucket_91_120: 0, bucket_120_plus: 0, undated: 0 });
+      const liveBuckets = isCurrentMonth && liveTotals ? liveTotals : null;
+      const averageDebtAge = monthSnapshots.length ? weightedDebtAge(buckets) : liveBuckets ? weightedDebtAge(liveBuckets) : null;
+      const rollingStart = new Date(end.getTime() - 90 * 86_400_000);
+      const rollingSales = balances.filter((x) => x.currencyCode === currency).reduce((sum, balance) => {
+        const txs = txByBalance.get(key(balance.customerId, currency)) ?? [];
+        return sum + txs.filter((x) => x.txDate >= rollingStart && x.txDate < end).reduce((subtotal, x) => subtotal + Number(x.debit), 0);
+      }, 0);
+      const dso = sales > 0 ? calculateDso(closing, sales, new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 0)).getUTCDate())
+        : isCurrentMonth && rollingSales > 0 ? closing / (rollingSales / 90) : null;
       return {
         month: monthKey(month), currency, opening, sales, closing,
-        dso: calculateDso(closing, sales, new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 0)).getUTCDate()),
+        dso,
         cei: calculateCei(opening, sales, closing, currentReceivables),
-        averageDebtAge: monthSnapshots.length ? weightedDebtAge(buckets) : null,
-        undatedDebt: buckets.undated,
+        averageDebtAge,
+        undatedDebt: liveBuckets ? liveBuckets.undated : buckets.undated,
         closedSnapshot: monthSnapshots.length > 0,
+        liveEstimate: !monthSnapshots.length && isCurrentMonth && !!liveTotals,
       };
     }));
 
@@ -236,6 +253,6 @@ export class ReportsService {
       const latest = series[series.length - 1]; const previous = series[series.length - 2];
       return [currency, { ...latest, debtAgeDeterioration: latest.averageDebtAge !== null && previous?.averageDebtAge !== null ? latest.averageDebtAge - previous.averageDebtAge : null }];
     }));
-    return { generatedAt: now, methodology: { dso: 'closing receivables ÷ credit sales × days', cei: '(opening + sales − closing) ÷ (opening + sales − current receivables)', currenciesSeparated: true }, latestByCurrency, trend, collectors: rows, leaderboard: leaderboard.sort((a, b) => a.currency.localeCompare(b.currency) || b.score - a.score), dataQuality: { monthsWithoutAgingSnapshot: trend.filter((x) => !x.closedSnapshot).map((x) => `${x.month}|${x.currency}`) } };
+    return { generatedAt: now, accountClass, methodology: { dso: 'closing receivables ÷ credit sales × days; current month falls back to trailing 90-day sales', cei: '(opening + sales − closing) ÷ (opening + sales − current receivables)', currenciesSeparated: true }, latestByCurrency, trend, collectors: rows, leaderboard: leaderboard.sort((a, b) => a.currency.localeCompare(b.currency) || b.score - a.score), dataQuality: { monthsWithoutAgingSnapshot: trend.filter((x) => !x.closedSnapshot && !x.liveEstimate).map((x) => `${x.month}|${x.currency}`) } };
   }
 }

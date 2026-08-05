@@ -13,7 +13,7 @@ import {
   ClipboardCheck,
   MessageCircle,
 } from 'lucide-react';
-import { useMe, useCan } from '@/lib/auth';
+import { useMe, useCan, useLogout } from '@/lib/auth';
 import { api, ApiError, tokenStore } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { brandingFromOrganization, OrganizationBrandSource } from '@/lib/branding';
@@ -77,12 +77,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const { data: me, isLoading, isError, error, refetch, isFetching } = useMe();
   const can = useCan();
+  const logout = useLogout();
   const organization = useQuery<OrganizationBrandSource>({
     queryKey: ['organization'],
     queryFn: () => api<OrganizationBrandSource>('/organizations/current'),
     enabled: !!tokenStore.access,
   });
   const branding = brandingFromOrganization(organization.data);
+  const configuredIdleMinutes = Number(organization.data?.systemSettings?.find((item) => item.key === 'session.timeout')?.value ?? 60);
+  const idleMinutes = Number.isFinite(configuredIdleMinutes) && configuredIdleMinutes > 0 ? configuredIdleMinutes : 60;
   const navCounts = useQuery({
     queryKey: ['nav-counts'],
     queryFn: () => api<{ tasks: number; followups: number; promises: number }>('/dashboard/nav-counts'),
@@ -107,6 +110,31 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (!organization.data) return;
     document.title = `${branding.name} — ${branding.subtitle}`;
   }, [branding.name, branding.subtitle, organization.data]);
+
+  useEffect(() => {
+    if (!mounted || !tokenStore.access) return;
+    const key = 'albinaa.lastActivity';
+    let lastWrite = 0;
+    const markActivity = () => {
+      const now = Date.now();
+      if (now - lastWrite < 15_000) return;
+      lastWrite = now;
+      localStorage.setItem(key, String(now));
+    };
+    // A successful app mount starts a fresh idle window; stale values from an
+    // earlier signed-out user must never close a newly created session.
+    markActivity();
+    const events: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach((event) => window.addEventListener(event, markActivity, { passive: true }));
+    const timer = window.setInterval(() => {
+      const last = Number(localStorage.getItem(key) ?? Date.now());
+      if (Date.now() - last >= idleMinutes * 60_000) void logout();
+    }, 15_000);
+    return () => {
+      events.forEach((event) => window.removeEventListener(event, markActivity));
+      window.clearInterval(timer);
+    };
+  }, [idleMinutes, logout, mounted]);
 
   // Same tree on server and first client paint — avoids React #418/#423
   if (!mounted) return <LoadingShell />;

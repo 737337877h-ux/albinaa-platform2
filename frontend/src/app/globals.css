@@ -51,6 +51,11 @@ body {
   @apply antialiased;
 }
 
+/* Keep secondary labels readable on the dark accounting screens. */
+.dark .text-concrete-500 { color: #A7C4BC; }
+.dark .text-concrete-600 { color: #C7D9D4; }
+.dark .text-pine-700 { color: #8FE3CB; }
+
 /* الأرقام المالية: جدولية دائمًا — قرار تصميمي أساسي لقراءة الكشوف */
 .tnum { font-family: 'Space Grotesk', 'Segoe UI', Arial, sans-serif; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
 

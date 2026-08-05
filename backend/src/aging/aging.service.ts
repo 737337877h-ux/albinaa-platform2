@@ -19,8 +19,8 @@ export class AgingService {
   ) {}
 
   async report(actor: AuthUser, query: AgingQueryDto) {
-    if (query.asOf) return this.snapshotReport(actor.organizationId, query.asOf, query.currency);
-    return this.liveReport(actor.organizationId, new Date(), query.currency);
+    if (query.asOf) return this.snapshotReport(actor.organizationId, query.asOf, query.currency, query.accountClass ?? 'customer');
+    return this.liveReport(actor.organizationId, new Date(), query.currency, query.accountClass ?? 'customer');
   }
 
   async createSnapshot(actor: AuthUser, req?: Request) {
@@ -39,7 +39,7 @@ export class AgingService {
   }
 
   private async createSnapshotAt(actor: AuthUser, asOf: Date, req?: Request) {
-    const report = await this.liveReport(actor.organizationId, asOf);
+    const report = await this.liveReport(actor.organizationId, asOf, undefined, 'all');
     await this.prisma.$transaction(async (tx) => {
       await tx.agingSnapshot.deleteMany({ where: { organizationId: actor.organizationId, asOf } });
       if (report.customers.length) {
@@ -67,14 +67,19 @@ export class AgingService {
     return { asOf: asOf.toISOString().slice(0, 10), rows: report.customers.length };
   }
 
-  private async liveReport(organizationId: string, asOf: Date, currency?: string) {
+  private async liveReport(organizationId: string, asOf: Date, currency?: string, accountClass: 'customer' | 'advance' | 'all' = 'customer') {
     const balances = await this.prisma.customerBalance.findMany({
       where: {
-        customer: { organizationId, status: { notIn: ['merged', 'import_reversed'] } },
+        customer: {
+          organizationId, status: { notIn: ['merged', 'import_reversed'] },
+          ...(accountClass === 'advance'
+            ? { customerType: 'advance' }
+            : accountClass === 'customer' ? { OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } : {}),
+        },
         ...(currency ? { currencyCode: currency } : {}),
       },
       include: {
-        customer: { select: { id: true, name: true, externalCustomerCode: true } },
+        customer: { select: { id: true, name: true, externalCustomerCode: true, customerType: true } },
         lastImportJob: { select: { importedAt: true } },
       },
     });
@@ -121,19 +126,25 @@ export class AgingService {
         customerId: balance.customerId,
         customerCode: balance.customer.externalCustomerCode,
         customerName: balance.customer.name,
+        accountClass: balance.customer.customerType === 'advance' ? 'advance' : 'customer',
         currency: balance.currencyCode,
         buckets,
         totalDue: Object.values(buckets).reduce((sum, x) => sum + x, 0),
         provisionAmount: provisionFor(buckets, rates),
       };
     }).filter((row) => row.totalDue > 0.005);
-    return this.formatReport(asOf, customers, rates, false);
+    return this.formatReport(asOf, customers, rates, false, accountClass);
   }
 
-  private async snapshotReport(organizationId: string, rawDate: string, currency?: string) {
+  private async snapshotReport(organizationId: string, rawDate: string, currency?: string, accountClass: 'customer' | 'advance' = 'customer') {
     const asOf = this.dateOnly(new Date(rawDate));
     const rows = await this.prisma.agingSnapshot.findMany({
-      where: { organizationId, asOf, ...(currency ? { currencyCode: currency } : {}) },
+      where: {
+        organizationId, asOf, ...(currency ? { currencyCode: currency } : {}),
+        customer: accountClass === 'advance'
+          ? { customerType: 'advance' }
+          : { OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+      },
       include: { customer: { select: { name: true, externalCustomerCode: true } } },
     });
     if (!rows.length) throw new NotFoundException('لا توجد لقطة أعمار ديون لهذا التاريخ');
@@ -146,10 +157,10 @@ export class AgingService {
       totalDue: Number(row.totalDue),
       provisionAmount: Number(row.provisionAmount),
     }));
-    return this.formatReport(asOf, customers, DEFAULT_RATES, true);
+    return this.formatReport(asOf, customers, DEFAULT_RATES, true, accountClass);
   }
 
-  private formatReport(asOf: Date, customers: Array<{ currency: string; buckets: AgingAmounts; totalDue: number; provisionAmount: number } & Record<string, unknown>>, rates: typeof DEFAULT_RATES, snapshot: boolean) {
+  private formatReport(asOf: Date, customers: Array<{ currency: string; buckets: AgingAmounts; totalDue: number; provisionAmount: number } & Record<string, unknown>>, rates: typeof DEFAULT_RATES, snapshot: boolean, accountClass: string) {
     const totals: Record<string, AgingAmounts & { totalDue: number; provisionAmount: number }> = {};
     for (const row of customers) {
       totals[row.currency] ??= { ...Object.fromEntries(AGING_BUCKETS.map((x) => [x, 0])) as AgingAmounts, totalDue: 0, provisionAmount: 0 };
@@ -157,7 +168,7 @@ export class AgingService {
       totals[row.currency].totalDue += row.totalDue;
       totals[row.currency].provisionAmount += row.provisionAmount;
     }
-    return { asOf: asOf.toISOString().slice(0, 10), snapshot, rates, totals, customers };
+    return { asOf: asOf.toISOString().slice(0, 10), snapshot, accountClass, rates, totals, customers };
   }
 
   private dateOnly(value: Date) {

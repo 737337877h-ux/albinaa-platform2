@@ -42,7 +42,7 @@ export class DashboardService {
         this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
         this.prisma.customerBalance.findMany({
           where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
-          select: { customerId: true, currencyCode: true, accountingBalance: true },
+          select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
         }),
         this.prisma.importJob.findFirst({
           where: { organizationId: orgId, status: 'completed' },
@@ -54,9 +54,22 @@ export class DashboardService {
         }),
         this.prisma.customerBalance.findMany({
           where: { customer: { organizationId: orgId, customerType: 'advance', status: 'active' } },
-          select: { customerId: true, currencyCode: true, accountingBalance: true },
+          select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
         }),
       ]);
+
+    const withOperationalBalance = async <T extends { customerId: string; currencyCode: string; accountingBalance: unknown; lastImportJob: { importedAt: Date } | null }>(rows: T[]) => Promise.all(rows.map(async (row) => {
+      const ledger = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: row.customerId, currencyCode: row.currencyCode,
+          ...(row.lastImportJob ? { createdAt: { gt: row.lastImportJob.importedAt } } : {}),
+        },
+      });
+      return { ...row, effectiveBalance: Number(row.accountingBalance) + Number(ledger._sum.amountSigned ?? 0) };
+    }));
+    const effectiveBalances = await withOperationalBalance(balances);
+    const effectiveAdvanceBalances = await withOperationalBalance(advanceBalances);
 
     // ---- تجميع حسب العملة: مدينون/دائنون/صفر + الإجماليات ----
     const byCurrency: Record<string, {
@@ -64,29 +77,29 @@ export class DashboardService {
       creditors: number; creditTotal: number;
       zero: number;
     }> = {};
-    for (const b of balances) {
+    for (const b of effectiveBalances) {
       const ccy = b.currencyCode;
       byCurrency[ccy] ??= { debtors: 0, debtTotal: 0, creditors: 0, creditTotal: 0, zero: 0 };
-      const v = Number(b.accountingBalance);
+      const v = b.effectiveBalance;
       if (v > 0) { byCurrency[ccy].debtors += 1; byCurrency[ccy].debtTotal += v; }
       else if (v < 0) { byCurrency[ccy].creditors += 1; byCurrency[ccy].creditTotal += -v; }
       else byCurrency[ccy].zero += 1;
     }
 
     const advanceByCurrency: Record<string, { accounts: number; balance: number }> = {};
-    for (const balance of advanceBalances) {
+    for (const balance of effectiveAdvanceBalances) {
       advanceByCurrency[balance.currencyCode] ??= { accounts: 0, balance: 0 };
       advanceByCurrency[balance.currencyCode].accounts += 1;
-      advanceByCurrency[balance.currencyCode].balance += Number(balance.accountingBalance);
+      advanceByCurrency[balance.currencyCode].balance += balance.effectiveBalance;
     }
 
     return {
       customers: {
         total: totalCustomers,
         active: activeCustomers,
-        withBalances: new Set(balances.map((b) => b.customerId)).size,
+        withBalances: new Set(effectiveBalances.filter((b) => Math.abs(b.effectiveBalance) > 0.005).map((b) => b.customerId)).size,
       },
-      advances: { accounts: new Set(advanceBalances.map((row) => row.customerId)).size, byCurrency: advanceByCurrency },
+      advances: { accounts: new Set(effectiveAdvanceBalances.map((row) => row.customerId)).size, byCurrency: advanceByCurrency },
       byCurrency,
       lastImport,
       pendingDuplicateAlerts: pendingDuplicates,
@@ -219,35 +232,47 @@ export class DashboardService {
     const tomorrow = startOfNextOrgDay(todayDate);
 
     const [totalCustomers, activeCustomers, balances, scores, todayTasks, aging] = await Promise.all([
-      this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' } } }),
-      this.prisma.customer.count({ where: { organizationId: orgId, status: 'active' } }),
+      this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' }, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
+      this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
       this.prisma.customerBalance.findMany({
-        where: { customer: { organizationId: orgId, status: 'active' }, accountingBalance: { gt: 0 } },
-        select: { customerId: true, currencyCode: true, accountingBalance: true },
+        where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
+        select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
       }),
       this.prisma.customerScore.findMany({
-        where: { customer: { organizationId: orgId } },
+        where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
         orderBy: { computedAt: 'desc' },
         select: { customerId: true, score: true, riskLevel: true },
       }),
       this.prisma.task.findMany({
-        where: { status: 'open', dueDate: { gte: today, lt: tomorrow }, customer: { organizationId: orgId } },
+        where: { status: 'open', dueDate: { gte: today, lt: tomorrow }, customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
         select: {
           id: true, customerId: true, assignedTo: true, taskType: true, priorityReason: true,
           expectedAmount: true, expectedCurrency: true,
         },
       }),
       this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId }, bucket_120_plus: { gt: 0 }, reversedAt: null },
+        where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] }, bucket_120_plus: { gt: 0 }, reversedAt: null },
         select: { customerId: true, currencyCode: true, totalDue: true },
       }),
     ]);
 
-    const debtors = new Set(balances.map((b) => b.customerId)).size;
+    const operationalBalances = await Promise.all(balances.map(async (balance) => {
+      const ledger = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: balance.customerId,
+          currencyCode: balance.currencyCode,
+          ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
+        },
+      });
+      return { ...balance, effectiveBalance: Number(balance.accountingBalance) + Number(ledger._sum.amountSigned ?? 0) };
+    }));
+    const debtorBalances = operationalBalances.filter((balance) => balance.effectiveBalance > 0.005);
+    const debtors = new Set(debtorBalances.map((b) => b.customerId)).size;
 
     const debtByCurrency: Record<string, number> = {};
-    for (const b of balances) {
-      debtByCurrency[b.currencyCode] = (debtByCurrency[b.currencyCode] ?? 0) + Number(b.accountingBalance);
+    for (const b of debtorBalances) {
+      debtByCurrency[b.currencyCode] = (debtByCurrency[b.currencyCode] ?? 0) + b.effectiveBalance;
     }
 
     // أحدث درجة لكل عميل (computedAt تنازلي — الأول لكل عميل يفوز)
@@ -284,6 +309,7 @@ export class DashboardService {
     const highRisk = await this.prisma.customer.findMany({
       where: {
         organizationId: orgId,
+        OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
         scores: { some: { riskLevel: { in: ['high', 'critical'] } } },
       },
       select: {

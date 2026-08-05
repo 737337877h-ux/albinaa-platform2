@@ -43,10 +43,11 @@ export default function AgingReportPage() {
   const canSnapshot = can('reports.export');
   const queryClient = useQueryClient();
   const [currency, setCurrency] = useState('ALL');
+  const [accountClass, setAccountClass] = useState<'customer' | 'advance'>('customer');
   const [activeBucket, setActiveBucket] = useState<Bucket | null>(null);
   const report = useQuery({
-    queryKey: ['aging-report'],
-    queryFn: () => api<AgingReport>('/reports/aging'),
+    queryKey: ['aging-report', accountClass],
+    queryFn: () => api<AgingReport>(`/reports/aging?accountClass=${accountClass}`),
     enabled: allowed && hasToken(),
   });
   const snapshot = useMutation({
@@ -68,6 +69,7 @@ export default function AgingReportPage() {
         حتى {report.data?.asOf ?? '—'} {report.data?.snapshot ? '• لقطة مقفلة' : '• مباشر'}
       </div>
       <div className="flex gap-2">
+        <Select aria-label="نوع الحساب" value={accountClass} onChange={(event) => { setAccountClass(event.target.value as 'customer' | 'advance'); setCurrency('ALL'); }} className="w-40"><option value="customer">العملاء فقط</option><option value="advance">السلف فقط</option></Select>
         <Select aria-label="العملة" value={currency} onChange={(event) => setCurrency(event.target.value)} className="w-40">
           <option value="ALL">كل العملات</option>
           {currencies.map((code) => <option key={code} value={code}>{code}</option>)}

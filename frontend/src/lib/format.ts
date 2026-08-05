@@ -6,11 +6,14 @@ export const ORG_TIME_ZONE = 'Asia/Aden';
 export const ORG_UTC_OFFSET = '+03:00';
 
 export const fmtDate = (v: string | Date) =>
-  new Intl.DateTimeFormat('ar', { dateStyle: 'medium', timeZone: ORG_TIME_ZONE }).format(new Date(v));
+  new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit', month: '2-digit', year: 'numeric', timeZone: ORG_TIME_ZONE,
+  }).format(new Date(v));
 
 export const fmtDateTime = (v: string | Date) =>
-  new Intl.DateTimeFormat('ar', {
-    dateStyle: 'medium', timeStyle: 'short', timeZone: ORG_TIME_ZONE,
+  new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: ORG_TIME_ZONE,
   }).format(new Date(v));
 
 /** قيمة صريحة بتوقيت المنشأة مناسبة لحقل datetime-local. */

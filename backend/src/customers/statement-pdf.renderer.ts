@@ -51,7 +51,7 @@ function dateText(value: Date | string): string {
 function classicRowDateText(value: Date | string): string {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleDateString('en-CA', { timeZone: 'UTC' }).replaceAll('-', '/');
+  return date.toLocaleDateString('en-GB', { timeZone: 'UTC' });
 }
 
 function dateTimeText(value: Date): string {
