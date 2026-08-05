@@ -3,7 +3,7 @@
     "owner": "alqalisi",
     "name": "البناء الراقي تحصيل",
     "slug": "albinaa-collector",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "orientation": "portrait",
     "icon": "./assets/albinaa-collection-icon.png",
     "userInterfaceStyle": "light",
@@ -24,7 +24,7 @@
         "foregroundImage": "./assets/albinaa-collection-icon.png"
       },
       "predictiveBackGestureEnabled": false,
-      "versionCode": 2,
+      "versionCode": 3,
       "package": "com.albinaa.collector",
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",

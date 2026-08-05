@@ -310,18 +310,45 @@ export interface MobileSyncBatch {
 export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: string): Promise<void> {
   const d = await getDb();
   await d.withExclusiveTransactionAsync(async (tx) => {
+    await tx.runAsync(`
+      CREATE TEMP TABLE IF NOT EXISTS sync_seen_ids (
+        tableName TEXT NOT NULL,
+        id TEXT NOT NULL,
+        PRIMARY KEY (tableName, id)
+      )
+    `);
     for (const table of BUSINESS_TABLES) {
       const records = batch[table];
       if (!records) continue;
-      await tx.runAsync(`DELETE FROM ${table}`);
+      await tx.runAsync('DELETE FROM sync_seen_ids WHERE tableName = ?', table);
       const seen = new Set<string>();
       for (const raw of records) {
         if (!raw?.id || seen.has(raw.id)) continue;
         seen.add(raw.id);
         const record = normalizeRecord(table, raw);
-        if (record) await upsertWithDatabase(tx, table, record);
+        if (record) {
+          await upsertWithDatabase(tx, table, record);
+          await tx.runAsync(
+            'INSERT OR IGNORE INTO sync_seen_ids (tableName, id) VALUES (?, ?)',
+            table,
+            String(raw.id),
+          );
+        }
       }
+      // Keep the previous snapshot readable while the (potentially large)
+      // upsert is running. Stale rows are removed only after every incoming
+      // row is safely present, avoiding transient "customer not found"
+      // screens during background sync.
+      await tx.runAsync(
+        `DELETE FROM ${table}
+         WHERE NOT EXISTS (
+           SELECT 1 FROM sync_seen_ids
+           WHERE tableName = ? AND sync_seen_ids.id = ${table}.id
+         )`,
+        table,
+      );
     }
+    await tx.runAsync('DELETE FROM sync_seen_ids');
     if (batch.references) {
       await tx.runAsync('DELETE FROM reference_options');
       for (const [kind, options] of Object.entries(batch.references)) {

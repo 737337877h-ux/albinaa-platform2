@@ -7,11 +7,11 @@ import {
 
 describe('constants', () => {
   it('exports expected app version', () => {
-    expect(APP_VERSION).toBe('1.2.0');
+    expect(APP_VERSION).toBe('1.2.1');
   });
 
-  it('sync interval is 30 seconds', () => {
-    expect(SYNC_INTERVAL_MS).toBe(30_000);
+  it('sync interval is 5 minutes', () => {
+    expect(SYNC_INTERVAL_MS).toBe(300_000);
   });
 
   it('gps interval is 10 seconds', () => {

@@ -113,7 +113,7 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>الاتصال المحلي</Text>
         <SettingRow label="المزامنة عبر الشبكة المحلية فقط" value={lanOnly} onChange={toggleLanOnly} />
         <Text style={styles.hint}>
-          عند التفعيل لا يرسل التطبيق أي بيانات إلى عنوان خارجي. يعمل تلقائيًا كل {SYNC_INTERVAL_MS / 1000} ثانية عند توفر الخادم المحلي.
+          عند التفعيل لا يرسل التطبيق أي بيانات إلى عنوان خارجي. يعمل تلقائيًا كل {SYNC_INTERVAL_MS / 60_000} دقائق عند توفر الخادم المحلي.
         </Text>
       </View>
 

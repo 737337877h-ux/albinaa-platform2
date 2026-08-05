@@ -4,6 +4,19 @@ import { getAll } from '../db/database';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSync } from '../store/sync-context';
 
+const TASK_TYPE_LABELS: Record<string, string> = {
+  call: 'اتصال',
+  visit: 'زيارة',
+  sms: 'رسالة نصية',
+  whatsapp: 'واتساب',
+  followup: 'متابعة',
+};
+
+function taskTypeLabel(value: unknown): string {
+  const raw = String(value || '').trim();
+  return TASK_TYPE_LABELS[raw.toLowerCase()] || raw;
+}
+
 export default function TasksScreen({ navigation }: any) {
   const [localTasks, setLocalTasks] = React.useState<any[]>([]);
   const [refreshing, setRefreshing] = React.useState(false);
@@ -35,7 +48,7 @@ export default function TasksScreen({ navigation }: any) {
         <Text style={styles.taskDue}>
           {item.dueDate ? new Date(item.dueDate).toLocaleDateString('ar-SA') : ''}
         </Text>
-        <Text style={styles.taskType}>{item.taskType || item.priority || ''}</Text>
+        <Text style={styles.taskType}>{taskTypeLabel(item.taskType || item.priority)}</Text>
       </View>
     </TouchableOpacity>
   );
