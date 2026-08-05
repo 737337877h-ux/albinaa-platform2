@@ -240,7 +240,7 @@ export class TasksService {
    * (TASK_TYPE_PRIORITY) ثم المبلغ المتوقع تنازليًا.
    */
   private async boardFromTasks(
-    _user: AuthUser,
+    user: AuthUser,
     collectorId: string | null,
     isAdmin: boolean,
     today: Date,
@@ -251,7 +251,7 @@ export class TasksService {
     }[],
   ) {
     const customerIds = [...new Set(tasks.map((t) => t.customerId).filter((x): x is string => !!x))];
-    const [balances, followups] = await Promise.all([
+    const [balances, followups, portfolioCustomerBalances] = await Promise.all([
       this.prisma.customerBalance.findMany({
         where: { customerId: { in: customerIds }, accountingBalance: { gt: 0 } },
         select: { customerId: true, currencyCode: true, accountingBalance: true },
@@ -260,6 +260,17 @@ export class TasksService {
         where: { customerId: { in: customerIds }, deletedAt: null },
         select: { customerId: true, followupAt: true },
         orderBy: { followupAt: 'desc' },
+      }),
+      this.prisma.customerBalance.findMany({
+        where: {
+          accountingBalance: { gt: 0 },
+          customer: {
+            organizationId: user.organizationId,
+            status: 'active',
+            OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+          },
+        },
+        select: { customerId: true, currencyCode: true, accountingBalance: true },
       }),
     ]);
 
@@ -320,6 +331,16 @@ export class TasksService {
         : customerBalanceByCurrency;
       target[currency] = (target[currency] ?? 0) + amount;
     }
+    const portfolioCustomerDebtByCurrency: Record<string, number> = {};
+    for (const balance of portfolioCustomerBalances) {
+      portfolioCustomerDebtByCurrency[balance.currencyCode] =
+        (portfolioCustomerDebtByCurrency[balance.currencyCode] ?? 0) + Number(balance.accountingBalance);
+    }
+    const excludedCustomerDebtByCurrency: Record<string, number> = {};
+    for (const [currency, portfolioAmount] of Object.entries(portfolioCustomerDebtByCurrency)) {
+      const difference = portfolioAmount - (customerBalanceByCurrency[currency] ?? 0);
+      excludedCustomerDebtByCurrency[currency] = Math.abs(difference) < 0.00005 ? 0 : difference;
+    }
 
     return {
       collectorId,
@@ -334,10 +355,12 @@ export class TasksService {
         totalBalanceByCurrency,
         customerBalanceByCurrency,
         advanceBalanceByCurrency,
+        portfolioCustomerDebtByCurrency,
+        excludedCustomerDebtByCurrency,
         unassignedTasks: items.filter((i) => !i.assignedTo).length,
         methodology: {
           expected: 'أعلى مبلغ مستهدف لكل حساب وعملة، بحد أقصى الرصيد المدين، دون تكرار المهام',
-          balances: 'أرصدة مدينة فريدة للحسابات الموجودة في قائمة عمل اليوم فقط، دون تكرار الحساب',
+          balances: 'أرصدة مدينة فريدة للحسابات النشطة الموجودة في قائمة عمل اليوم، دون تكرار الحساب أو إدخال الحسابات المدمجة',
         },
       },
       items,

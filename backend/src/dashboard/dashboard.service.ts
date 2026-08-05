@@ -37,10 +37,10 @@ export class DashboardService {
 
     const [totalCustomers, activeCustomers, balances, lastImport, pendingDuplicates, advanceBalances] =
       await Promise.all([
-        this.prisma.customer.count({ where: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
+        this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' }, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
         this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
         this.prisma.customerBalance.findMany({
-          where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
+          where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
           select: { customerId: true, currencyCode: true, accountingBalance: true },
         }),
         this.prisma.importJob.findFirst({
@@ -95,6 +95,9 @@ export class DashboardService {
       followupsToday: null,
       promisesDueToday: null,
       collectionsToday: null,
+      methodology: {
+        debtScope: 'أرصدة الحسابات النشطة فقط؛ الحسابات المدمجة محفوظة للتدقيق ولا تدخل في إجمالي المديونية',
+      },
     };
   }
 
@@ -110,13 +113,19 @@ export class DashboardService {
 
     const [latest, previous] = lastTwo;
     const latestSnaps = await this.prisma.balanceSnapshot.findMany({
-      where: { importJobId: latest.id },
+      where: {
+        importJobId: latest.id,
+        customer: { status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+      },
       select: { customerId: true, currencyCode: true, balance: true },
     });
     const prevMap = new Map<string, number>();
     if (previous) {
       const prevSnaps = await this.prisma.balanceSnapshot.findMany({
-        where: { importJobId: previous.id },
+        where: {
+          importJobId: previous.id,
+          customer: { status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        },
         select: { customerId: true, currencyCode: true, balance: true },
       });
       for (const s of prevSnaps) {
@@ -154,14 +163,20 @@ export class DashboardService {
    */
   private async estimatedAging(orgId: string) {
     const debtors = await this.prisma.customerBalance.findMany({
-      where: { customer: { organizationId: orgId }, accountingBalance: { gt: 0 } },
+      where: {
+        customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        accountingBalance: { gt: 0 },
+      },
       select: { customerId: true, currencyCode: true, accountingBalance: true },
     });
     if (debtors.length === 0) return { estimated: true, buckets: {}, note: 'لا مدينين' };
 
     const oldest = await this.prisma.importedTransaction.groupBy({
       by: ['customerId', 'currencyCode'],
-      where: { customer: { organizationId: orgId }, reversedAt: null },
+      where: {
+        customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        reversedAt: null,
+      },
       _min: { txDate: true },
     });
     const oldestMap = new Map<string, Date>();
@@ -202,10 +217,10 @@ export class DashboardService {
     const tomorrow = new Date(today.getTime() + 86_400_000);
 
     const [totalCustomers, activeCustomers, balances, scores, todayTasks, aging] = await Promise.all([
-      this.prisma.customer.count({ where: { organizationId: orgId } }),
+      this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' } } }),
       this.prisma.customer.count({ where: { organizationId: orgId, status: 'active' } }),
       this.prisma.customerBalance.findMany({
-        where: { customer: { organizationId: orgId }, accountingBalance: { gt: 0 } },
+        where: { customer: { organizationId: orgId, status: 'active' }, accountingBalance: { gt: 0 } },
         select: { customerId: true, currencyCode: true, accountingBalance: true },
       }),
       this.prisma.customerScore.findMany({

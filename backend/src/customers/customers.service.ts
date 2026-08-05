@@ -209,6 +209,7 @@ export class CustomersService {
     return {
       id: c.id,
       externalCustomerCode: c.externalCustomerCode,
+      accountNumber: c.accountNumber,
       name: c.name,
       phonePrimary: c.phonePrimary,
       region: c.region,

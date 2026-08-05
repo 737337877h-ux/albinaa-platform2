@@ -21,6 +21,7 @@ const hasToken = () => typeof window !== 'undefined' && !!tokenStore.access;
 interface DashboardSummary {
   customers: { total: number; active: number; withBalances: number };
   advances: { accounts: number; byCurrency: Record<string, { accounts: number; balance: number }> };
+  methodology?: { debtScope: string };
   byCurrency: Record<string, { debtors: number; debtTotal: number; creditors: number; creditTotal: number; zero: number }>;
   lastImport: { id: string; fileName: string; importedAt: string } | null;
   newDebt: { perCurrency?: Record<string, { amount: number; accounts: number; newDebtors: number }> } | null;
@@ -270,6 +271,11 @@ export default function DashboardPage() {
                     {Object.entries(summary.data.newDebt.perCurrency).map(([ccy, v]) => (
                       <p key={ccy} className="tnum mt-1 text-sm font-bold" dir="ltr">{fmtMoney(v.amount)} {ccy}</p>
                     ))}
+                  </Card>
+                )}
+                {summary.data.methodology?.debtScope && (
+                  <Card className="p-4 sm:col-span-2 xl:col-span-4">
+                    <p className="text-xs text-concrete-500"><strong>نطاق المديونية:</strong> {summary.data.methodology.debtScope}.</p>
                   </Card>
                 )}
               </div>

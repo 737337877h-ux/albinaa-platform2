@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
@@ -52,10 +53,9 @@ export class AnalyticalAccountsService {
   async findAll(actor: AuthUser, q: QueryAnalyticalAccountsDto) {
     const page = q.page ?? 1;
     const limit = q.limit ?? 25;
-    const where: Record<string, unknown> = { organizationId: actor.organizationId };
+    const where: Record<string, unknown> = { organizationId: actor.organizationId, status: q.status ?? 'active' };
     if (q.category) where.category = q.category;
     if (q.currencyCode) where.currencyCode = q.currencyCode;
-    if (q.status) where.status = q.status;
     if (q.search) {
       const s = q.search.trim();
       where.OR = [
@@ -407,21 +407,16 @@ export class AnalyticalAccountsService {
       for (const account of parsed.accounts) {
         let customerId = customerIds.get(account.accountNumber);
         if (!customerId) {
-          const customerWhere = {
-            organizationId_externalCustomerCode: {
+          const existing = await tx.customer.findFirst({
+            where: {
               organizationId: actor.organizationId,
-              externalCustomerCode: account.accountNumber,
+              customerType: 'advance',
+              accountNumber: account.accountNumber,
             },
-          } as const;
-          const existing = await tx.customer.findUnique({ where: customerWhere });
-          if (existing && existing.customerType !== 'advance') {
-            throw new BadRequestException(
-              `رقم الحساب ${account.accountNumber} مستخدم لعميل عادي؛ لن يتم دمج حساب السلفة معه تلقائيًا`,
-            );
-          }
+          });
           const saved = existing
             ? await tx.customer.update({
-                where: customerWhere,
+                where: { id: existing.id },
                 data: {
                   name: account.accountName,
                   nameNormalized: normalizeAdvanceName(account.accountName),
@@ -433,7 +428,7 @@ export class AnalyticalAccountsService {
             : await tx.customer.create({
                 data: {
                   organizationId: actor.organizationId,
-                  externalCustomerCode: account.accountNumber,
+                  externalCustomerCode: await this.nextAdvanceExternalCode(tx, actor.organizationId, account.accountNumber),
                   accountNumber: account.accountNumber,
                   name: account.accountName,
                   nameNormalized: normalizeAdvanceName(account.accountName),
@@ -541,7 +536,29 @@ export class AnalyticalAccountsService {
           txnsSkippedDuplicate: movementsSkippedDuplicate,
         },
       });
-      return { importJobId: job.id, accountsCreated, accountsUpdated, movementsInserted, movementsSkippedDuplicate };
+      const importedPairs = parsed.accounts.map((account) => ({
+        accountNumber: account.accountNumber,
+        currencyCode: account.currencyCode,
+      }));
+      const archived = importedPairs.length
+        ? await tx.analyticalAccount.updateMany({
+            where: {
+              organizationId: actor.organizationId,
+              category: 'employee_advance',
+              status: 'active',
+              OR: importedPairs,
+            },
+            data: { status: 'inactive' },
+          })
+        : { count: 0 };
+      return {
+        importJobId: job.id,
+        accountsCreated,
+        accountsUpdated,
+        movementsInserted,
+        movementsSkippedDuplicate,
+        legacyAnalyticalAccountsArchived: archived.count,
+      };
     });
 
     await this.audit.log({
@@ -557,6 +574,24 @@ export class AnalyticalAccountsService {
       req,
     });
     return { status: 'completed', preview, ...result };
+  }
+
+  private async nextAdvanceExternalCode(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    accountNumber: string,
+  ): Promise<string> {
+    const base = `ADV-${accountNumber}`;
+    let candidate = base;
+    let suffix = 2;
+    while (await tx.customer.findUnique({
+      where: { organizationId_externalCustomerCode: { organizationId, externalCustomerCode: candidate } },
+      select: { id: true },
+    })) {
+      candidate = `${base}-${suffix}`;
+      suffix += 1;
+    }
+    return candidate;
   }
 }
 

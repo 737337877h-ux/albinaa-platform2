@@ -38,6 +38,8 @@ interface TodayResponse {
     totalBalanceByCurrency: Record<string, number>;
     customerBalanceByCurrency?: Record<string, number>;
     advanceBalanceByCurrency?: Record<string, number>;
+    portfolioCustomerDebtByCurrency?: Record<string, number>;
+    excludedCustomerDebtByCurrency?: Record<string, number>;
     methodology?: { expected: string; balances: string };
   };
   items: TodayItem[];
@@ -178,7 +180,7 @@ export default function TasksPage() {
                     <SummaryCard
                       key={ccy}
                       icon={<AlertTriangle className="h-5 w-5 text-amber-500" />}
-                      label={`هدف التحصيل للحسابات المدرجة (${CCY_AR[ccy] ?? ccy})`}
+                      label={`هدف التحصيل — العملاء والسلف (${CCY_AR[ccy] ?? ccy})`}
                       value={<Money value={amt} currency={ccy} />}
                     />
                   ))}
@@ -186,7 +188,7 @@ export default function TasksPage() {
                     <SummaryCard
                       key={ccy}
                       icon={<TrendingUp className="h-5 w-5 text-blue-500" />}
-                      label={`إجمالي الأرصدة (${CCY_AR[ccy] ?? ccy})`}
+                      label={`إجمالي أرصدة العمل — العملاء والسلف (${CCY_AR[ccy] ?? ccy})`}
                       value={<Money value={amt} currency={ccy} />}
                     />
                   ))}
@@ -196,7 +198,21 @@ export default function TasksPage() {
                   <Card className="p-4 text-sm">
                     <h3 className="font-semibold">كيف حُسبت المؤشرات؟</h3>
                     <p className="mt-1 text-concrete-600 dark:text-concrete-300"><strong>هدف التحصيل:</strong> {s.methodology.expected}. هذا هدف تشغيلي مبني على الرصيد/التقادم، وليس تنبؤًا احتماليًا.</p>
-                    <p className="mt-1 text-concrete-600 dark:text-concrete-300"><strong>إجمالي أرصدة عمل اليوم:</strong> {s.methodology.balances}. لذلك لا يلزم أن يساوي إجمالي مديونية لوحة التحكم التي تشمل جميع العملاء.</p>
+                    <p className="mt-1 text-concrete-600 dark:text-concrete-300"><strong>إجمالي أرصدة عمل اليوم:</strong> {s.methodology.balances}.</p>
+                    {Object.entries(s.portfolioCustomerDebtByCurrency ?? {}).map(([ccy, portfolio]) => {
+                      const listed = s.customerBalanceByCurrency?.[ccy] ?? 0;
+                      const difference = s.excludedCustomerDebtByCurrency?.[ccy] ?? 0;
+                      return (
+                        <p key={ccy} className="mt-1 text-concrete-600 dark:text-concrete-300">
+                          <strong>مطابقة {ccy}:</strong> لوحة التحكم {fmtMoney(portfolio)}، عمل اليوم {fmtMoney(listed)}، الفرق {fmtMoney(difference)}.
+                        </p>
+                      );
+                    })}
+                    {Object.entries(s.advanceBalanceByCurrency ?? {}).map(([ccy, advances]) => (
+                      <p key={`advance-${ccy}`} className="mt-1 text-concrete-600 dark:text-concrete-300">
+                        <strong>السلف على الغير {ccy}:</strong> {fmtMoney(advances)}، تظهر في قائمة العمل والمتابعة بصورة مستقلة ولا تدخل في بطاقة مديونية العملاء.
+                      </p>
+                    ))}
                   </Card>
                 )}
 
