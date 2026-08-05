@@ -7,7 +7,7 @@ import {
 
 describe('constants', () => {
   it('exports expected app version', () => {
-    expect(APP_VERSION).toBe('1.0.0');
+    expect(APP_VERSION).toBe('1.2.0');
   });
 
   it('sync interval is 30 seconds', () => {
@@ -22,8 +22,8 @@ describe('constants', () => {
     expect(MUTATION_MAX_RETRIES).toBe(5);
   });
 
-  it('schema version is 3', () => {
-    expect(DB_SCHEMA_VERSION).toBe(3);
+  it('schema version is 5', () => {
+    expect(DB_SCHEMA_VERSION).toBe(5);
   });
 
   it('max image size is 10 MB', () => {

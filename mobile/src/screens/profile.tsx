@@ -1,36 +1,10 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { getMe } from '../api/auth';
-import { apiErrorMessage } from '../utils/errors';
-import Loading from '../components/loading';
+import React from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useAuth } from '../store/auth-context';
 import { APP_VERSION } from '../utils/constants';
 
-export default function ProfileScreen() {
-  const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-      (async () => {
-        setLoading(true);
-        setError(null);
-        try {
-          const me = await getMe();
-          if (!cancelled) setUser(me);
-        } catch (e: any) {
-          if (!cancelled) setError(apiErrorMessage(e, 'تعذر تحميل البيانات'));
-        } finally {
-          if (!cancelled) setLoading(false);
-        }
-      })();
-      return () => { cancelled = true; };
-    }, []),
-  );
-
-  if (loading) return <Loading />;
+export default function ProfileScreen({ navigation }: any) {
+  const { user } = useAuth();
 
   return (
     <ScrollView style={styles.container}>
@@ -40,36 +14,22 @@ export default function ProfileScreen() {
         </View>
         <Text style={styles.name}>{user?.fullName || '—'}</Text>
         <Text style={styles.username}>@{user?.username || '—'}</Text>
+        <Text style={styles.offlineHint}>هذه الهوية محفوظة بأمان للعمل دون اتصال</Text>
       </View>
-
-      {error ? (
-        <View style={styles.errorBox}>
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity onPress={() => setLoading(true)} style={styles.retryBtn}>
-            <Text style={styles.retryText}>إعادة المحاولة</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
 
       <View style={styles.section}>
         <InfoRow label="الدور" value={user?.roles?.length ? user.roles.join('، ') : '—'} />
         <InfoRow label="الصلاحيات" value={`${user?.permissions?.length || 0} صلاحية`} />
-        {user?.organizationId && <InfoRow label="معرّف المنشأة" value={user.organizationId.substring(0, 8) + '…'} />}
+        {user?.organizationId && <InfoRow label="معرّف المنشأة" value={`${user.organizationId.substring(0, 8)}…`} />}
       </View>
 
-      <View style={styles.section}>
-        <InfoRow label="إصدار التطبيق" value="1.0.0" />
-        <InfoRow label="المنصة" value="React Native (Expo)" />
-      </View>
-
-      <View style={styles.section}>
-        <InfoRow label="إصدار التطبيق" value="1.0.0" />
-        <InfoRow label="المنصة" value="React Native (Expo)" />
-      </View>
+      <TouchableOpacity style={styles.settingsBtn} onPress={() => navigation.navigate('Settings')}>
+        <Text style={styles.settingsText}>إعدادات الاتصال والمزامنة والتنبيهات</Text>
+      </TouchableOpacity>
 
       <View style={styles.section}>
         <InfoRow label="إصدار التطبيق" value={APP_VERSION} />
-        <InfoRow label="المنصة" value="React Native (Expo)" />
+        <InfoRow label="وضع البيانات" value="قاعدة محلية + مزامنة آمنة" />
       </View>
     </ScrollView>
   );
@@ -85,18 +45,17 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f4f8' },
-  header: { backgroundColor: '#1a73e8', padding: 30, alignItems: 'center' },
-  avatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
-  avatarText: { fontSize: 32, color: '#fff', fontWeight: 'bold' },
+  container: { flex: 1, backgroundColor: '#F2F6F4' },
+  header: { backgroundColor: '#0A4A3C', padding: 30, alignItems: 'center' },
+  avatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  avatarText: { fontSize: 32, color: '#0A4A3C', fontWeight: 'bold' },
   name: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
-  username: { fontSize: 16, color: '#fff', opacity: 0.8, marginTop: 4 },
-  section: { backgroundColor: '#fff', margin: 16, borderRadius: 12, overflow: 'hidden' },
-  infoRow: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f0f4f8' },
-  infoLabel: { fontSize: 16, color: '#666' },
-  infoValue: { fontSize: 16, color: '#333', fontWeight: '500' },
-  errorBox: { backgroundColor: '#fef2f2', margin: 16, padding: 16, borderRadius: 10, alignItems: 'center' },
-  errorText: { color: '#ea4335', fontSize: 14, textAlign: 'center' },
-  retryBtn: { marginTop: 10, padding: 8 },
-  retryText: { color: '#1a73e8', fontSize: 14, fontWeight: '600' },
+  username: { fontSize: 16, color: '#D7EAE4', marginTop: 4 },
+  offlineHint: { fontSize: 12, color: '#B7D8CF', marginTop: 10 },
+  section: { backgroundColor: '#fff', margin: 16, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: '#E0E9E5' },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: '#EEF3F1' },
+  infoLabel: { fontSize: 15, color: '#667A74' },
+  infoValue: { fontSize: 15, color: '#113C33', fontWeight: '600' },
+  settingsBtn: { marginHorizontal: 16, backgroundColor: '#0A604D', borderRadius: 12, padding: 16, alignItems: 'center' },
+  settingsText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 });

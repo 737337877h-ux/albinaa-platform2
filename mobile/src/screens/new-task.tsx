@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createTask, fetchCurrencies } from '../api/endpoints';
-import { enqueueMutation } from '../db/database';
+import { enqueueMutation, getReferenceOptions } from '../db/database';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
 import CustomerPicker from '../components/customer-picker';
@@ -27,7 +27,10 @@ export default function NewTaskScreen({ route, navigation }: any) {
   const { triggerSync } = useSync();
   const { data: currencies } = useQuery({
     queryKey: ['currencies'],
-    queryFn: () => fetchCurrencies().then((r) => r.data),
+    queryFn: async () => {
+      try { return (await fetchCurrencies()).data || []; }
+      catch { return getReferenceOptions('currencies'); }
+    },
   });
 
   const mutation = useMutation({

@@ -1,11 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { useQuery } from '@tanstack/react-query';
 import { getAll } from '../db/database';
-import { fetchSync } from '../api/endpoints';
-import { getMeta } from '../db/database';
-import Loading from '../components/loading';
 
 export default function FollowupsListScreen({ navigation }: any) {
   const [localFollowups, setLocalFollowups] = useState<any[]>([]);
@@ -18,31 +14,25 @@ export default function FollowupsListScreen({ navigation }: any) {
     }, []),
   );
 
-  const { data: syncData, isLoading } = useQuery({
-    queryKey: ['sync-followups'],
-    queryFn: async () => {
-      const token = await getMeta('syncToken');
-      const res = await fetchSync(token || undefined);
-      return res.data;
-    },
-  });
-
-  if (isLoading && !syncData) return <Loading />;
-
-  const remoteFollowups = syncData?.followups || [];
   // Dedupe by id
   const seen = new Set<string>();
   const all: any[] = [];
-  for (const f of [...localFollowups, ...remoteFollowups]) {
+  for (const f of localFollowups) {
     if (seen.has(f.id)) continue;
     seen.add(f.id);
     all.push(f);
   }
   all.sort((a, b) => (b.followupAt || b.updatedAt || '').localeCompare(a.followupAt || a.updatedAt || ''));
 
-  const today = new Date().toISOString().split('T')[0];
-  const todayFollowups = all.filter((f) => f.followupAt?.startsWith(today));
-  const recentFollowups = all.filter((f) => !f.followupAt?.startsWith(today)).slice(0, 50);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const todayFollowups = all.filter((f) => {
+    if (!f.followupAt) return false;
+    const date = new Date(f.followupAt);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` === today;
+  });
+  const todayIds = new Set(todayFollowups.map((f) => f.id));
+  const recentFollowups = all.filter((f) => !todayIds.has(f.id)).slice(0, 50);
 
   return (
     <View style={styles.container}>

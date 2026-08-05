@@ -1,10 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { useQuery } from '@tanstack/react-query';
-import { getAll, getMeta } from '../db/database';
-import { fetchSync as fetchSyncApi } from '../api/endpoints';
-import Loading from '../components/loading';
+import { getAll } from '../db/database';
 
 export default function CollectionsListScreen({ navigation }: any) {
   const [localCollections, setLocalCollections] = useState<any[]>([]);
@@ -17,31 +14,25 @@ export default function CollectionsListScreen({ navigation }: any) {
     }, []),
   );
 
-  const { data: syncData, isLoading } = useQuery({
-    queryKey: ['sync-collections'],
-    queryFn: async () => {
-      const token = await getMeta('syncToken');
-      const res = await fetchSyncApi(token || undefined);
-      return res.data;
-    },
-  });
-
-  if (isLoading && !syncData) return <Loading />;
-
-  const remoteCollections = syncData?.collections || [];
   const seen = new Set<string>();
   const all: any[] = [];
-  for (const c of [...localCollections, ...remoteCollections]) {
+  for (const c of localCollections) {
     if (seen.has(c.id)) continue;
     seen.add(c.id);
     all.push(c);
   }
   all.sort((a, b) => (b.collectedAt || b.updatedAt || '').localeCompare(a.collectedAt || a.updatedAt || ''));
 
-  const today = new Date().toISOString().split('T')[0];
-  const todayCollections = all.filter((c) => c.collectedAt?.startsWith(today));
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const todayCollections = all.filter((c) => {
+    if (!c.collectedAt) return false;
+    const date = new Date(c.collectedAt);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` === today;
+  });
   const todayTotal = todayCollections.reduce((s, c) => s + (Number(c.amount) || 0), 0);
-  const recentCollections = all.filter((c) => !c.collectedAt?.startsWith(today)).slice(0, 50);
+  const todayIds = new Set(todayCollections.map((c) => c.id));
+  const recentCollections = all.filter((c) => !todayIds.has(c.id)).slice(0, 50);
 
   return (
     <View style={styles.container}>

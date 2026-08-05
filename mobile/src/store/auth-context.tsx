@@ -1,8 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { AuthUser, login as apiLogin, logout as apiLogout, getMe } from '../api/auth';
-import { clearTokens } from '../utils/secure-storage';
-import { dedupeTable } from '../db/database';
+import {
+  clearSession, getCachedUser, setCachedUser,
+} from '../utils/secure-storage';
+import { ensureDataOwner } from '../db/database';
 
 interface AuthState {
   user: AuthUser | null;
@@ -27,19 +29,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        // Clean duplicates from previous buggy syncs (one-time per app start)
-        await dedupeTable('customers');
-        await dedupeTable('tasks');
-        await dedupeTable('followups');
-        await dedupeTable('promises');
-        await dedupeTable('collections');
         const token = await SecureStore.getItemAsync('access_token');
-        if (token) {
+        const cached = await getCachedUser();
+        if (token && cached) {
+          await ensureDataOwner(`${cached.organizationId}:${cached.id}`);
+          // Open immediately from the encrypted cached identity. A network
+          // validation follows, but lack of connectivity must not lock the
+          // collector out of an already-provisioned device.
+          setUser(cached);
+          try {
+            const me = await getMe();
+            await ensureDataOwner(`${me.organizationId}:${me.id}`);
+            await setCachedUser(me);
+            setUser(me);
+          } catch (error: any) {
+            // Only an explicit server-side authentication rejection invalidates
+            // the offline session. Network errors keep the cached user active.
+            if ([400, 401, 403].includes(error?.response?.status)) {
+              await clearSession();
+              setUser(null);
+            }
+          }
+        } else if (token) {
           const me = await getMe();
+          await ensureDataOwner(`${me.organizationId}:${me.id}`);
+          await setCachedUser(me);
           setUser(me);
         }
-      } catch {
-        await clearTokens();
+      } catch (error: any) {
+        if ([400, 401, 403].includes(error?.response?.status)) await clearSession();
       } finally {
         setIsLoading(false);
       }
@@ -48,6 +66,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (username: string, password: string) => {
     const data = await apiLogin(username, password);
+    await ensureDataOwner(`${data.user.organizationId}:${data.user.id}`);
+    await setCachedUser(data.user);
     setUser(data.user);
   }, []);
 
@@ -56,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const refreshToken = await SecureStore.getItemAsync('refresh_token');
       if (refreshToken) await apiLogout(refreshToken);
     } catch { /* ignore */ }
-    await clearTokens();
+    await clearSession();
     setUser(null);
   }, []);
 

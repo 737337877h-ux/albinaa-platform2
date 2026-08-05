@@ -9,7 +9,7 @@ import {
   setStoredBaseUrl, clearStoredBaseUrl, pingServer, isValidBaseUrl, ServerHealth,
 } from '../config/api';
 import { resetClient } from '../api/client';
-import { clearTokens } from '../utils/secure-storage';
+import { clearSession } from '../utils/secure-storage';
 import { APP_VERSION } from '../utils/constants';
 
 export default function LoginScreen() {
@@ -55,8 +55,8 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.card}>
-        <Text style={styles.logo}>البناء الراقي</Text>
-        <Text style={styles.subtitle}>نظام إدارة المديونية والتحصيل</Text>
+        <Text style={styles.logo}>البناء الراقي تحصيل</Text>
+        <Text style={styles.subtitle}>أساس تثق فيه</Text>
         <TextInput
           style={styles.input}
           placeholder="اسم المستخدم"
@@ -148,7 +148,7 @@ function ServerSettingsModal({ visible, onClose, currentUrl, storedUrl, defaultU
     try {
       await setStoredBaseUrl(draft);
       await resetClient();
-      await clearTokens();
+      await clearSession();
       onSaved(draft);
       Alert.alert('تم', 'تم تحديث العنوان. سجّل الدخول من جديد.');
     } finally {
@@ -161,7 +161,7 @@ function ServerSettingsModal({ visible, onClose, currentUrl, storedUrl, defaultU
     try {
       await clearStoredBaseUrl();
       await resetClient();
-      await clearTokens();
+      await clearSession();
       onSaved(defaultUrl);
       setDraft(defaultUrl);
       setResult(null);

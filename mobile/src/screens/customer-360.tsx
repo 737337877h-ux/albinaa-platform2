@@ -1,12 +1,11 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, Platform } from 'react-native';
-import { useQuery } from '@tanstack/react-query';
-import { fetchCustomer360 } from '../api/endpoints';
-import { getById } from '../db/database';
+import { getCustomerOffline360 } from '../db/database';
 import { useFocusEffect } from '@react-navigation/native';
 import Loading from '../components/loading';
-import { apiErrorMessage, parseJsonField } from '../utils/errors';
+import { parseJsonField } from '../utils/errors';
 import { contactLinks } from '../utils/contact';
+import { useSync } from '../store/sync-context';
 
 async function openLink(url: string, fallbackMsg: string) {
   try {
@@ -18,28 +17,19 @@ async function openLink(url: string, fallbackMsg: string) {
 
 export default function Customer360Screen({ route, navigation }: any) {
   const id = route?.params?.id;
-
-  const { data: remote, isLoading, error, refetch } = useQuery({
-    queryKey: ['customer360', id],
-    queryFn: () => fetchCustomer360(id).then((r) => r.data),
-    enabled: !!id,
-    retry: 1,
-  });
-
+  const { triggerSync } = useSync();
   const [local, setLocal] = React.useState<any>(null);
+  const [loading, setLoading] = React.useState(true);
+  const loadLocal = React.useCallback(async () => {
+    if (!id) return;
+    setLocal(await getCustomerOffline360(id));
+    setLoading(false);
+  }, [id]);
   useFocusEffect(
     React.useCallback(() => {
       if (!id) return;
-      (async () => {
-        try {
-          setLocal(await getById('customers', id));
-        } catch {
-          setLocal(null);
-        }
-      })();
-      // Refetch from server on focus so latest data is shown
-      refetch();
-    }, [id, refetch]),
+      loadLocal().catch(() => setLoading(false));
+    }, [id, loadLocal]),
   );
 
   if (!id) {
@@ -53,13 +43,13 @@ export default function Customer360Screen({ route, navigation }: any) {
     );
   }
 
-  const customer = remote || local;
-  if (isLoading && !customer) return <Loading />;
+  const customer = local;
+  if (loading && !customer) return <Loading />;
   if (!customer) {
     return (
       <View style={styles.center}>
-        <Text style={styles.error}>{apiErrorMessage(error, 'العميل غير موجود')}</Text>
-        <TouchableOpacity onPress={() => refetch()} style={styles.backBtn}>
+        <Text style={styles.error}>العميل غير موجود في بيانات الهاتف</Text>
+        <TouchableOpacity onPress={async () => { await triggerSync(); await loadLocal(); }} style={styles.backBtn}>
           <Text style={styles.backText}>إعادة المحاولة</Text>
         </TouchableOpacity>
       </View>
@@ -119,8 +109,8 @@ export default function Customer360Screen({ route, navigation }: any) {
         balances.map((b: any, i: number) => {
           if (!b || typeof b !== 'object') return null;
           const currency = b.currency || b.currencyCode || '';
-          const operational = Number(b.operationalBalance ?? b.accountingBalance ?? 0);
-          const accounting = Number(b.accountingBalance ?? 0);
+          const operational = Number(b.operationalBalance ?? b.accountingBalance ?? b.balance ?? 0);
+          const accounting = Number(b.accountingBalance ?? b.balance ?? 0);
           const showAccounting = Math.abs(operational - accounting) > 0.001;
           return (
             <View key={`${currency}-${i}`} style={styles.balanceCard}>

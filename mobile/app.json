@@ -1,11 +1,11 @@
 {
   "expo": {
     "owner": "alqalisi",
-    "name": "ألبينا — محصل",
+    "name": "البناء الراقي تحصيل",
     "slug": "albinaa-collector",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/albinaa-collection-icon.png",
     "userInterfaceStyle": "light",
     "scheme": "albinaa",
     "ios": {
@@ -20,14 +20,14 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/albinaa-collection-icon.png"
       },
       "predictiveBackGestureEnabled": false,
+      "versionCode": 2,
       "package": "com.albinaa.collector",
       "permissions": [
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
@@ -44,8 +44,25 @@
     },
     "plugins": [
       "./plugins/with-cleartext-traffic.js",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/albinaa-collection-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain"
+        }
+      ],
       "expo-secure-store",
       "expo-sqlite",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#0A4A3C",
+          "defaultChannel": "albinaa-reminders"
+        }
+      ],
       [
         "expo-location",
         {

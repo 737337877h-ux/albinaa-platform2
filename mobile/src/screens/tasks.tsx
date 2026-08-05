@@ -1,14 +1,13 @@
 import React from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
-import { useQuery } from '@tanstack/react-query';
-import { fetchSync, fetchTasks } from '../api/endpoints';
 import { getAll } from '../db/database';
 import { useFocusEffect } from '@react-navigation/native';
-import Loading from '../components/loading';
+import { useSync } from '../store/sync-context';
 
 export default function TasksScreen({ navigation }: any) {
   const [localTasks, setLocalTasks] = React.useState<any[]>([]);
   const [refreshing, setRefreshing] = React.useState(false);
+  const { triggerSync } = useSync();
 
   useFocusEffect(
     React.useCallback(() => {
@@ -16,27 +15,7 @@ export default function TasksScreen({ navigation }: any) {
     }, []),
   );
 
-  // Use /tasks endpoint directly for guaranteed up-to-date results
-  const { data: remoteTasks, isLoading, refetch } = useQuery({
-    queryKey: ['tasks-list'],
-    queryFn: () => fetchTasks().then((r) => r.data),
-    refetchOnMount: 'always',
-  });
-
-  // Also get tasks from sync (local) as fallback
-  const { data: syncData } = useQuery({
-    queryKey: ['sync'],
-    queryFn: () => fetchSync(undefined).then((r) => r.data),
-  });
-
-  // Dedupe by id and merge
-  const seen = new Set<string>();
-  const tasks: any[] = [];
-  for (const t of [...(remoteTasks || []), ...(syncData?.tasks || []), ...localTasks]) {
-    if (seen.has(t.id)) continue;
-    seen.add(t.id);
-    tasks.push(t);
-  }
+  const tasks = localTasks;
 
   const renderTask = ({ item }: { item: any }) => (
     <TouchableOpacity
@@ -72,8 +51,7 @@ export default function TasksScreen({ navigation }: any) {
           <Text style={styles.addBtnText}>+ مهمة</Text>
         </TouchableOpacity>
       </View>
-      {isLoading && tasks.length === 0 ? <Loading /> : (
-        <FlatList
+      <FlatList
           data={tasks}
           keyExtractor={(item) => item.id}
           renderItem={renderTask}
@@ -86,12 +64,11 @@ export default function TasksScreen({ navigation }: any) {
           refreshing={refreshing}
           onRefresh={async () => {
             setRefreshing(true);
-            await refetch();
+            await triggerSync();
             setLocalTasks(await getAll('tasks'));
             setRefreshing(false);
           }}
         />
-      )}
     </View>
   );
 }
