@@ -24,6 +24,7 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
   let prisma: PrismaService;
   let adminToken: string;
   let collectorToken: string;
+  let checkerToken: string;
   let collectorUserId: string;
   let collectorId: string;
   let customerId: string;      // 90001
@@ -91,6 +92,15 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
       .post('/auth/login')
       .send({ username: `collector_${uniq}`, password: 'Test1234pass' }).expect(200);
     collectorToken = cl.body.accessToken;
+
+    const checker = await request(app.getHttpServer())
+      .post('/users').set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: `checker_${uniq}`, fullName: 'أمين صندوق م5', password: 'Test1234pass' }).expect(201);
+    const cashierRole = await prisma.role.findFirstOrThrow({ where: { name: 'أمين الصندوق' } });
+    await request(app.getHttpServer()).post(`/users/${checker.body.id}/roles`)
+      .set('Authorization', `Bearer ${adminToken}`).send({ roleIds: [cashierRole.id] }).expect(201);
+    checkerToken = (await request(app.getHttpServer()).post('/auth/login')
+      .send({ username: `checker_${uniq}`, password: 'Test1234pass' }).expect(200)).body.accessToken;
 
     methodId = (await prisma.collectionMethod.findFirstOrThrow({ where: { name: 'نقدي' } })).id;
   });
@@ -234,6 +244,11 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
     // البند يظهر في عمل اليوم بأولوية التصعيد
     expect(today.body.items.some((i: any) => i.reason.includes('تصعيد'))).toBe(true);
     expect(today.body.summary.tasksToday).toBeGreaterThanOrEqual(1);
+    const promiseRiskAudit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'risk_recalculated' }, orderBy: { createdAt: 'desc' },
+    });
+    expect((promiseRiskAudit.newValue as any).source).toBe('promise_broken');
+    expect((promiseRiskAudit.newValue as any).targetedCustomerIds).toContain(customerId);
   });
 
   // ===== 5+6) تسجيل تحصيل + تحديث الرصيد التشغيلي =====
@@ -271,6 +286,26 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
     // أمين الصندوق (صلاحية cash.receive) استلم إشعار تحصيل جديد — للمدير هنا
     const notif = await prisma.notification.findFirst({ where: { kind: 'collection_created' } });
     expect(notif).not.toBeNull();
+    const collectionRiskAudit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'risk_recalculated' }, orderBy: { createdAt: 'desc' },
+    });
+    expect((collectionRiskAudit.newValue as any).source).toBe('collection_created');
+    expect((collectionRiskAudit.newValue as any).targetedCustomerIds).toContain(customerId);
+  });
+
+  it('يقفل الشهر على التحصيل المؤرخ ويقصر التجاوز على صلاحية خاصة وسبب موثق', async () => {
+    const period = await request(app.getHttpServer()).post('/accounting-periods/lock')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ year: 2025, month: 1, reason: 'إقفال اختبار يناير' }).expect(201);
+    const body = { customerId, collectorId, currencyCode: 'YER', amount: 25, methodId, collectedAt: '2025-01-15T10:00:00.000Z' };
+    await request(app.getHttpServer()).post('/collections').set('Authorization', `Bearer ${collectorToken}`).send(body).expect(403);
+    await request(app.getHttpServer()).post('/collections').set('Authorization', `Bearer ${adminToken}`).send(body).expect(400);
+    await request(app.getHttpServer()).post('/collections').set('Authorization', `Bearer ${adminToken}`)
+      .send({ ...body, accountingOverrideReason: 'تصحيح معتمد بعد الإقفال' }).expect(201);
+    const overrideAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: 'accounting_period_overridden' }, orderBy: { createdAt: 'desc' } });
+    expect(overrideAudit.reason).toBe('تصحيح معتمد بعد الإقفال');
+    await request(app.getHttpServer()).post(`/accounting-periods/${period.body.id}/unlock`)
+      .set('Authorization', `Bearer ${adminToken}`).send({ reason: 'إنهاء اختبار القفل' }).expect(201);
   });
 
   it('تنفيذ الوعد يغلق مهمته، والتحصيل يظهر في Timeline', async () => {
@@ -299,11 +334,18 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
       .expect(403);
 
     const before = await operationalOf();
-    const res = await request(app.getHttpServer())
+    const requested = await request(app.getHttpServer())
       .post(`/collections/${collectionId}/reverse`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ reason: 'خطأ في المبلغ' })
       .expect(200);
+    expect(requested.body.status).toBe('pending');
+    await request(app.getHttpServer())
+      .post(`/collections/reconciliation/reversal-requests/${requested.body.requestId}/review`)
+      .set('Authorization', `Bearer ${adminToken}`).send({ approve: true }).expect(403);
+    const res = await request(app.getHttpServer())
+      .post(`/collections/reconciliation/reversal-requests/${requested.body.requestId}/review`)
+      .set('Authorization', `Bearer ${checkerToken}`).send({ approve: true }).expect(200);
     expect(res.body.reversal).toBeDefined();
 
     const after = await operationalOf();

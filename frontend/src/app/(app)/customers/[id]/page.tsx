@@ -3,19 +3,21 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
-import { ArrowDownUp, CheckCircle2, Download, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX } from 'lucide-react';
-import { api, ApiError } from '@/lib/api';
+import { ArrowDownUp, CheckCircle2, Download, Eye, Pencil, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX, Link2, Unlink } from 'lucide-react';
+import { api, apiFileBlob, ApiError, downloadApiFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
 import { contactLinks } from '@/lib/contact';
 import { PageHeader } from '@/components/app-shell';
+import { MessageTemplateDialog } from '@/components/message-template-dialog';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Dialog } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
 import { Badge, Button, Card, Empty, ErrorNote, Field, Input, Money, Pagination, Select, Skeleton, Textarea } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsPanel } from '@/components/ui/tabs';
+import { CustomerFormDialog } from '@/components/customer-form-dialog';
 
 /* ──────────────────────────────────────────── Types ───────────────────────────────────── */
 
@@ -39,6 +41,7 @@ interface Customer360 {
   balances: {
     currency: string;
     accountingBalance: number;
+    operationalBalance: number;
     declaredBalance: number | null;
     openingDebit: number;
     openingCredit: number;
@@ -51,7 +54,8 @@ interface Customer360 {
     since: string;
   } | null;
   assignmentHistoryCount: number;
-  creditPolicy: Record<string, unknown> | null;
+  creditPolicy: CreditPolicy | null;
+  creditLimits: CreditLimit[];
   latestScore: Record<string, unknown> | null;
   pendingDuplicateAlerts: number;
   counts: {
@@ -68,6 +72,8 @@ interface StatementResponse {
   openingBalance: number;
   periodStartBalance: number;
   currentBalance: number;
+  periodEndBalance: number;
+  equationClosed: boolean;
   page: number;
   limit: number;
   total: number;
@@ -167,6 +173,54 @@ interface ReservationItem {
   expiresAt: string | null;
 }
 
+interface CustomerAccountGroupMember {
+  id: string;
+  externalCustomerCode: string;
+  name: string;
+  balances: { currencyCode: string; accountingBalance: number; operationalBalance: number }[];
+}
+
+interface CustomerAccountGroup {
+  role: 'standalone' | 'primary' | 'child';
+  primary: CustomerAccountGroupMember | null;
+  children: CustomerAccountGroupMember[];
+  childBalances: { currency: string; balance: number }[];
+  aggregateBalances: { currency: string; balance: number }[];
+}
+
+interface CustomerSearchResponse {
+  items: { id: string; externalCustomerCode: string; name: string; balances: { currency: string; balance: number }[] }[];
+}
+
+interface CreditPolicy {
+  allowCreditSale: boolean;
+  allowPurchaseWithDebt: boolean;
+  defaultPaymentDays: number | null;
+  creditLimitAmount: number | string | null;
+  creditLimitCurrency: string | null;
+  creditStatus: string;
+  restrictionReason: string | null;
+}
+
+interface CreditLimit {
+  id: string;
+  currencyCode: string;
+  amount: number;
+  effectiveFrom: string;
+  approvedAt: string;
+  approver: { fullName: string };
+  used: number;
+  available: number;
+  usagePercent: number;
+}
+
+interface ReservationUnit {
+  id: string;
+  code: string;
+  nameAr: string;
+  weightKg: number | null;
+}
+
 interface RiskFactor {
   label: string;
   points: number;
@@ -229,6 +283,47 @@ const TIMELINE_COLORS: Record<string, string> = {
   collection_reversal: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-200',
 };
 
+const TIMELINE_LABELS: Record<string, string> = {
+  customer_created: 'إنشاء العميل',
+  balance_snapshot: 'تحديث الرصيد',
+  assignment: 'إسناد',
+  followup: 'متابعة',
+  payment_promise: 'وعد سداد',
+  collection: 'تحصيل',
+  collection_reversal: 'عكس تحصيل',
+};
+
+const TIMELINE_DETAIL_LABELS: Record<string, string> = {
+  currency: 'العملة', balance: 'الرصيد', from: 'من', to: 'إلى', reason: 'السبب',
+  notes: 'الملاحظات', nextFollowupDate: 'المتابعة التالية', collector: 'المحصل',
+  statusReason: 'سبب الحالة', old: 'قبل', new: 'بعد',
+};
+
+function timelineValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') return fmtMoney(value);
+  if (typeof value === 'boolean') return value ? 'نعم' : 'لا';
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, nested]) => `${TIMELINE_DETAIL_LABELS[key] ?? key}: ${timelineValue(nested)}`)
+      .join('، ');
+  }
+  return String(value);
+}
+
+function TimelineDetails({ details }: { details: Record<string, unknown> }) {
+  return (
+    <dl className="mt-2 grid gap-x-4 gap-y-1 rounded-lg bg-concrete-50 p-3 text-xs sm:grid-cols-2 dark:bg-white/5">
+      {Object.entries(details).map(([key, value]) => (
+        <div key={key} className="flex min-w-0 gap-2">
+          <dt className="shrink-0 text-concrete-500">{TIMELINE_DETAIL_LABELS[key] ?? key}:</dt>
+          <dd className="break-words text-iron-800 dark:text-concrete-200" dir="auto">{timelineValue(value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function timelineColor(type: string) {
   if (type.startsWith('audit:')) return 'bg-concrete-100 text-concrete-600 dark:bg-white/10 dark:text-concrete-300';
   return TIMELINE_COLORS[type] ?? 'bg-concrete-100 text-concrete-600 dark:bg-white/10 dark:text-concrete-300';
@@ -271,10 +366,17 @@ export default function Customer360Page() {
   const canRisk = can('risk.read');
   const canTasks = can('tasks.manage');
   const canTransfer = can('customers.transfer');
-  const canReservationsManage = can('reservations.manage');
+  const canWrite = can('customers.write');
+  const canReservationsRead = can('reservations.read');
+  const canReservationsCreate = can('reservations.create');
+  const canReservationsDeliver = can('reservations.deliver');
+  const canReservationsCancel = can('reservations.cancel');
+  const canCreditOverride = can('credit.override');
   const qc = useQueryClient();
 
   const [tab, setTab] = useState(searchParams.get('tab') ?? 'overview');
+  const [messageChannel, setMessageChannel] = useState<'whatsapp' | 'sms' | null>(null);
+  const [editCustomerOpen, setEditCustomerOpen] = useState(false);
 
   const setTabSafe = (v: string) => {
     setTab(v);
@@ -291,14 +393,143 @@ export default function Customer360Page() {
   /* ──────── Statement queries (lazy per tab) ──────── */
   const [stmtCurrency, setStmtCurrency] = useState('YER');
   const [stmtPage, setStmtPage] = useState(1);
+  const [stmtFromDate, setStmtFromDate] = useState('');
+  const [stmtToDate, setStmtToDate] = useState('');
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+  const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [pdfTemplate, setPdfTemplate] = useState<'classic' | 'branded'>('classic');
+  const statementParams = () => {
+    const params = new URLSearchParams({ currency: stmtCurrency });
+    if (stmtFromDate) params.set('fromDate', stmtFromDate);
+    if (stmtToDate) params.set('toDate', stmtToDate);
+    return params;
+  };
   const statement = useQuery<StatementResponse>({
-    queryKey: ['statement', id, stmtCurrency, stmtPage],
-    queryFn: () => api<StatementResponse>(
-      `/customers/${id}/statement?currency=${stmtCurrency}&page=${stmtPage}&limit=50`,
-    ),
+    queryKey: ['statement', id, stmtCurrency, stmtFromDate, stmtToDate, stmtPage],
+    queryFn: () => {
+      const params = statementParams();
+      params.set('page', String(stmtPage)); params.set('limit', '50');
+      return api<StatementResponse>(`/customers/${id}/statement?${params.toString()}`);
+    },
     enabled: canRead && canBalances && tab === 'statement',
     retry: false,
   });
+
+  useEffect(() => () => {
+    if (pdfPreviewUrl?.startsWith('blob:')) URL.revokeObjectURL(pdfPreviewUrl);
+  }, [pdfPreviewUrl]);
+  const accountGroup = useQuery<CustomerAccountGroup>({
+    queryKey: ['customer-account-group', id],
+    queryFn: () => api<CustomerAccountGroup>(`/customers/${id}/account-group`),
+    enabled: canRead,
+  });
+  const [linkAccountOpen, setLinkAccountOpen] = useState(false);
+  const [linkAccountSearch, setLinkAccountSearch] = useState('');
+  const [selectedLinkedAccounts, setSelectedLinkedAccounts] = useState<Record<string, CustomerSearchResponse['items'][number]>>({});
+  const linkedCandidates = useQuery<CustomerSearchResponse>({
+    queryKey: ['customer-link-candidates', linkAccountSearch, customer.data?.customerType],
+    queryFn: () => api<CustomerSearchResponse>(`/customers?search=${encodeURIComponent(linkAccountSearch)}&limit=10${customer.data?.customerType === 'advance' ? '&accountClass=advance' : ''}`),
+    enabled: linkAccountOpen && linkAccountSearch.trim().length >= 2,
+  });
+  const linkAccount = useMutation({
+    mutationFn: (childCustomerIds: string[]) => api(`/customers/${id}/account-group/children/bulk`, {
+      method: 'POST', body: JSON.stringify({ childCustomerIds }),
+    }),
+    onSuccess: () => {
+      toast('تم ربط الحساب الفرعي مع إبقاء بياناته وحركاته مستقلة', 'ok');
+      setLinkAccountOpen(false);
+      setLinkAccountSearch('');
+      setSelectedLinkedAccounts({});
+      qc.invalidateQueries({ queryKey: ['customer-account-group'] });
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
+  });
+  const toggleLinkedAccount = (item: CustomerSearchResponse['items'][number]) => setSelectedLinkedAccounts((current) => {
+    const next = { ...current };
+    if (next[item.id]) delete next[item.id]; else next[item.id] = item;
+    return next;
+  });
+  const unlinkAccount = useMutation({
+    mutationFn: (childCustomerId: string) => api(`/customers/${id}/account-group/children/${childCustomerId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast('تم فك الارتباط وبقي الحساب الفرعي مستقلًا دون تغيير حركاته', 'ok');
+      qc.invalidateQueries({ queryKey: ['customer-account-group'] });
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
+  });
+
+  const [creditOpen, setCreditOpen] = useState(false);
+  const [creditForm, setCreditForm] = useState({
+    allowCreditSale: false,
+    allowPurchaseWithDebt: false,
+    defaultPaymentDays: '',
+    creditLimitAmount: '',
+    creditLimitCurrency: 'YER',
+    effectiveFrom: new Date().toISOString().slice(0, 10),
+    limitReason: '',
+    creditStatus: 'open',
+    restrictionReason: '',
+  });
+  const openCreditPolicy = () => {
+    const policy = customer.data?.creditPolicy;
+    const selectedLimit = customer.data?.creditLimits[0];
+    setCreditForm({
+      allowCreditSale: policy?.allowCreditSale ?? false,
+      allowPurchaseWithDebt: policy?.allowPurchaseWithDebt ?? false,
+      defaultPaymentDays: policy?.defaultPaymentDays == null ? '' : String(policy.defaultPaymentDays),
+      creditLimitAmount: selectedLimit ? String(selectedLimit.amount) : '',
+      creditLimitCurrency: selectedLimit?.currencyCode ?? customer.data?.balances[0]?.currency ?? 'YER',
+      effectiveFrom: selectedLimit?.effectiveFrom?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+      limitReason: '',
+      creditStatus: policy?.creditStatus ?? 'open',
+      restrictionReason: policy?.restrictionReason ?? '',
+    });
+    setCreditOpen(true);
+  };
+  const selectCreditCurrency = (currencyCode: string) => {
+    const limit = customer.data?.creditLimits.find((item) => item.currencyCode === currencyCode);
+    setCreditForm((value) => ({
+      ...value, creditLimitCurrency: currencyCode,
+      creditLimitAmount: limit ? String(limit.amount) : '',
+      effectiveFrom: limit?.effectiveFrom?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+      limitReason: '',
+    }));
+  };
+  const creditMut = useMutation({
+    mutationFn: async () => {
+      await api(`/customers/${id}/credit-policy`, { method: 'PATCH', body: JSON.stringify({
+        allowCreditSale: creditForm.allowCreditSale,
+        allowPurchaseWithDebt: creditForm.allowPurchaseWithDebt,
+        defaultPaymentDays: creditForm.defaultPaymentDays === '' ? null : Number(creditForm.defaultPaymentDays),
+        creditStatus: creditForm.creditStatus,
+        restrictionReason: creditForm.restrictionReason.trim() || null,
+      }) });
+      if (creditForm.creditLimitAmount !== '') {
+        await api(`/customers/${id}/credit-limits/${creditForm.creditLimitCurrency}`, {
+          method: 'PATCH', body: JSON.stringify({
+            amount: Number(creditForm.creditLimitAmount), effectiveFrom: creditForm.effectiveFrom,
+            reason: creditForm.limitReason.trim() || undefined,
+          }),
+        });
+      }
+    },
+    onSuccess: () => {
+      toast('تم تحديث سياسة الائتمان ودرجة المخاطر', 'ok');
+      setCreditOpen(false);
+      qc.invalidateQueries({ queryKey: ['customer360', id] });
+      qc.invalidateQueries({ queryKey: ['customer360-risk', id] });
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
+  });
+
+  useEffect(() => {
+    if (!customer.data?.balances.length) return;
+    if (!customer.data.balances.some((b) => b.currency === stmtCurrency)) {
+      setStmtCurrency(customer.data.balances[0].currency);
+      setStmtPage(1);
+    }
+  }, [customer.data, stmtCurrency]);
 
   /* ──────── Timeline queries ──────── */
   const [tlPage, setTlPage] = useState(1);
@@ -342,11 +573,17 @@ export default function Customer360Page() {
   const reservations = useQuery<ReservationItem[]>({
     queryKey: ['reservations', id],
     queryFn: () => api<ReservationItem[]>(`/reservations?customerId=${id}`),
-    enabled: canRead && tab === 'reservations',
+    enabled: canReservationsRead && tab === 'reservations',
   });
 
   const [createResOpen, setCreateResOpen] = useState(false);
   const [issueRes, setIssueRes] = useState<ReservationItem | null>(null);
+  const reservationUnits = useQuery<ReservationUnit[]>({
+    queryKey: ['reservation-units'],
+    queryFn: () => api<ReservationUnit[]>('/reservations/units'),
+    enabled: canReservationsCreate && createResOpen,
+    staleTime: 5 * 60_000,
+  });
 
   const createResMut = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
@@ -355,6 +592,7 @@ export default function Customer360Page() {
       toast('تم إنشاء الحجز بنجاح', 'ok');
       setCreateResOpen(false);
       qc.invalidateQueries({ queryKey: ['reservations', id] });
+      qc.invalidateQueries({ queryKey: ['reservations-summary'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
   });
@@ -366,6 +604,7 @@ export default function Customer360Page() {
       toast('تم صرف الكمية بنجاح', 'ok');
       setIssueRes(null);
       qc.invalidateQueries({ queryKey: ['reservations', id] });
+      qc.invalidateQueries({ queryKey: ['reservations-summary'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
   });
@@ -375,15 +614,17 @@ export default function Customer360Page() {
     onSuccess: () => {
       toast('تم إلغاء الحجز', 'ok');
       qc.invalidateQueries({ queryKey: ['reservations', id] });
+      qc.invalidateQueries({ queryKey: ['reservations-summary'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
   });
 
   const [resForm, setResForm] = useState({
-    itemName: '', itemType: '', quantity: '', unit: '', unitPrice: '',
+    itemName: '', itemType: '', quantity: '', unitId: '', unitPrice: '',
     currencyCode: 'YER', warehouse: '', documentNumber: '', notes: '', expiresAt: '',
+    overrideReason: '',
   });
-  const resFormValid = resForm.itemName.trim() !== '' && resForm.unit.trim() !== ''
+  const resFormValid = resForm.itemName.trim() !== '' && resForm.unitId !== ''
     && Number(resForm.quantity) > 0 && Number(resForm.unitPrice) > 0;
 
   const [issueQty, setIssueQty] = useState('');
@@ -458,12 +699,13 @@ export default function Customer360Page() {
 
   /* ──────── CSV Export ──────── */
   const exportCsv = () => {
-    if (statement.data?.items?.length) {
+    if (statement.data) {
       const headers = ['التاريخ', 'نوع المستند', 'رقم المستند', 'البيان', 'المرجع', 'مدين', 'دائن', 'الرصيد الجاري'];
-      const rows = statement.data.items.map(r => [
+      const openingDate = stmtFromDate || statement.data.items[0]?.date || '';
+      const rows = [[openingDate, '', '', 'الرصيد الافتتاحي', '', '', '', statement.data.periodStartBalance], ...statement.data.items.map(r => [
         r.date, r.documentType, r.documentNumber, r.description, r.reference,
         r.debit || '', r.credit || '', r.runningBalance,
-      ]);
+      ])];
       const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\r\n');
       const BOM = '\uFEFF';
       const dataUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(BOM + csv);
@@ -493,6 +735,38 @@ export default function Customer360Page() {
     }
   };
 
+  const exportStatementPdf = async () => {
+    setPdfDownloading(true);
+    try {
+      await downloadApiFile(
+        `/customers/${id}/statement.pdf?${statementParams().toString()}&template=${pdfTemplate}`,
+        `statement-${c?.externalCustomerCode ?? id}-${stmtCurrency}-${pdfTemplate}.pdf`,
+      );
+      toast('تم تنزيل كشف الحساب PDF', 'ok');
+    } catch (error) {
+      toast(friendlyApiError(error), 'err');
+    } finally {
+      setPdfDownloading(false);
+    }
+  };
+
+  const previewStatementPdf = async () => {
+    setPdfPreviewLoading(true);
+    try {
+      const blob = await apiFileBlob(`/customers/${id}/statement.pdf?${statementParams().toString()}&template=${pdfTemplate}`);
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
+      setPdfPreviewUrl(`data:application/pdf;base64,${btoa(binary)}`);
+    } catch (error) {
+      toast(friendlyApiError(error), 'err');
+    } finally {
+      setPdfPreviewLoading(false);
+    }
+  };
+
   /* ──────── Permission gate ──────── */
   if (!canRead) {
     return (
@@ -505,6 +779,9 @@ export default function Customer360Page() {
   const c = customer.data;
   const links = c ? contactLinks(c.phonePrimary) : null;
   const whatsappLink = c ? contactLinks(c.whatsapp ?? c.phonePrimary)?.whatsapp : null;
+  const primaryDebt = c?.balances
+    .filter((b) => Number(b.operationalBalance) > 0)
+    .sort((a, b) => Number(b.operationalBalance) - Number(a.operationalBalance))[0];
   const isLoading = customer.isLoading;
   const err = customer.error;
 
@@ -512,14 +789,28 @@ export default function Customer360Page() {
     <div className="space-y-5">
       {/* Header */}
       <PageHeader
-        title={isLoading ? '...' : c?.name ?? 'العميل'}
+        title={isLoading ? '...' : c?.name ?? 'الحساب'}
         action={
           c ? (
-            <Link href="/customers" className="text-sm text-pine-700 hover:underline dark:text-pine-100">
-              ← العودة للقائمة
-            </Link>
+            <div className="flex items-center gap-3">
+              {canWrite && <Button variant="secondary" onClick={() => setEditCustomerOpen(true)}><Pencil className="h-4 w-4" />تعديل البيانات</Button>}
+              <Link href={c.customerType === 'advance' ? '/advances' : '/customers'} className="text-sm text-pine-700 hover:underline dark:text-pine-100">
+                ← العودة إلى {c.customerType === 'advance' ? 'السلف' : 'العملاء'}
+              </Link>
+            </div>
           ) : undefined
         }
+      />
+      <CustomerFormDialog
+        open={editCustomerOpen}
+        onClose={() => setEditCustomerOpen(false)}
+        customer={c}
+        defaultCustomerType={c?.customerType ?? 'customer'}
+        onSaved={() => {
+          qc.invalidateQueries({ queryKey: ['customer360', id] });
+          qc.invalidateQueries({ queryKey: ['customers'] });
+          toast('تم حفظ بيانات الحساب', 'ok');
+        }}
       />
 
       {/* Customer Info Bar */}
@@ -566,18 +857,31 @@ export default function Customer360Page() {
                   <a href={links.tel} className="inline-flex items-center gap-2 rounded-lg bg-pine-700 px-4 py-2 text-sm font-medium text-white hover:bg-pine-800">
                     <Phone className="h-4 w-4" aria-hidden /> اتصال
                   </a>
-                  <a href={links.sms} className="inline-flex items-center gap-2 rounded-lg border border-concrete-200 bg-white px-4 py-2 text-sm font-medium text-iron-900 hover:bg-concrete-100 dark:border-white/10 dark:bg-iron-800 dark:text-concrete-100">
+                  <button type="button" onClick={() => setMessageChannel('sms')} className="inline-flex items-center gap-2 rounded-lg border border-concrete-200 bg-white px-4 py-2 text-sm font-medium text-iron-900 hover:bg-concrete-100 dark:border-white/10 dark:bg-iron-800 dark:text-concrete-100">
                     <MessageSquare className="h-4 w-4" aria-hidden /> رسالة نصية
-                  </a>
+                  </button>
                 </>
               )}
               {whatsappLink && (
-                <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-credit-600 px-4 py-2 text-sm font-medium text-white hover:bg-credit-700">
+                <button type="button" onClick={() => setMessageChannel('whatsapp')} className="inline-flex items-center gap-2 rounded-lg bg-credit-600 px-4 py-2 text-sm font-medium text-white hover:bg-credit-700">
                   <MessageCircle className="h-4 w-4" aria-hidden /> واتساب
-                </a>
+                </button>
               )}
             </div>
           )}
+          <MessageTemplateDialog
+            open={messageChannel !== null}
+            onClose={() => setMessageChannel(null)}
+            initialChannel={messageChannel ?? 'whatsapp'}
+            customerId={c.id}
+            customerName={c.name}
+            customerCode={c.externalCustomerCode}
+            phone={c.phonePrimary}
+            whatsapp={c.whatsapp}
+            balance={primaryDebt ? Number(primaryDebt.operationalBalance) : null}
+            currency={primaryDebt?.currency ?? null}
+            collectorName={c.currentCollector?.name ?? null}
+          />
         </Card>
       )}
 
@@ -590,7 +894,7 @@ export default function Customer360Page() {
           <TabsTrigger value="followups" badge={c?.counts.followups}>المتابعات</TabsTrigger>
           <TabsTrigger value="promises" badge={c?.counts.promises}>الوعود</TabsTrigger>
           <TabsTrigger value="collections" badge={c?.counts.collections}>التحصيلات</TabsTrigger>
-          <TabsTrigger value="reservations" badge={reservations.data?.length}>حجوزات البضاعة</TabsTrigger>
+          {canReservationsRead && <TabsTrigger value="reservations" badge={reservations.data?.length}>حجوزات البضاعة</TabsTrigger>}
         </TabsList>
 
         {/* ──────────────── Overview Tab ──────────────── */}
@@ -607,14 +911,121 @@ export default function Customer360Page() {
                     label="الرصيد الحالي"
                     value={
                       c.balances.length > 0
-                        ? c.balances.map(b => <Money key={b.currency} value={b.accountingBalance} currency={b.currency} signed />)
-                        : <span className="text-concrete-400">—</span>
+                        ? <div className="space-y-1">{c.balances.map(b => <div key={b.currency}><Money value={b.operationalBalance} currency={b.currency} signed /></div>)}</div>
+                        : <span className="text-xs font-normal text-concrete-400">لا توجد أرصدة لهذا السجل</span>
                     }
                   />
                   <StatCard label="نوع العميل" value={c.customerType ?? '—'} />
-                  <StatCard label="تاريخRelationship" value={c.relationshipStartDate ? fmtDate(c.relationshipStartDate) : '—'} />
+                  <StatCard label="تاريخ بدء العلاقة" value={c.relationshipStartDate ? fmtDate(c.relationshipStartDate) : '—'} />
                   <StatCard label="تاريخ الإنشاء" value={fmtDateTime(c.createdAt)} />
                 </div>
+
+                {accountGroup.data && (
+                  <Card className="p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Link2 className="h-4 w-4 text-pine-700" />
+                          <h3 className="text-sm font-semibold">الحسابات الرئيسية والفرعية</h3>
+                          <Badge tone="pine">
+                            {accountGroup.data.role === 'primary' ? 'حساب رئيسي' : accountGroup.data.role === 'child' ? 'حساب فرعي' : 'حساب مستقل'}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-xs text-concrete-500">الربط للعرض والتجميع فقط؛ كل حساب وحركاته يبقيان مستقلين.</p>
+                      </div>
+                      {canWrite && accountGroup.data.role !== 'child' && (
+                        <Button variant="secondary" onClick={() => setLinkAccountOpen(true)}><Link2 className="h-4 w-4" /> ربط حساب فرعي</Button>
+                      )}
+                    </div>
+                    {accountGroup.data.role === 'primary' && accountGroup.data.aggregateBalances.length > 0 && (
+                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-lg bg-pine-50 p-3 dark:bg-pine-900/20">
+                          <p className="mb-2 text-xs font-semibold text-concrete-500">إجمالي أرصدة الحسابات الفرعية</p>
+                          <div className="space-y-1">
+                            {accountGroup.data.childBalances.map((balance) => (
+                              <div key={balance.currency}><Money value={balance.balance} currency={balance.currency} signed /></div>
+                            ))}
+                            {accountGroup.data.childBalances.length === 0 && <span className="text-xs text-concrete-400">لا توجد أرصدة فرعية</span>}
+                          </div>
+                        </div>
+                        <div className="rounded-lg bg-pine-50 p-3 dark:bg-pine-900/20">
+                          <p className="mb-2 text-xs font-semibold text-concrete-500">إجمالي المجموعة مع الحساب الرئيسي</p>
+                          <div className="space-y-1">
+                            {accountGroup.data.aggregateBalances.map((balance) => (
+                              <div key={balance.currency}><Money value={balance.balance} currency={balance.currency} signed /></div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {accountGroup.data.role === 'child' && accountGroup.data.primary && (
+                      <div className="mt-4 rounded-lg border border-concrete-100 p-3 dark:border-white/10">
+                        <p className="text-xs text-concrete-500">الحساب الرئيسي</p>
+                        <Link href={`/customers/${accountGroup.data.primary.id}`} className="mt-1 inline-block font-semibold text-pine-700 hover:underline dark:text-pine-200">
+                          {accountGroup.data.primary.externalCustomerCode} — {accountGroup.data.primary.name}
+                        </Link>
+                      </div>
+                    )}
+                    {accountGroup.data.children.length > 0 && (
+                      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {accountGroup.data.children.map((child) => (
+                          <div key={child.id} className="rounded-lg border border-concrete-100 p-3 dark:border-white/10">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <Link href={`/customers/${child.id}`} className="font-semibold text-pine-700 hover:underline dark:text-pine-200">{child.externalCustomerCode} — {child.name}</Link>
+                                <div className="mt-2 space-y-1 text-xs">{child.balances.map((balance) => <div key={balance.currencyCode}><Money value={balance.operationalBalance} currency={balance.currencyCode} signed /></div>)}</div>
+                              </div>
+                              {canWrite && <button type="button" title="فك الارتباط" onClick={() => unlinkAccount.mutate(child.id)} className="rounded p-1 text-concrete-400 hover:bg-red-50 hover:text-red-600"><Unlink className="h-4 w-4" /></button>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                )}
+
+                <Dialog open={linkAccountOpen} onClose={() => setLinkAccountOpen(false)} title="ربط حساب فرعي">
+                  <div className="space-y-4">
+                    <p className="text-sm text-concrete-600 dark:text-concrete-400">يمكن تحديد عدة حسابات عبر عمليات بحث متتالية. يبقى التحديد محفوظًا عند تغيير كلمة البحث، ولن تُنقل أو تُدمج أي حركة.</p>
+                    {Object.keys(selectedLinkedAccounts).length > 0 && (
+                      <div className="rounded-lg bg-pine-50 p-3 dark:bg-pine-900/20">
+                        <div className="mb-2 flex items-center justify-between text-sm font-semibold">
+                          <span>المحدد: {Object.keys(selectedLinkedAccounts).length}</span>
+                          <button type="button" onClick={() => setSelectedLinkedAccounts({})} className="text-xs text-debt-600">مسح التحديد</button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.values(selectedLinkedAccounts).map((item) => (
+                            <button key={item.id} type="button" onClick={() => toggleLinkedAccount(item)} className="rounded-full bg-white px-2.5 py-1 text-xs shadow-sm dark:bg-iron-800">
+                              {item.externalCustomerCode} — {item.name} ×
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <Field label="البحث عن الحسابات الفرعية">
+                      <Input value={linkAccountSearch} onChange={(event) => setLinkAccountSearch(event.target.value)} placeholder="مثال: 10005 أو اسم العميل" />
+                    </Field>
+                    <div className="max-h-72 space-y-2 overflow-auto">
+                      {(linkedCandidates.data?.items ?? []).filter((item) => item.id !== id && !accountGroup.data?.children.some((child) => child.id === item.id)).map((item) => (
+                        <button key={item.id} type="button" onClick={() => toggleLinkedAccount(item)} className={`flex w-full items-center justify-between rounded-lg border p-3 text-right ${selectedLinkedAccounts[item.id] ? 'border-pine-600 bg-pine-50 dark:bg-pine-900/20' : 'border-concrete-100 hover:bg-pine-50 dark:border-white/10 dark:hover:bg-white/5'}`}>
+                          <span><span className="font-semibold">{item.externalCustomerCode}</span><span className="mr-2">{item.name}</span></span>
+                          <span className="text-xs text-pine-700">{selectedLinkedAccounts[item.id] ? 'محدد ✓' : 'تحديد'}</span>
+                        </button>
+                      ))}
+                      {linkAccountSearch.trim().length >= 2 && !linkedCandidates.isLoading && !(linkedCandidates.data?.items ?? []).filter((item) => item.id !== id).length && <p className="py-4 text-center text-sm text-concrete-500">لا توجد نتائج مطابقة</p>}
+                    </div>
+                    <div className="flex justify-end gap-2 border-t border-concrete-100 pt-3 dark:border-white/10">
+                      <Button variant="secondary" onClick={() => setLinkAccountOpen(false)}>إلغاء</Button>
+                      <Button
+                        loading={linkAccount.isPending}
+                        disabled={!Object.keys(selectedLinkedAccounts).length}
+                        onClick={() => linkAccount.mutate(Object.keys(selectedLinkedAccounts))}
+                      >
+                        ربط الحسابات المحددة ({Object.keys(selectedLinkedAccounts).length})
+                      </Button>
+                    </div>
+                  </div>
+                </Dialog>
 
                 {/* Risk Score (PR 4) */}
                 {canRisk && (
@@ -626,6 +1037,82 @@ export default function Customer360Page() {
                     onRetry={() => risk.refetch()}
                   />
                 )}
+
+                <Card className="p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-iron-900 dark:text-concrete-100">السياسة الائتمانية</h3>
+                      {c.creditPolicy ? (
+                        <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-sm text-concrete-600 dark:text-concrete-400">
+                          <span>الحالة: {c.creditPolicy.creditStatus === 'blocked' ? 'محظور' : c.creditPolicy.creditStatus === 'restricted' ? 'مقيّد' : 'مفتوح'}</span>
+                          <span>البيع الآجل: {c.creditPolicy.allowCreditSale ? 'مسموح' : 'غير مسموح'}</span>
+                          <span>أيام السداد: {c.creditPolicy.defaultPaymentDays ?? '—'}</span>
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm text-concrete-500">لم تُحدد سياسة ائتمانية لهذا العميل.</p>
+                      )}
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {c.creditLimits.map((limit) => {
+                          const pct = Math.max(0, limit.usagePercent);
+                          const tone = pct > 100 ? 'bg-red-600 shadow-[0_0_12px_rgba(220,38,38,.9)] animate-pulse'
+                            : pct >= 90 ? 'bg-debt-600' : pct >= 70 ? 'bg-hazard-500' : 'bg-credit-600';
+                          return <div key={limit.id} className="rounded-lg border border-concrete-100 p-3 dark:border-white/10">
+                            <div className="flex items-center justify-between text-xs"><span className="font-bold">{limit.currencyCode}</span><span className="tnum">{fmtMoney(pct)}%</span></div>
+                            <div className="mt-2 h-2 overflow-hidden rounded-full bg-concrete-100 dark:bg-white/10"><div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.min(100, pct)}%` }} /></div>
+                            <div className="mt-2 flex justify-between text-xs text-concrete-500"><span>المستخدم {fmtMoney(limit.used)}</span><span>السقف {fmtMoney(limit.amount)}</span></div>
+                            <p className="mt-1 text-[11px] text-concrete-400">ساري من {fmtDate(limit.effectiveFrom)} • {limit.approver.fullName}</p>
+                          </div>;
+                        })}
+                        {!c.creditLimits.length && <p className="text-sm text-concrete-500">لا توجد حدود ائتمان معتمدة حسب العملة.</p>}
+                      </div>
+                    </div>
+                    {canWrite && <Button variant="secondary" onClick={openCreditPolicy}>تعديل السياسة</Button>}
+                  </div>
+                </Card>
+
+                <Dialog open={creditOpen} onClose={() => setCreditOpen(false)} title="تعديل السياسة الائتمانية">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={creditForm.allowCreditSale} onChange={(e) => setCreditForm((v) => ({ ...v, allowCreditSale: e.target.checked }))} />
+                      السماح بالبيع الآجل
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={creditForm.allowPurchaseWithDebt} onChange={(e) => setCreditForm((v) => ({ ...v, allowPurchaseWithDebt: e.target.checked }))} />
+                      السماح بالشراء مع وجود مديونية
+                    </label>
+                    <Field label="حد الائتمان">
+                      <Input type="number" min="0" value={creditForm.creditLimitAmount} onChange={(e) => setCreditForm((v) => ({ ...v, creditLimitAmount: e.target.value }))} />
+                    </Field>
+                    <Field label="عملة الحد">
+                      <Select value={creditForm.creditLimitCurrency} onChange={(e) => selectCreditCurrency(e.target.value)}>
+                        <option value="YER">ريال يمني</option><option value="SAR">ريال سعودي</option><option value="USD">دولار</option>
+                      </Select>
+                    </Field>
+                    <Field label="تاريخ سريان الحد">
+                      <Input type="date" value={creditForm.effectiveFrom} onChange={(e) => setCreditForm((v) => ({ ...v, effectiveFrom: e.target.value }))} />
+                    </Field>
+                    <Field label="سبب اعتماد أو تغيير الحد">
+                      <Input value={creditForm.limitReason} onChange={(e) => setCreditForm((v) => ({ ...v, limitReason: e.target.value }))} />
+                    </Field>
+                    <Field label="أيام السداد الافتراضية">
+                      <Input type="number" min="0" max="3650" value={creditForm.defaultPaymentDays} onChange={(e) => setCreditForm((v) => ({ ...v, defaultPaymentDays: e.target.value }))} />
+                    </Field>
+                    <Field label="حالة الائتمان">
+                      <Select value={creditForm.creditStatus} onChange={(e) => setCreditForm((v) => ({ ...v, creditStatus: e.target.value }))}>
+                        <option value="open">مفتوح</option><option value="restricted">مقيّد</option><option value="blocked">محظور</option>
+                      </Select>
+                    </Field>
+                    <div className="sm:col-span-2">
+                      <Field label="سبب التقييد أو ملاحظة القرار">
+                        <Textarea value={creditForm.restrictionReason} onChange={(e) => setCreditForm((v) => ({ ...v, restrictionReason: e.target.value }))} />
+                      </Field>
+                    </div>
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <Button variant="secondary" onClick={() => setCreditOpen(false)}>إلغاء</Button>
+                    <Button loading={creditMut.isPending} onClick={() => creditMut.mutate()}>حفظ وتحديث المخاطر</Button>
+                  </div>
+                </Dialog>
 
                 {/* Open Tasks (PR 5) */}
                 {canTasks && (
@@ -700,7 +1187,10 @@ export default function Customer360Page() {
                       {c.balances.map(b => (
                         <div key={b.currency} className="rounded-lg border border-concrete-100 p-3 dark:border-white/10">
                           <p className="text-xs text-concrete-500">{CCY_AR[b.currency] ?? b.currency}</p>
-                          <span className="text-lg font-bold"><Money value={b.accountingBalance} currency={b.currency} signed /></span>
+                          <span className="text-lg font-bold"><Money value={b.operationalBalance} currency={b.currency} signed /></span>
+                          {Math.abs(b.operationalBalance - b.accountingBalance) > 0.005 && (
+                            <p className="mt-1 text-xs text-concrete-500">المحاسبي المستورد: <Money value={b.accountingBalance} currency={b.currency} signed /></p>
+                          )}
                           <div className="mt-1 text-xs text-concrete-400">
                             سلف: <Money value={b.openingDebit} /> | دائن: <Money value={b.openingCredit} />
                           </div>
@@ -709,6 +1199,7 @@ export default function Customer360Page() {
                               آخر استيراد: {b.lastImport.file} — {fmtDateTime(b.lastImport.at)}
                             </p>
                           )}
+                          <p className="mt-2 text-[10px] leading-5 text-concrete-500">الرصيد التشغيلي يشمل تحصيلات المنصة بعد آخر استيراد. عند ورودها في الاستيراد التالي تُصبح ضمن الرصيد المحاسبي ولا تُحتسب مرتين.</p>
                         </div>
                       ))}
                     </div>
@@ -744,8 +1235,8 @@ export default function Customer360Page() {
           {!canBalances ? (
             <PermissionNotice message="لا تملك صلاحية عرض الأرصدة (balances.read)" />
           ) : (
-            <Card>
-              <div className="flex items-center gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+            <Card className="report-print">
+              <div className="flex flex-wrap items-end gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
                 <label className="flex items-center gap-2 text-sm">
                   <span className="text-concrete-500">العملة</span>
                   <Select
@@ -757,13 +1248,34 @@ export default function Customer360Page() {
                     ))}
                   </Select>
                 </label>
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs text-concrete-500">من تاريخ</span>
+                  <Input type="date" value={stmtFromDate} max={stmtToDate || undefined} onChange={(event) => { setStmtFromDate(event.target.value); setStmtPage(1); }} />
+                </label>
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs text-concrete-500">إلى تاريخ</span>
+                  <Input type="date" value={stmtToDate} min={stmtFromDate || undefined} onChange={(event) => { setStmtToDate(event.target.value); setStmtPage(1); }} />
+                </label>
                 <Button
                   variant="secondary"
                   onClick={exportCsv}
                   className="mr-auto"
-                  disabled={!statement.data?.items?.length && !c?.balances?.length}
+                  disabled={!statement.data && !c?.balances?.length}
                 >
                   <Download className="h-4 w-4" /> تصدير CSV
+                </Button>
+                <label className="flex items-center gap-2 text-sm print:hidden">
+                  <span className="text-concrete-500">قالب PDF</span>
+                  <Select value={pdfTemplate} onChange={(event) => setPdfTemplate(event.target.value as 'classic' | 'branded')}>
+                    <option value="branded">الرسمي الملوّن</option>
+                    <option value="classic">الكلاسيكي</option>
+                  </Select>
+                </label>
+                <Button variant="secondary" onClick={previewStatementPdf} loading={pdfPreviewLoading} className="print:hidden">
+                  <Eye className="h-4 w-4" /> معاينة قبل الطباعة
+                </Button>
+                <Button variant="secondary" onClick={exportStatementPdf} loading={pdfDownloading} className="print:hidden">
+                  <Download className="h-4 w-4" /> تنزيل PDF
                 </Button>
               </div>
 
@@ -773,17 +1285,23 @@ export default function Customer360Page() {
                 error={statement.error}
                 onRetry={() => statement.refetch()}
                 isFetching={statement.isFetching}
-                isEmpty={!statement.data?.items?.length}
+                isEmpty={!statement.data}
                 emptyTitle="لا توجد حركات"
                 emptyHint={`لا توجد حركات بهذه العملة${stmtCurrency ? ` (${CCY_AR[stmtCurrency] ?? stmtCurrency})` : ''}`}
                 skeletonClassName="h-64"
               >
                 {statement.data && (
                   <>
+                    <div className="hidden border-b border-concrete-100 px-4 py-4 text-right print:block">
+                      <p className="text-xl font-extrabold text-pine-800">البناء الراقي</p>
+                      <p className="mt-1 font-semibold">كشف حساب العميل: {c?.name}</p>
+                      <p className="text-xs text-concrete-500">العملة: {stmtCurrency} • تاريخ الطباعة: {new Date().toLocaleDateString('ar-YE')}</p>
+                    </div>
                     {/* Summary */}
                     <div className="flex flex-wrap gap-4 border-b border-concrete-100 px-4 py-2 text-xs dark:border-white/10">
                       <span className="text-concrete-500">الرصيد الافتتاحي: <Money value={statement.data.openingBalance} signed /></span>
                       <span className="text-concrete-500">رصيد بداية الفترة: <Money value={statement.data.periodStartBalance} signed /></span>
+                      <span className="text-concrete-500">رصيد نهاية الفترة: <Money value={statement.data.periodEndBalance} signed /></span>
                       <span className="font-semibold text-iron-900 dark:text-concrete-100">
                         الرصيد الحالي: <Money value={statement.data.currentBalance} currency={stmtCurrency} signed />
                       </span>
@@ -793,6 +1311,13 @@ export default function Customer360Page() {
                     <Table>
                       <THead cols={['التاريخ', 'نوع المستند', 'الرقم', 'البيان', 'المرجع', 'مدين', 'دائن', 'الرصيد']} />
                       <tbody>
+                        <TRow>
+                          <TD>{stmtFromDate ? fmtDate(stmtFromDate) : statement.data.items[0]?.date ? fmtDate(statement.data.items[0].date) : '—'}</TD>
+                          <TD>—</TD><TD>—</TD>
+                          <TD className="font-semibold">الرصيد الافتتاحي</TD>
+                          <TD>—</TD><TD>—</TD><TD>—</TD>
+                          <TD className="font-semibold"><Money value={statement.data.periodStartBalance} signed /></TD>
+                        </TRow>
                         {statement.data.items.map((r, i) => (
                           <TRow key={i}>
                             <TD>{fmtDate(r.date)}</TD>
@@ -807,10 +1332,26 @@ export default function Customer360Page() {
                         ))}
                       </tbody>
                     </Table>
+                    {!statement.data.items.length && <p className="px-4 py-3 text-center text-sm text-concrete-500">لا توجد حركات خلال الفترة المحددة؛ يظهر رصيد بداية الفترة فقط.</p>}
                     <Pagination page={statement.data.page} totalPages={statement.data.totalPages} onPage={setStmtPage} />
+                    <p className="hidden py-5 text-center font-bold text-debt-600 print:block">كشف غير معتمد ما لم يُختم</p>
                   </>
                 )}
               </DataState>
+              <Dialog open={!!pdfPreviewUrl} onClose={() => setPdfPreviewUrl(null)} title="معاينة كشف الحساب قبل الطباعة" className="sm:max-w-6xl">
+                {pdfPreviewUrl && (
+                  <div className="space-y-3">
+                    <object data={pdfPreviewUrl} type="application/pdf" className="h-[72vh] w-full rounded-lg border border-concrete-200 bg-white" aria-label="معاينة كشف الحساب">
+                      <p className="p-6 text-center text-sm text-concrete-600">تعذر عرض PDF داخل المتصفح. استخدم زر «فتح المعاينة» أدناه.</p>
+                    </object>
+                    <div className="flex justify-end gap-2">
+                      <Button variant="secondary" onClick={() => setPdfPreviewUrl(null)}>إغلاق</Button>
+                      <Button variant="secondary" onClick={() => window.open(pdfPreviewUrl, '_blank', 'noopener,noreferrer')}>فتح المعاينة</Button>
+                      <Button onClick={exportStatementPdf} loading={pdfDownloading}><Download className="h-4 w-4" />تنزيل PDF</Button>
+                    </div>
+                  </div>
+                )}
+              </Dialog>
             </Card>
           )}
         </TabsPanel>
@@ -840,16 +1381,12 @@ export default function Customer360Page() {
                         <div className="flex-1 pb-3">
                           <div className="flex items-center gap-2">
                             <Badge className={timelineColor(ev.type)}>
-                              {ev.type.replace(/_/g, ' ')}
+                              {TIMELINE_LABELS[ev.type] ?? (ev.type.startsWith('audit:') ? 'تدقيق' : ev.type.replace(/_/g, ' '))}
                             </Badge>
                             <span className="text-xs text-concrete-400">{fmtDateTime(ev.at)}</span>
                           </div>
                           <p className="mt-1 text-sm text-iron-800 dark:text-concrete-100">{ev.title}</p>
-                          {ev.details && (
-                            <pre className="mt-1 max-h-32 overflow-auto rounded bg-concrete-50 p-2 text-[10px] text-concrete-600 dark:bg-white/5 dark:text-concrete-400">
-                              {JSON.stringify(ev.details, null, 2)}
-                            </pre>
-                          )}
+                          {ev.details && <TimelineDetails details={ev.details} />}
                         </div>
                       </div>
                     ))}
@@ -995,7 +1532,7 @@ export default function Customer360Page() {
         {/* حجوزات تشغيلية فقط ولا تؤثر على الرصيد المالي. */}
         <TabsPanel value="reservations">
           <Card>
-            {canReservationsManage && (
+            {canReservationsCreate && (
               <div className="flex justify-end border-b border-concrete-100 px-4 py-2.5 dark:border-white/10">
                 <Button onClick={() => setCreateResOpen(true)}>حجز جديد</Button>
               </div>
@@ -1032,12 +1569,10 @@ export default function Customer360Page() {
                       </TD>
                       <TD>{fmtDate(r.reservedAt)}</TD>
                       <TD>
-                        {canReservationsManage && r.status !== 'completed' && r.status !== 'cancelled' && (
+                        {(canReservationsDeliver || canReservationsCancel) && r.status !== 'completed' && r.status !== 'cancelled' && (
                           <div className="flex gap-2">
-                            <Button variant="secondary" onClick={() => setIssueRes(r)}>صرف</Button>
-                            <Button variant="danger" onClick={() => cancelResMut.mutate(r.id)} loading={cancelResMut.isPending}>
-                              إلغاء الحجز
-                            </Button>
+                            {canReservationsDeliver && <Button variant="secondary" onClick={() => setIssueRes(r)}>صرف</Button>}
+                            {canReservationsCancel && <Button variant="danger" onClick={() => cancelResMut.mutate(r.id)} loading={cancelResMut.isPending}>إلغاء الحجز</Button>}
                           </div>
                         )}
                       </TD>
@@ -1079,11 +1614,17 @@ export default function Customer360Page() {
               />
             </Field>
             <Field label="الوحدة *">
-              <Input
-                value={resForm.unit}
-                onChange={(e) => setResForm(f => ({ ...f, unit: e.target.value }))}
-                placeholder="طن، حبة..."
-              />
+              <Select
+                value={resForm.unitId}
+                onChange={(e) => setResForm(f => ({ ...f, unitId: e.target.value }))}
+              >
+                <option value="">اختر الوحدة</option>
+                {(reservationUnits.data ?? []).map((unit) => (
+                  <option key={unit.id} value={unit.id}>
+                    {unit.nameAr}{unit.weightKg === null ? ' — بلا وزن' : ` — ${unit.weightKg} كجم`}
+                  </option>
+                ))}
+              </Select>
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1131,6 +1672,9 @@ export default function Customer360Page() {
               onChange={(e) => setResForm(f => ({ ...f, expiresAt: e.target.value }))}
             />
           </Field>
+          {canCreditOverride && <Field label="سبب تجاوز سقف الائتمان" hint="يُستخدم فقط إذا كان الحجز يتجاوز السقف أو الحساب مقيّدًا">
+            <Textarea value={resForm.overrideReason} onChange={(e) => setResForm(f => ({ ...f, overrideReason: e.target.value }))} rows={2} />
+          </Field>}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setCreateResOpen(false)}>إلغاء</Button>
             <Button
@@ -1141,13 +1685,14 @@ export default function Customer360Page() {
                 itemName: resForm.itemName,
                 itemType: resForm.itemType || undefined,
                 quantity: Number(resForm.quantity),
-                unit: resForm.unit,
+                unitId: resForm.unitId,
                 unitPrice: Number(resForm.unitPrice),
                 currencyCode: resForm.currencyCode,
                 warehouse: resForm.warehouse || undefined,
                 documentNumber: resForm.documentNumber || undefined,
                 notes: resForm.notes || undefined,
                 expiresAt: resForm.expiresAt || undefined,
+                overrideReason: resForm.overrideReason.trim() || undefined,
               })}
             >
               إنشاء الحجز

@@ -1,12 +1,12 @@
 'use client';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronLeft, PackageCheck, Sparkles } from 'lucide-react';
 import { api, tokenStore } from '@/lib/api';
 import { useCan, useMe } from '@/lib/auth';
 import { todayISO } from '@/lib/errors';
 import { CCY_AR, fmtDateTime, fmtMoney, PROMISE_STATUS_AR, TASK_TYPE_AR } from '@/lib/format';
-import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { HBarChart, StackedBar } from '@/components/ui/charts';
 import { Badge, Card, CardHeader, Money } from '@/components/ui/primitives';
@@ -20,6 +20,8 @@ const hasToken = () => typeof window !== 'undefined' && !!tokenStore.access;
 
 interface DashboardSummary {
   customers: { total: number; active: number; withBalances: number };
+  advances: { accounts: number; byCurrency: Record<string, { accounts: number; balance: number }> };
+  methodology?: { debtScope: string };
   byCurrency: Record<string, { debtors: number; debtTotal: number; creditors: number; creditTotal: number; zero: number }>;
   lastImport: { id: string; fileName: string; importedAt: string } | null;
   newDebt: { perCurrency?: Record<string, { amount: number; accounts: number; newDebtors: number }> } | null;
@@ -50,6 +52,15 @@ interface TaskItem {
 interface TodayTasks { isCollector: boolean; items: TaskItem[]; summary: { tasksToday: number } }
 interface NotificationItem { id: string; kind: string; readAt: string | null; createdAt: string; payload: Record<string, unknown> }
 interface NotificationsResponse { unread: number; items: NotificationItem[] }
+interface ReservationSummary {
+  activeCount: number;
+  customerCount: number;
+  totalTons: number;
+  totalsByCurrency: { currency: string; amount: number }[];
+  averageTonPriceByCurrency: { currency: string; averageTonPrice: number; totalTons: number }[];
+  unweightedUnits: { unitName: string; qty: number }[];
+  expiringIn7Days: number;
+}
 
 interface KpiResponse {
   customers: { total: number; active: number; debtors: number };
@@ -82,6 +93,7 @@ function notifText(n: NotificationItem): string {
     case 'promise_due': return `تذكير: وعد سداد من ${p.customerName ?? 'عميل'} بمبلغ ${fmtMoney(p.amount ?? 0)} ${p.currency ?? ''}`;
     case 'promise_overdue': return `وعد متأخر من ${p.customerName ?? 'عميل'}`;
     case 'collection_created': return `تحصيل جديد: ${fmtMoney(p.amount ?? 0)} ${p.currency ?? ''} من ${p.customerName ?? ''}`;
+    case 'collection_reversal_requested': return `طلب عكس تحصيل: ${fmtMoney(p.amount ?? 0)} ${p.currency ?? ''}`;
     case 'customer_transferred': return `نُقل إليك العميل ${p.customerName ?? ''}`;
     default: return n.kind;
   }
@@ -90,6 +102,7 @@ function notifText(n: NotificationItem): string {
 export default function DashboardPage() {
   const can = useCan();
   const { data: me } = useMe();
+  const qc = useQueryClient();
   const today = todayISO();
 
   const canAdminKpis = can('reports.read');
@@ -97,6 +110,30 @@ export default function DashboardPage() {
   const canPromisesList = can('customers.read');
   const canCollectionsList = can('customers.read');
   const canTasks = can('tasks.manage');
+  const canReservations = can('reservations.read');
+  const isManagerView = canAdminKpis;
+
+  const settings = useQuery<{ key: string; value: unknown }[]>({
+    queryKey: ['settings'], queryFn: () => api('/settings'), enabled: canTasks && hasToken(), staleTime: 60_000,
+  });
+  const smartTasksEnabledRaw = settings.data?.find((s) => s.key === 'smartTasks.enabled')?.value;
+  const smartTasksEnabled = smartTasksEnabledRaw !== false && String(smartTasksEnabledRaw ?? 'true').toLowerCase() !== 'false';
+  const autoGenerate = useMutation({
+    mutationFn: () => api<{ createdTasks: number; enabled?: boolean }>('/tasks/generate-today', { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks-today'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-kpis'] });
+    },
+  });
+  useEffect(() => {
+    if (!canTasks || !smartTasksEnabled || !settings.isSuccess || autoGenerate.isPending) return;
+    const key = `albinaa-smart-tasks-${today}`;
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+    autoGenerate.mutate();
+    // Runs once per signed-in browser session/day; backend also prevents duplicates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canTasks, smartTasksEnabled, settings.isSuccess, today]);
 
   // ---- المؤشرات الرئيسية: لوحة إدارية أو لوحة محصل، بحسب الصلاحية ----
   const summary = useQuery({
@@ -151,10 +188,28 @@ export default function DashboardPage() {
     queryFn: () => api<NotificationsResponse>('/notifications?limit=5'),
     enabled: hasToken(),
   });
+  const reservationSummary = useQuery({
+    queryKey: ['reservations-summary'],
+    queryFn: () => api<ReservationSummary>('/reservations/summary'),
+    enabled: canReservations && hasToken(),
+    staleTime: 60_000,
+  });
 
   return (
     <div className="space-y-5">
-      <PageHeader title={`مرحبًا${me ? `، ${me.fullName.split(' ')[0]}` : ''}`} />
+      <div className="overflow-hidden rounded-2xl bg-gradient-to-l from-[#06241B] via-[#0B3C2D] to-pine-700 p-5 text-white shadow-card sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-xs text-white/70"><Sparkles className="h-4 w-4 text-[#C59B27]" /> لوحة التحصيل الذكية</div>
+            <h1 className="font-display text-xl font-bold sm:text-2xl">مرحبًا{me ? `، ${me.fullName.split(' ')[0]}` : ''}</h1>
+            <p className="mt-1 text-sm text-white/70">{isManagerView ? 'نظرة المدير: قرارات ومؤشرات المديونية والتحصيل' : 'نظرة المحصّل: أولوياتك وخطة التواصل لليوم'}</p>
+          </div>
+          {canTasks && <div className="rounded-xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm">
+            <div className="flex items-center gap-2 text-sm"><Bot className="h-4 w-4 text-[#C59B27]" /> المهام الذكية</div>
+            <p className="mt-1 text-xs text-white/70">{smartTasksEnabled ? (autoGenerate.isPending ? 'جارٍ تحديث الأولويات…' : 'مفعّلة وتُحدّث يوميًا') : 'متوقفة من الإعدادات'}</p>
+          </div>}
+        </div>
+      </div>
 
       {/* المؤشرات الرئيسية */}
       <section aria-label="المؤشرات الرئيسية">
@@ -178,6 +233,19 @@ export default function DashboardPage() {
                     <p className="text-xs text-concrete-500">إجمالي العملاء</p>
                     <p className="tnum mt-1 font-display text-2xl font-bold">{summary.data.customers.total}</p>
                     <p className="mt-1 text-xs text-concrete-500">النشطون: {summary.data.customers.active}</p>
+                  </Card>
+                </Link>
+                <Link href="/advances">
+                  <Card className="p-4 transition-colors hover:bg-pine-50/40 dark:hover:bg-white/5">
+                    <p className="text-xs text-concrete-500">إجمالي السلف</p>
+                    {Object.keys(summary.data.advances.byCurrency).length > 0 ? (
+                      <div className="mt-2 space-y-1">
+                        {Object.entries(summary.data.advances.byCurrency).map(([ccy, value]) => (
+                          <p key={ccy} className="tnum font-bold" dir="ltr">{fmtMoney(value.balance)} {ccy}</p>
+                        ))}
+                      </div>
+                    ) : <p className="mt-2 text-sm text-concrete-500">لا توجد سلف مستوردة</p>}
+                    <p className="mt-1 text-xs text-concrete-500">{summary.data.advances.accounts} حساب</p>
                   </Card>
                 </Link>
                 {Object.entries(summary.data.byCurrency).map(([ccy, v]) => (
@@ -204,6 +272,11 @@ export default function DashboardPage() {
                     {Object.entries(summary.data.newDebt.perCurrency).map(([ccy, v]) => (
                       <p key={ccy} className="tnum mt-1 text-sm font-bold" dir="ltr">{fmtMoney(v.amount)} {ccy}</p>
                     ))}
+                  </Card>
+                )}
+                {summary.data.methodology?.debtScope && (
+                  <Card className="p-4 sm:col-span-2 xl:col-span-4">
+                    <p className="text-xs text-concrete-500"><strong>نطاق المديونية:</strong> {summary.data.methodology.debtScope}.</p>
                   </Card>
                 )}
               </div>
@@ -249,6 +322,94 @@ export default function DashboardPage() {
           </DataState>
         )}
       </section>
+
+      {canReservations && (
+        <DataState
+          isLoading={reservationSummary.isLoading}
+          isError={reservationSummary.isError}
+          error={reservationSummary.error}
+          onRetry={() => reservationSummary.refetch()}
+          isFetching={reservationSummary.isFetching}
+          isEmpty={false}
+          emptyTitle=""
+          skeletonClassName="h-40"
+        >
+          {reservationSummary.data && (
+            <Link href="/reservations" className="block">
+              <Card className="relative overflow-hidden border-t-2 border-t-sky-400 p-5 transition hover:-translate-y-0.5 hover:shadow-card">
+                <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-sky-400/10 to-transparent" />
+                <div className="relative flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <PackageCheck className="h-5 w-5 text-sky-500" />
+                      <h2 className="font-display text-base font-bold">حجوزات البضاعة</h2>
+                      <Badge tone="pine">{reservationSummary.data.activeCount} حجز نشط</Badge>
+                    </div>
+                    <div className="mt-4 flex items-end gap-2">
+                      <span className="tnum font-display text-3xl font-extrabold">{fmtMoney(reservationSummary.data.totalTons)}</span>
+                      <span className="pb-1 text-xs text-concrete-500">إجمالي الأطنان</span>
+                    </div>
+                    {reservationSummary.data.unweightedUnits.length > 0 && (
+                      <p className="mt-2 text-xs text-concrete-500">
+                        {reservationSummary.data.unweightedUnits.map((u) => `+ ${fmtMoney(u.qty)} ${u.unitName}`).join(' • ')}
+                      </p>
+                    )}
+                  </div>
+                  <div className="min-w-[190px] space-y-2">
+                    {reservationSummary.data.totalsByCurrency.map((total) => (
+                      <div key={total.currency} className="flex items-center justify-between gap-4 rounded-lg bg-concrete-50 px-3 py-2 dark:bg-white/5">
+                        <div>
+                          <span className="tnum font-bold">{fmtMoney(total.amount)}</span>
+                          {reservationSummary.data.averageTonPriceByCurrency.find((item) => item.currency === total.currency) && (
+                            <p className="mt-0.5 text-[11px] text-concrete-500">
+                              متوسط سعر الطن: {fmtMoney(reservationSummary.data.averageTonPriceByCurrency.find((item) => item.currency === total.currency)!.averageTonPrice)}
+                            </p>
+                          )}
+                        </div>
+                        <Badge tone="neutral">{total.currency}</Badge>
+                      </div>
+                    ))}
+                    {reservationSummary.data.expiringIn7Days > 0 && (
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-hazard-700 dark:text-hazard-400">
+                        <AlertTriangle className="h-4 w-4" />
+                        {reservationSummary.data.expiringIn7Days} تنتهي خلال 7 أيام
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            </Link>
+          )}
+        </DataState>
+      )}
+
+      {canTasks && (
+        <Card className="overflow-hidden border border-[#C59B27]/30">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-[#F9F3E5] px-4 py-3 dark:bg-[#C59B27]/10">
+            <div>
+              <h2 className="font-display text-sm font-bold text-[#0B3C2D] dark:text-pine-100">قرار اليوم — من يجب التواصل معه؟</h2>
+              <p className="mt-0.5 text-xs text-concrete-500">الترتيب يجمع الوعود المتأخرة، المخاطر، كِبر المبلغ، وعمر المديونية بعد أسبوع.</p>
+            </div>
+            <Link href="/tasks" className="inline-flex items-center gap-1 text-xs font-medium text-pine-700 dark:text-pine-100">فتح قائمة العمل <ChevronLeft className="h-4 w-4" /></Link>
+          </div>
+          <div className="grid gap-2 p-3 md:grid-cols-2 xl:grid-cols-3">
+            {(isManagerView ? (kpis.data?.topPriorityTasks ?? []).slice(0, 6).map((t) => ({
+              id: t.taskId, customerId: t.customerId, name: t.customerName, reason: t.priorityReason,
+              amount: t.expectedAmount, currency: t.expectedCurrency, priority: t.priority,
+            })) : (tasksToday.data?.items ?? []).slice(0, 6).map((t, index) => ({
+              id: `${t.customerId}-${index}`, customerId: t.customerId, name: t.customerName, reason: t.reason,
+              amount: t.expectedAmount ?? null, currency: t.currency ?? null, priority: t.priority,
+            }))).map((item, index) => (
+              <Link key={item.id} href={`/customers/${item.customerId}`} className="group rounded-xl border border-concrete-100 bg-white p-3 transition hover:-translate-y-0.5 hover:border-pine-500 hover:shadow-card dark:border-white/10 dark:bg-iron-800">
+                <div className="flex items-start justify-between gap-2"><span className="font-medium text-iron-900 dark:text-concrete-100">{index + 1}. {item.name}</span><Badge tone={item.priority <= 3 ? 'debt' : item.priority <= 6 ? 'hazard' : 'pine'}>أولوية {item.priority}</Badge></div>
+                <p className="mt-2 line-clamp-2 text-xs text-concrete-500">{item.reason}</p>
+                {item.amount != null && item.currency && <p className="mt-2 text-sm font-bold text-debt-600"><Money value={item.amount} currency={item.currency} /></p>}
+              </Link>
+            ))}
+            {((isManagerView ? kpis.data?.topPriorityTasks : tasksToday.data?.items)?.length ?? 0) === 0 && <p className="p-3 text-sm text-concrete-500">لا توجد مهام ذات أولوية الآن.</p>}
+          </div>
+        </Card>
+      )}
 
       {/* KPI Dashboard (PR 7) — بيانات حقيقية: مخاطر، مهام، أعمار */}
       {canAdminKpis && (
@@ -401,8 +562,10 @@ export default function DashboardPage() {
                             </Link>
                             {t.customerCode && <p className="text-xs text-concrete-500" dir="ltr">{t.customerCode}</p>}
                           </TD>
-                          <TD className="max-w-[220px] text-xs text-concrete-600 dark:text-concrete-400">
-                            {t.priorityReason}
+                          <TD className="max-w-[240px] text-xs leading-5 text-concrete-600 dark:text-concrete-400">
+                            <span className="line-clamp-3" title={t.priorityReason}>
+                              {t.priorityReason}
+                            </span>
                           </TD>
                           <TD>
                             {t.expectedAmount != null && t.expectedCurrency ? (

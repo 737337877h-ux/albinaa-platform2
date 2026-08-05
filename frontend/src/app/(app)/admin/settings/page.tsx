@@ -1,27 +1,29 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Save, RotateCcw } from 'lucide-react';
+import { BellRing, ImageIcon, Plus, Save, RotateCcw, Trash2, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/app-shell';
+import { BrandLogo } from '@/components/brand';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { toast } from '@/components/ui/toast';
-import { Button, Card, Input } from '@/components/ui/primitives';
+import { Button, Card, Input, Select, Textarea } from '@/components/ui/primitives';
+import { DEFAULT_MESSAGE_TEMPLATES, MessageTemplate, parseMessageTemplates } from '@/lib/messaging';
 
 /* ────────────────────────────── Types ────────────────────────────────── */
 
 interface SettingItem {
   key: string;
-  value: string;
+  value: unknown;
 }
 
 interface SettingDef {
   key: string;
   label: string;
   description: string;
-  type: 'number' | 'boolean' | 'string';
+  type: 'number' | 'boolean' | 'string' | 'textarea';
   defaultValue: string;
 }
 
@@ -33,6 +35,86 @@ interface SettingsGroup {
 /* ────────────────────────── Setting Definitions ───────────────────────── */
 
 const GROUPS: SettingsGroup[] = [
+  {
+    title: 'هوية النظام وترويسة كشوف الحسابات',
+    items: [
+      {
+        key: 'branding.name',
+        label: 'اسم المنشأة الظاهر',
+        description: 'يظهر في القائمة الرئيسية وعنوان المتصفح وترويسة كشف الحساب.',
+        type: 'string',
+        defaultValue: 'البناء الراقي',
+      },
+      {
+        key: 'branding.subtitle',
+        label: 'العنوان التعريفي',
+        description: 'وصف مختصر يظهر أسفل اسم المنشأة وفي الترويسة.',
+        type: 'string',
+        defaultValue: 'المديونية والتحصيل',
+      },
+      {
+        key: 'branding.address',
+        label: 'العنوان',
+        description: 'عنوان المنشأة المطبوع في كشوف الحسابات.',
+        type: 'string',
+        defaultValue: 'صنعاء - الجمهورية اليمنية',
+      },
+      {
+        key: 'branding.phone',
+        label: 'الهاتف',
+        description: 'رقم التواصل المطبوع في ترويسة كشف الحساب.',
+        type: 'string',
+        defaultValue: '',
+      },
+      {
+        key: 'branding.statementTitle',
+        label: 'عنوان كشف الحساب',
+        description: 'العنوان الرئيسي المستخدم في القالب الرسمي والكلاسيكي.',
+        type: 'string',
+        defaultValue: 'كشف حساب',
+      },
+      {
+        key: 'branding.statementFooter',
+        label: 'نص تذييل كشف الحساب',
+        description: 'الملاحظة القانونية أو الإدارية المطبوعة أسفل الكشف.',
+        type: 'textarea',
+        defaultValue: 'يعتبر هذا الكشف صحيحًا ما لم يصلنا اعتراض خطي خلال خمسة عشر يومًا من تاريخه، مع الشكر.',
+      },
+    ],
+  },
+  {
+    title: 'المهام الذكية والأولويات',
+    items: [
+      {
+        key: 'smartTasks.enabled',
+        label: 'تشغيل التوليد التلقائي',
+        description: 'إنشاء قائمة عمل ذكية مرة يوميًا عند فتح لوحة المعلومات، مع منع التكرار.',
+        type: 'boolean',
+        defaultValue: 'true',
+      },
+      {
+        key: 'smartTasks.minDebtAgeDays',
+        label: 'الحد الأدنى لعمر المديونية',
+        description: 'إعطاء أولوية للمديونيات الكبيرة التي مر عليها هذا العدد من الأيام.',
+        type: 'number',
+        defaultValue: '7',
+      },
+      {
+        key: 'smartTasks.highBalanceTopPercent',
+        label: 'نسبة أعلى الأرصدة',
+        description: 'اعتبار أعلى نسبة من أرصدة كل عملة مديونيات كبيرة ذات أولوية.',
+        type: 'number',
+        defaultValue: '10',
+      },
+      {
+        key: 'smartTasks.followupStaleDays',
+        label: 'أيام انقطاع المتابعة',
+        description: 'عدد الأيام قبل اعتبار العميل بحاجة إلى متابعة جديدة.',
+        type: 'number',
+        defaultValue: '7',
+      },
+    ],
+  },
   {
     title: 'مدة الجلسة',
     items: [
@@ -95,8 +177,8 @@ const GROUPS: SettingsGroup[] = [
     items: [
       {
         key: 'notifications.reminderEnabled',
-        label: 'التذكير التلقائي',
-        description: 'إرسال تذكيرات تلقائية للوعود المستحقة',
+        label: 'التذكير الداخلي التلقائي',
+        description: 'إنشاء إشعار للمحصل عن الوعود المستحقة والمتأخرة، مرة واحدة لكل وعد في اليوم',
         type: 'boolean',
         defaultValue: 'true',
       },
@@ -106,6 +188,39 @@ const GROUPS: SettingsGroup[] = [
         description: 'الساعة التي تُرسل فيها التذكيرات اليومية (0-23)',
         type: 'number',
         defaultValue: '8',
+      },
+    ],
+  },
+  {
+    title: 'التهيئة للتكاملات المستقبلية (متوقفة افتراضيًا)',
+    items: [
+      {
+        key: 'messaging.autoReminders.enabled',
+        label: 'الرسائل التلقائية الخارجية',
+        description: 'مفتاح أمان مستقبلي لإرسال تذكيرات WhatsApp/SMS عبر مزود معتمد. لا يرسل شيئًا قبل تركيب المزود واعتماد القوالب والموافقة.',
+        type: 'boolean',
+        defaultValue: 'false',
+      },
+      {
+        key: 'messaging.provider',
+        label: 'مزود الرسائل',
+        description: 'اسم المزود المعتمد مستقبلًا؛ اتركه none حتى اكتمال الربط والاختبار.',
+        type: 'string',
+        defaultValue: 'none',
+      },
+      {
+        key: 'ai.analysis.enabled',
+        label: 'تحليل الذكاء الاصطناعي',
+        description: 'بوابة تشغيل مستقبلية للتحليل بعد تحديد المزود وسياسة الخصوصية والمراجعة البشرية.',
+        type: 'boolean',
+        defaultValue: 'false',
+      },
+      {
+        key: 'inventory.integration.enabled',
+        label: 'تكامل المخزون',
+        description: 'بوابة تشغيل مستقبلية لاستيراد الأصناف والحركات قبل بناء قرارات البيع والشراء الذكية.',
+        type: 'boolean',
+        defaultValue: 'false',
       },
     ],
   },
@@ -139,7 +254,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (query.data) {
       const map: Record<string, string> = {};
-      for (const s of query.data) map[s.key] = s.value;
+      for (const s of query.data) map[s.key] = typeof s.value === 'string' ? s.value : String(s.value);
       setValues((prev) => {
         const merged = { ...map };
         for (const k of Object.keys(prev)) {
@@ -189,6 +304,7 @@ export default function SettingsPage() {
         return next;
       });
       qc.invalidateQueries({ queryKey: ['settings'] });
+      if (key.startsWith('branding.')) qc.invalidateQueries({ queryKey: ['organization'] });
     },
     onError: (err: Error, { key }) => {
       toast(err.message, 'err');
@@ -274,12 +390,19 @@ export default function SettingsPage() {
                               dir="ltr"
                               disabled={saving}
                             />
+                          ) : def.type === 'textarea' ? (
+                            <Textarea
+                              value={currentVal}
+                              onChange={(e) => updateValue(def.key, e.target.value)}
+                              className="min-h-20 w-full sm:w-96"
+                              disabled={saving}
+                            />
                           ) : (
                             <Input
                               type="text"
                               value={currentVal}
                               onChange={(e) => updateValue(def.key, e.target.value)}
-                              className="w-40"
+                              className={def.key.startsWith('branding.') ? 'w-full sm:w-72' : 'w-40'}
                               disabled={saving}
                             />
                           )}
@@ -326,9 +449,160 @@ export default function SettingsPage() {
               </Card>
             );
           })}
+          <ReminderRunCard />
+          <BrandingLogoSettings initial={query.data?.find((s) => s.key === 'branding.logoDataUrl')?.value} />
+          <MessageTemplatesSettings initial={query.data?.find((s) => s.key === 'communication.templates')?.value} />
         </div>
       </DataState>
     </div>
+  );
+}
+
+function ReminderRunCard() {
+  const run = useMutation({
+    mutationFn: () => api<{ enabled: boolean; candidates: number; created: number; skipped: number }>(
+      '/payment-promises/reminders/run', { method: 'POST' },
+    ),
+    onSuccess: (result) => {
+      if (!result.enabled) toast('التذكيرات الداخلية معطلة من الإعدادات', 'err');
+      else toast(`تم الفحص: ${result.created} تذكير جديد، ${result.skipped} مكرر تم تجاهله`, 'ok');
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
+  });
+
+  return (
+    <Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p className="text-sm font-semibold text-concrete-700 dark:text-concrete-200">اختبار التذكيرات الداخلية الآن</p>
+        <p className="mt-1 text-xs text-concrete-500">
+          يفحص الوعود المستحقة والمتأخرة وينشئ إشعارات للمحصلين فقط، مع منع التكرار. لا يرسل WhatsApp أو SMS.
+        </p>
+      </div>
+      <Button variant="secondary" loading={run.isPending} onClick={() => run.mutate()}>
+        <BellRing className="h-4 w-4" aria-hidden />
+        تشغيل الفحص
+      </Button>
+    </Card>
+  );
+}
+
+function BrandingLogoSettings({ initial }: { initial: unknown }) {
+  const qc = useQueryClient();
+  const [logo, setLogo] = useState(typeof initial === 'string' ? initial : '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setLogo(typeof initial === 'string' ? initial : ''), [initial]);
+
+  const chooseLogo = (file?: File) => {
+    if (!file) return;
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      toast('اختر صورة PNG أو JPEG', 'err');
+      return;
+    }
+    if (file.size > 512 * 1024) {
+      toast('حجم الشعار يجب ألا يتجاوز 512 كيلوبايت', 'err');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setLogo(typeof reader.result === 'string' ? reader.result : '');
+    reader.readAsDataURL(file);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api('/settings/branding.logoDataUrl', {
+        method: 'PUT',
+        body: JSON.stringify({ key: 'branding.logoDataUrl', value: logo }),
+      });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['settings'] }),
+        qc.invalidateQueries({ queryKey: ['organization'] }),
+      ]);
+      toast(logo ? 'تم حفظ الشعار' : 'تمت إزالة الشعار المخصص', 'ok');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'تعذر حفظ الشعار', 'err');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <div className="border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+        <h3 className="font-display text-sm font-semibold">الشعار</h3>
+        <p className="mt-1 text-xs text-concrete-500">يظهر في الصفحة الرئيسية وترويسة كشوف الحسابات. PNG أو JPEG حتى 512 كيلوبايت.</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-4 p-4">
+        <div className="flex h-24 w-32 items-center justify-center overflow-hidden rounded-xl border border-concrete-100 bg-white p-2 dark:border-white/10">
+          {logo ? <BrandLogo src={logo} name="المعاينة" className="max-h-full max-w-full object-contain" /> : <ImageIcon className="h-9 w-9 text-concrete-300" />}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border border-concrete-200 px-3 py-2 text-sm font-medium hover:bg-concrete-50 dark:border-white/10 dark:hover:bg-white/5">
+            <Upload className="h-4 w-4" /> اختيار شعار
+            <input className="sr-only" type="file" accept="image/png,image/jpeg" onChange={(event) => chooseLogo(event.target.files?.[0])} />
+          </label>
+          {logo && <Button variant="secondary" onClick={() => setLogo('')}><Trash2 className="h-4 w-4" /> إزالة</Button>}
+          <Button onClick={save} loading={saving}><Save className="h-4 w-4" /> حفظ الشعار</Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function MessageTemplatesSettings({ initial }: { initial: unknown }) {
+  const qc = useQueryClient();
+  const [templates, setTemplates] = useState<MessageTemplate[]>(DEFAULT_MESSAGE_TEMPLATES);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setTemplates(parseMessageTemplates(initial)), [initial]);
+
+  const update = (id: string, patch: Partial<MessageTemplate>) =>
+    setTemplates((items) => items.map((item) => item.id === id ? { ...item, ...patch } : item));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api('/settings/communication.templates', {
+        method: 'PUT', body: JSON.stringify({ key: 'communication.templates', value: templates }),
+      });
+      await qc.invalidateQueries({ queryKey: ['settings'] });
+      toast('تم حفظ قوالب التواصل', 'ok');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'تعذر حفظ القوالب', 'err');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+        <div>
+          <h3 className="font-display text-sm font-semibold">قوالب واتساب والرسائل النصية</h3>
+          <p className="mt-1 text-xs text-concrete-500">المتغيرات: {'{اسم_العميل}'}، {'{الرصيد}'}، {'{العملة}'}، {'{أقدم_دين_بالأيام}'}، {'{اسم_المحصل}'}، {'{رقم_الحجز}'}، {'{تاريخ_الاستحقاق}'}</p>
+        </div>
+        <Button type="button" variant="secondary" onClick={() => setTemplates((items) => [...items, {
+          id: `template-${Date.now()}`, name: 'قالب جديد', channel: 'both', body: 'مرحبًا {اسم_العميل}،', active: true,
+        }])}><Plus className="h-4 w-4" /> إضافة قالب</Button>
+      </div>
+      <div className="space-y-4 p-4">
+        {templates.map((template) => (
+          <div key={template.id} className="rounded-xl border border-concrete-100 p-3 dark:border-white/10">
+            <div className="grid gap-3 md:grid-cols-[1fr_160px_auto_auto]">
+              <Input value={template.name} onChange={(e) => update(template.id, { name: e.target.value })} aria-label="اسم القالب" />
+              <Select value={template.channel} onChange={(e) => update(template.id, { channel: e.target.value as MessageTemplate['channel'] })}>
+                <option value="both">واتساب وSMS</option><option value="whatsapp">واتساب</option><option value="sms">SMS</option>
+              </Select>
+              <ToggleSwitch checked={template.active} onChange={(active) => update(template.id, { active })} />
+              <button type="button" className="rounded-lg p-2 text-debt-600 hover:bg-debt-50" aria-label="حذف القالب" onClick={() => setTemplates((items) => items.filter((item) => item.id !== template.id))}>
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+            <Textarea className="mt-3" rows={3} value={template.body} onChange={(e) => update(template.id, { body: e.target.value })} aria-label="نص القالب" />
+          </div>
+        ))}
+        <div className="flex justify-end"><Button onClick={save} loading={saving}><Save className="h-4 w-4" /> حفظ القوالب</Button></div>
+      </div>
+    </Card>
   );
 }
 

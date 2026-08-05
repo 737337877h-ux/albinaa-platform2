@@ -2,8 +2,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
-import { Search, SlidersHorizontal, X } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtMoney, CCY_AR } from '@/lib/format';
@@ -11,6 +11,7 @@ import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Badge, Button, Card, Empty, Input, Money, Pagination, Select } from '@/components/ui/primitives';
 import { Table, TRow, TD } from '@/components/ui/table';
+import { CustomerFormDialog } from '@/components/customer-form-dialog';
 
 interface CustomerListItem {
   id: string;
@@ -22,6 +23,7 @@ interface CustomerListItem {
   branch: { id: string; name: string } | null;
   currentCollector: { id: string; name: string } | null;
   balances: { currency: string; balance: number; updatedAt: string }[];
+  riskRating: { score: number; level: 'low' | 'medium' | 'high' | 'critical'; computedAt: string } | null;
 }
 
 interface CustomersResponse {
@@ -47,6 +49,8 @@ function useDebounced<T>(value: T, delay: number): T {
 export default function CustomersPage() {
   const can = useCan();
   const canRead = can('customers.read');
+  const canWrite = can('customers.write');
+  const router = useRouter();
 
   // Initial filter values from the URL — lets dashboard KPI cards / charts
   // link straight into a pre-filtered customers view (drilldown).
@@ -60,13 +64,15 @@ export default function CustomersPage() {
   const [status, setStatus] = useState(() => urlParams.get('status') ?? '');
   const [region, setRegion] = useState(() => urlParams.get('region') ?? '');
   const [collectorId, setCollectorId] = useState(() => urlParams.get('collectorId') ?? '');
+  const [excludeZero, setExcludeZero] = useState(() => urlParams.get('excludeZero') === 'true');
+  const [createOpen, setCreateOpen] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [page, setPage] = useState(1);
   const [showFilters, setShowFilters] = useState(() => !!(urlParams.get('region') || urlParams.get('balanceState') || urlParams.get('currency') || urlParams.get('status')));
 
   const query = useQuery<CustomersResponse>({
-    queryKey: ['customers', debouncedSearch, balanceState, currency, status, region, collectorId, sortBy, sortDir, page],
+    queryKey: ['customers', debouncedSearch, balanceState, currency, status, region, collectorId, excludeZero, sortBy, sortDir, page],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set('page', String(page));
@@ -77,6 +83,7 @@ export default function CustomersPage() {
       if (status) params.set('status', status);
       if (region) params.set('region', region);
       if (collectorId) params.set('collectorId', collectorId);
+      if (excludeZero && !balanceState) params.set('excludeZero', 'true');
       if (sortBy) params.set('sortBy', sortBy);
       if (sortDir) params.set('sortDir', sortDir);
       return api<CustomersResponse>(`/customers?${params.toString()}`);
@@ -94,7 +101,7 @@ export default function CustomersPage() {
     setPage(1);
   };
 
-  const activeFilters = [balanceState, currency, status, region, collectorId].filter(Boolean).length;
+  const activeFilters = [balanceState, currency, status, region, collectorId, excludeZero].filter(Boolean).length;
 
   const sortIcon = (col: SortBy) => {
     if (sortBy !== col) return '';
@@ -111,7 +118,7 @@ export default function CustomersPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="العملاء" />
+      <PageHeader title="العملاء" action={canWrite ? <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" />إضافة عميل</Button> : undefined} />
 
       <Card>
         {/* شريط البحث والفلاتر */}
@@ -224,11 +231,21 @@ export default function CustomersPage() {
                   <option value="balance">الرصيد</option>
                 </Select>
               </label>
+              <label className="flex min-h-11 items-center gap-2 self-end rounded-lg border border-concrete-200 px-3 text-sm dark:border-line">
+                <input
+                  type="checkbox"
+                  checked={excludeZero}
+                  disabled={balanceState === 'zero'}
+                  onChange={(e) => { setExcludeZero(e.target.checked); setPage(1); }}
+                  className="h-4 w-4 accent-pine-700"
+                />
+                استبعاد الحسابات الصفرية
+              </label>
               {activeFilters > 0 && (
                 <div className="col-span-2 sm:col-span-5">
                   <Button
                     variant="ghost"
-                    onClick={() => { setBalanceState(''); setCurrency(''); setStatus(''); setRegion(''); setCollectorId(''); setPage(1); }}
+                    onClick={() => { setBalanceState(''); setCurrency(''); setStatus(''); setRegion(''); setCollectorId(''); setExcludeZero(false); setPage(1); }}
                   >
                     <X className="h-3.5 w-3.5" aria-hidden />
                     مسح الفلاتر
@@ -260,6 +277,7 @@ export default function CustomersPage() {
                     <SortTh label="المنطقة" col="code" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                     <th className="px-4 py-2.5 font-medium">الرصيد</th>
                     <th className="px-4 py-2.5 font-medium">المحصل</th>
+                    <th className="px-4 py-2.5 font-medium">التقييم الذكي</th>
                     <SortTh label="الحالة" col="createdAt" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   </tr>
                 </thead>
@@ -288,15 +306,22 @@ export default function CustomersPage() {
                         {c.balances.length > 0 ? (
                           <div className="space-y-0.5">
                             {c.balances.map((b) => (
-                              <Money key={b.currency} value={b.balance} currency={b.currency} signed />
+                              <div key={b.currency}><Money value={b.balance} currency={b.currency} signed /></div>
                             ))}
                           </div>
                         ) : (
-                          <span className="text-concrete-400">—</span>
+                          <span className="text-xs text-concrete-400">لا يوجد رصيد</span>
                         )}
                       </TD>
                       <TD className="text-concrete-600 dark:text-concrete-400">
                         {c.currentCollector?.name ?? 'غير مسنّد'}
+                      </TD>
+                      <TD>
+                        {c.riskRating ? (
+                          <Badge tone={{ low: 'pine', medium: 'credit', high: 'hazard', critical: 'debt' }[c.riskRating.level] as 'pine' | 'credit' | 'hazard' | 'debt'}>
+                            {{ low: 'منخفض', medium: 'متوسط', high: 'مرتفع', critical: 'حرج' }[c.riskRating.level]} · {c.riskRating.score}
+                          </Badge>
+                        ) : <span className="text-xs text-concrete-400">لم يُقيّم</span>}
                       </TD>
                       <TD>
                         <Badge tone={c.status === 'active' ? 'pine' : 'neutral'}>
@@ -312,6 +337,11 @@ export default function CustomersPage() {
           )}
         </DataState>
       </Card>
+      <CustomerFormDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onSaved={(saved) => router.push(`/customers/${saved.id}`)}
+      />
     </div>
   );
 }

@@ -69,6 +69,7 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   { label: 'الاستيراد', prefix: 'imports.', items: [
     { code: 'imports.run', label: 'تشغيل استيراد' },
     { code: 'imports.read', label: 'عرض الاستيرادات' },
+    { code: 'imports.reverse', label: 'التراجع عن استيراد' },
   ]},
   { label: 'التسويات', prefix: 'reconciliation.', items: [
     { code: 'reconciliation.review', label: 'مراجعة التسويات' },
@@ -76,6 +77,9 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   { label: 'التقارير', prefix: 'reports.', items: [
     { code: 'reports.read', label: 'عرض التقارير' },
     { code: 'reports.export', label: 'تصدير التقارير' },
+  ]},
+  { label: 'الائتمان', prefix: 'credit.', items: [
+    { code: 'credit.override', label: 'تجاوز سقف الائتمان بسبب موثق' },
   ]},
   { label: 'المستخدمون', prefix: 'users.', items: [
     { code: 'users.manage', label: 'إدارة المستخدمين' },
@@ -88,6 +92,7 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   ]},
   { label: 'المكررات', prefix: 'duplicates.', items: [
     { code: 'duplicates.review', label: 'مراجعة المكررات' },
+    { code: 'duplicates.merge', label: 'دمج العملاء والتراجع' },
   ]},
 ];
 

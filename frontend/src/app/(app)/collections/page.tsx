@@ -8,7 +8,10 @@ import Link from 'next/link';
 import { Download, Plus, RotateCcw, HandCoins } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
-import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, COLLECTION_STATUS_AR } from '@/lib/format';
+import {
+  fmtDate, fmtDateTime, fmtMoney, CCY_AR, COLLECTION_STATUS_AR,
+  orgDateTimeLocalToIso, orgDateTimeLocalValue,
+} from '@/lib/format';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Dialog } from '@/components/ui/dialog';
@@ -269,7 +272,7 @@ export default function CollectionsPage() {
         methodId: data.methodId,
       };
       if (data.branchId) body.branchId = data.branchId;
-      if (data.collectedAt) body.collectedAt = data.collectedAt;
+      if (data.collectedAt) body.collectedAt = orgDateTimeLocalToIso(data.collectedAt);
       if (data.referenceNumber) body.referenceNumber = data.referenceNumber;
       if (data.notes) body.notes = data.notes;
       return api<CollectionItem>('/collections', {
@@ -293,7 +296,7 @@ export default function CollectionsPage() {
         body: JSON.stringify({ reason }),
       }),
     onSuccess: () => {
-      toast('تم عكس التحصيل بنجاح', 'ok');
+      toast('تم إرسال طلب العكس للموافقة من مستخدم ثانٍ', 'ok');
       setReverseItem(null);
       qc.invalidateQueries({ queryKey: ['collections'] });
     },
@@ -577,7 +580,7 @@ function CreateDialog({
 }) {
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
-    defaultValues: { collectedAt: new Date().toISOString().slice(0, 16) },
+    defaultValues: { collectedAt: orgDateTimeLocalValue() },
   });
 
   const [custSearch, setCustSearch] = useState('');
@@ -587,13 +590,15 @@ function CreateDialog({
   const debouncedCust = useDebounced(custSearch, 300);
 
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      setValue('collectedAt', orgDateTimeLocalValue());
+    } else {
       reset();
       setCustSearch('');
       setCustResults([]);
       setSelectedCust(null);
     }
-  }, [open, reset]);
+  }, [open, reset, setValue]);
 
   useEffect(() => {
     if (!debouncedCust || debouncedCust.length < 2) {
@@ -700,7 +705,7 @@ function CreateDialog({
           </Field>
         </div>
 
-        <Field label="تاريخ التحصيل" error={errors.collectedAt?.message}>
+        <Field label="تاريخ التحصيل (بتوقيت صنعاء)" error={errors.collectedAt?.message}>
           <Input type="datetime-local" {...register('collectedAt')} />
         </Field>
 
@@ -743,7 +748,7 @@ function ReverseDialog({
   }, [item, reset]);
 
   return (
-    <Dialog open={!!item} onClose={onClose} title="عكس التحصيل">
+    <Dialog open={!!item} onClose={onClose} title="طلب عكس التحصيل">
       <form onSubmit={handleSubmit((data) => onSubmit(data.reason))} className="space-y-4">
         {item && (
           <div className="rounded-lg border border-concrete-100 bg-concrete-50 p-3 text-sm dark:border-white/10 dark:bg-iron-700">
@@ -762,14 +767,14 @@ function ReverseDialog({
         </Field>
 
         <p className="text-xs text-concrete-500">
-          سيتم عكس التحصيل وإنشاء سجل عكس مرتبط بالسجل الأصلي.
+          سيُرسل الطلب للمدير المالي، ولن يُنفذ العكس حتى يعتمد مستخدم ثانٍ من شاشة مطابقة الصندوق.
         </p>
 
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>إلغاء</Button>
           <Button variant="danger" type="submit" loading={loading}>
             <RotateCcw className="h-4 w-4" aria-hidden />
-            عكس التحصيل
+            إرسال طلب العكس
           </Button>
         </div>
       </form>

@@ -1,12 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { normalizeUploadedFilename } from '../common/uploaded-filename';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAnalyticalAccountDto } from './dto/create-analytical-account.dto';
 import { QueryAnalyticalAccountsDto } from './dto/query-analytical-accounts.dto';
 import { AnalyticalStatementQueryDto } from './dto/statement-query.dto';
+import { parseEmployeeStatementWorkbook } from './employee-statement-parser';
 
 /**
  * Analytical Accounts: extensible non-customer accounting accounts
@@ -38,7 +41,7 @@ export class AnalyticalAccountsService {
     if (rows.length === 0) return [] as (T & { balance: number })[];
     const sums = await this.prisma.analyticalMovement.groupBy({
       by: ['accountId'],
-      where: { accountId: { in: rows.map((r) => r.id) } },
+      where: { accountId: { in: rows.map((r) => r.id) }, reversedAt: null },
       _sum: { debit: true, credit: true },
     });
     const balanceMap = new Map(
@@ -50,10 +53,9 @@ export class AnalyticalAccountsService {
   async findAll(actor: AuthUser, q: QueryAnalyticalAccountsDto) {
     const page = q.page ?? 1;
     const limit = q.limit ?? 25;
-    const where: Record<string, unknown> = { organizationId: actor.organizationId };
+    const where: Record<string, unknown> = { organizationId: actor.organizationId, status: q.status ?? 'active' };
     if (q.category) where.category = q.category;
     if (q.currencyCode) where.currencyCode = q.currencyCode;
-    if (q.status) where.status = q.status;
     if (q.search) {
       const s = q.search.trim();
       where.OR = [
@@ -86,14 +88,40 @@ export class AnalyticalAccountsService {
     return withBalance;
   }
 
+  async summary(actor: AuthUser, category?: string) {
+    const accounts = await this.prisma.analyticalAccount.findMany({
+      where: {
+        organizationId: actor.organizationId,
+        status: 'active',
+        ...(category ? { category } : {}),
+      },
+      select: { id: true, currencyCode: true },
+    });
+    const totals = accounts.length
+      ? await this.prisma.analyticalMovement.groupBy({
+          by: ['accountId'],
+          where: { accountId: { in: accounts.map((account) => account.id) }, reversedAt: null },
+          _sum: { debit: true, credit: true },
+        })
+      : [];
+    const totalMap = new Map(totals.map((row) => [row.accountId, Number(row._sum.debit ?? 0) - Number(row._sum.credit ?? 0)]));
+    const byCurrency: Record<string, { accounts: number; balance: number }> = {};
+    for (const account of accounts) {
+      byCurrency[account.currencyCode] ??= { accounts: 0, balance: 0 };
+      byCurrency[account.currencyCode].accounts += 1;
+      byCurrency[account.currencyCode].balance += totalMap.get(account.id) ?? 0;
+    }
+    return { accounts: accounts.length, byCurrency };
+  }
+
   async statement(actor: AuthUser, id: string, q: AnalyticalStatementQueryDto) {
     await this.findScoped(actor, id);
     const page = q.page ?? 1;
     const limit = q.limit ?? 50;
 
-    const total = await this.prisma.analyticalMovement.count({ where: { accountId: id } });
+    const total = await this.prisma.analyticalMovement.count({ where: { accountId: id, reversedAt: null } });
     const before = await this.prisma.analyticalMovement.findMany({
-      where: { accountId: id },
+      where: { accountId: id, reversedAt: null },
       orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
       take: (page - 1) * limit,
       select: { debit: true, credit: true },
@@ -101,7 +129,7 @@ export class AnalyticalAccountsService {
     let running = before.reduce((s, m) => s + Number(m.debit) - Number(m.credit), 0);
 
     const movements = await this.prisma.analyticalMovement.findMany({
-      where: { accountId: id },
+      where: { accountId: id, reversedAt: null },
       orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
       skip: (page - 1) * limit,
       take: limit,
@@ -196,7 +224,7 @@ export class AnalyticalAccountsService {
     const importJob = await this.prisma.importJob.create({
       data: {
         organizationId: actor.organizationId,
-        fileName: file.originalname,
+        fileName: normalizeUploadedFilename(file.originalname),
         fileHash,
         uploadedBy: actor.id,
         status: 'completed',
@@ -261,7 +289,7 @@ export class AnalyticalAccountsService {
           ].join('|'))
           .digest('hex');
 
-        const already = await this.prisma.analyticalMovement.findUnique({ where: { lineHash } });
+        const already = await this.prisma.analyticalMovement.findFirst({ where: { lineHash, reversedAt: null } });
         if (already) { movementsSkippedDuplicate += 1; continue; }
 
         await this.prisma.analyticalMovement.create({
@@ -309,6 +337,272 @@ export class AnalyticalAccountsService {
       errors,
     };
   }
+
+  async importAdvanceStatementExcel(
+    actor: AuthUser,
+    file: Express.Multer.File,
+    dryRun: boolean,
+    req?: Request,
+  ) {
+    if (!file) throw new BadRequestException('File is required');
+    const fileName = normalizeUploadedFilename(file.originalname);
+    if (!/\.xlsx$/i.test(fileName)) {
+      throw new BadRequestException('كشف السلف التحليلي يجب أن يكون بصيغة xlsx');
+    }
+    const parsed = await parseEmployeeStatementWorkbook(file.buffer, fileName);
+    const statementMovements = parsed.movements.filter((movement) => !movement.isOpening);
+    const knownCurrencies = new Set(
+      (await this.prisma.currency.findMany({ where: { active: true }, select: { code: true } })).map((currency) => currency.code),
+    );
+    const currencyErrors = parsed.accounts
+      .filter((account) => !knownCurrencies.has(account.currencyCode))
+      .map((account) => ({ rowNumber: 0, message: `عملة غير معروفة أو غير مفعلة: ${account.currencyCode}` }));
+    const errors = [...parsed.errors, ...currencyErrors];
+    const byCurrency: Record<string, { accounts: number; movements: number; balance: number }> = {};
+    for (const account of parsed.accounts) {
+      byCurrency[account.currencyCode] ??= { accounts: 0, movements: 0, balance: 0 };
+      byCurrency[account.currencyCode].accounts += 1;
+      byCurrency[account.currencyCode].movements += account.movements + (Math.abs(account.openingBalance) > 0.0001 ? 1 : 0);
+      byCurrency[account.currencyCode].balance += account.computedBalance;
+    }
+    const preview = {
+      profile: 'ADVANCE_ACCOUNT_STATEMENT',
+      rowsRead: parsed.rowsRead,
+      accountsInFile: parsed.accounts.length,
+      uniqueAccounts: new Set(parsed.accounts.map((account) => account.accountNumber)).size,
+      movementsInFile: statementMovements.length,
+      mainAccountsIgnored: parsed.mainAccountsIgnored,
+      byCurrency,
+      errors,
+      warnings: parsed.warnings,
+      sampleAccounts: parsed.accounts.slice(0, 12),
+    };
+    if (dryRun) return { status: 'dry_run', preview };
+    if (errors.length) {
+      throw new BadRequestException({ message: 'لا يمكن تنفيذ الاستيراد قبل معالجة أخطاء الفحص', errors });
+    }
+
+    const fileHash = createHash('sha256').update(file.buffer).digest('hex');
+    const result = await this.prisma.$transaction(async (tx) => {
+      const job = await tx.importJob.create({
+        data: {
+          organizationId: actor.organizationId,
+          fileName,
+          fileHash,
+          uploadedBy: actor.id,
+          status: 'completed',
+          rowsTotal: parsed.rowsRead,
+          txnsInFile: statementMovements.length,
+          errorsCount: 0,
+          errorReport: {
+            profile: 'ADVANCE_ACCOUNT_STATEMENT',
+            mainAccountsIgnored: parsed.mainAccountsIgnored,
+            warnings: parsed.warnings,
+          },
+        },
+      });
+      const customerIds = new Map<string, string>();
+      let accountsCreated = 0;
+      let accountsUpdated = 0;
+      for (const account of parsed.accounts) {
+        let customerId = customerIds.get(account.accountNumber);
+        if (!customerId) {
+          const existing = await tx.customer.findFirst({
+            where: {
+              organizationId: actor.organizationId,
+              customerType: 'advance',
+              accountNumber: account.accountNumber,
+            },
+          });
+          const saved = existing
+            ? await tx.customer.update({
+                where: { id: existing.id },
+                data: {
+                  name: account.accountName,
+                  nameNormalized: normalizeAdvanceName(account.accountName),
+                  accountNumber: account.accountNumber,
+                  customerType: 'advance',
+                  status: 'active',
+                },
+              })
+            : await tx.customer.create({
+                data: {
+                  organizationId: actor.organizationId,
+                  externalCustomerCode: await this.nextAdvanceExternalCode(tx, actor.organizationId, account.accountNumber),
+                  accountNumber: account.accountNumber,
+                  name: account.accountName,
+                  nameNormalized: normalizeAdvanceName(account.accountName),
+                  customerType: 'advance',
+                  status: 'active',
+                  createdByImportJob: job.id,
+                },
+              });
+          existing ? accountsUpdated += 1 : accountsCreated += 1;
+          customerId = saved.id;
+          customerIds.set(account.accountNumber, saved.id);
+        }
+
+        const openingDebit = account.openingBalance > 0 ? account.openingBalance : 0;
+        const openingCredit = account.openingBalance < 0 ? -account.openingBalance : 0;
+        await tx.customerBalance.upsert({
+          where: { customerId_currencyCode: { customerId, currencyCode: account.currencyCode } },
+          update: {
+            openingDebit,
+            openingCredit,
+            accountingBalance: account.computedBalance,
+            lastImportJobId: job.id,
+          },
+          create: {
+            customerId,
+            currencyCode: account.currencyCode,
+            openingDebit,
+            openingCredit,
+            accountingBalance: account.computedBalance,
+            lastImportJobId: job.id,
+          },
+        });
+        await tx.balanceSnapshot.create({
+          data: {
+            customerId,
+            currencyCode: account.currencyCode,
+            balance: account.computedBalance,
+            importJobId: job.id,
+          },
+        });
+      }
+
+      const documentTypes = new Map<string, string>();
+      for (const name of new Set(statementMovements.map((movement) => movement.documentType || 'حركة سلفة'))) {
+        const documentType = await tx.documentType.upsert({
+          where: { organizationId_name: { organizationId: actor.organizationId, name } },
+          update: { active: true },
+          create: { organizationId: actor.organizationId, name, effect: 'mixed', active: true },
+        });
+        documentTypes.set(name, documentType.id);
+      }
+
+      let movementsInserted = 0;
+      let movementsSkippedDuplicate = 0;
+      for (const movement of statementMovements) {
+        const customerId = customerIds.get(movement.accountNumber);
+        if (!customerId) throw new BadRequestException(`تعذر تحديد حساب السلفة ${movement.accountNumber}`);
+        const documentTypeName = movement.documentType || 'حركة سلفة';
+        const documentTypeId = documentTypes.get(documentTypeName);
+        if (!documentTypeId) {
+          throw new BadRequestException(
+            `تعذر تحديد نوع المستند ${documentTypeName}`,
+          );
+        }
+        const lineHash = createHash('sha256').update([
+          actor.organizationId,
+          movement.accountNumber,
+          movement.currencyCode,
+          movement.date,
+          movement.documentType,
+          movement.documentNumber,
+          movement.description,
+          movement.reference,
+          movement.debit,
+          movement.credit,
+          movement.sourceRowNumber,
+        ].join('|')).digest('hex');
+        const exists = await tx.importedTransaction.findFirst({ where: { lineHash, reversedAt: null }, select: { id: true } });
+        if (exists) {
+          movementsSkippedDuplicate += 1;
+          continue;
+        }
+        await tx.importedTransaction.create({
+          data: {
+            customerId,
+            currencyCode: movement.currencyCode,
+            txDate: new Date(`${movement.date}T00:00:00Z`),
+            documentTypeId,
+            documentNumber: movement.documentNumber || null,
+            description: movement.description || movement.documentType || null,
+            referenceNumber: movement.reference || null,
+            debit: movement.debit,
+            credit: movement.credit,
+            importJobId: job.id,
+            sourceRowNumber: movement.sourceRowNumber,
+            lineHash,
+          },
+        });
+        movementsInserted += 1;
+      }
+      await tx.importJob.update({
+        where: { id: job.id },
+        data: {
+          txnsInserted: movementsInserted,
+          txnsSkippedDuplicate: movementsSkippedDuplicate,
+        },
+      });
+      const importedPairs = parsed.accounts.map((account) => ({
+        accountNumber: account.accountNumber,
+        currencyCode: account.currencyCode,
+      }));
+      const archived = importedPairs.length
+        ? await tx.analyticalAccount.updateMany({
+            where: {
+              organizationId: actor.organizationId,
+              category: 'employee_advance',
+              status: 'active',
+              OR: importedPairs,
+            },
+            data: { status: 'inactive' },
+          })
+        : { count: 0 };
+      return {
+        importJobId: job.id,
+        accountsCreated,
+        accountsUpdated,
+        movementsInserted,
+        movementsSkippedDuplicate,
+        legacyAnalyticalAccountsArchived: archived.count,
+      };
+    });
+
+    await this.audit.log({
+      userId: actor.id,
+      action: 'advance_statement_imported',
+      entityTable: 'customers',
+      entityId: result.importJobId,
+      newValue: {
+        fileName,
+        mainAccountsIgnored: parsed.mainAccountsIgnored,
+        ...result,
+      },
+      req,
+    });
+    return { status: 'completed', preview, ...result };
+  }
+
+  private async nextAdvanceExternalCode(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    accountNumber: string,
+  ): Promise<string> {
+    const base = `ADV-${accountNumber}`;
+    let candidate = base;
+    let suffix = 2;
+    while (await tx.customer.findUnique({
+      where: { organizationId_externalCustomerCode: { organizationId, externalCustomerCode: candidate } },
+      select: { id: true },
+    })) {
+      candidate = `${base}-${suffix}`;
+      suffix += 1;
+    }
+    return candidate;
+  }
+}
+
+function normalizeAdvanceName(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/[إأآا]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /* ─────────────────────────── CSV parsing helpers ─────────────────────────── */

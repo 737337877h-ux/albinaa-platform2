@@ -196,3 +196,23 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-rec
 - **Email**: support@albinaa.com
 - **GitHub Issues**: https://github.com/737337877h-ux/albinaa-platform2/issues
 - **Documentation**: [docs/](./docs/)
+
+## 9. النسخ الاحتياطي والاستعادة
+
+- ينفّذ خادم `backup` نسخة PostgreSQL فيزيائية كاملة يوميًا الساعة 02:00.
+- يجمع ملفات WAL التفاضلية كل ساعة عند الدقيقة 05، مع احتفاظ افتراضي لمدة 7 أيام.
+- ينفّذ اختبار استعادة معزولًا في اليوم الأول من كل شهر الساعة 04:00، ويحفظ تقرير JSON في `/backups/restore-tests`.
+- مدة الاحتفاظ بالنسخ الكاملة يضبطها `BACKUP_RETENTION_DAYS`، ومدة الفروقات يضبطها `DIFF_RETENTION_DAYS`.
+
+تشغيل تحقق يدوي آمن داخل حاوية النسخ:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec backup \
+  /bin/sh /usr/local/bin/backup-runner.sh full
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec backup \
+  /bin/sh /usr/local/bin/backup-runner.sh differential
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec backup \
+  /bin/sh /usr/local/bin/restore-test.sh
+```
+
+ينبغي نسخ مجلد/وحدة `albinaa_backups` إلى تخزين خارجي مشفّر؛ وجود النسخة على الخادم نفسه لا يكفي للتعافي من فقد الخادم.

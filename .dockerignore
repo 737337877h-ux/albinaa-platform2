@@ -13,6 +13,8 @@ mobile/ios
 *.tsbuildinfo
 **/*.tsbuildinfo
 .git
+data
+**/data
 *.md
 .env*
 !.env.prod.example

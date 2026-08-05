@@ -1,9 +1,11 @@
 import {
-  Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req,
+  Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Throttle } from '@nestjs/throttler';
+import { Request, Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { AssignCollectorDto } from './dto/assign-collector.dto';
@@ -11,8 +13,14 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { CustomerStatusDto } from './dto/customer-status.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
 import { ReviewDuplicateDto } from './dto/review-duplicate.dto';
+import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
+import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
+import { LinkCustomerAccountDto } from './dto/link-customer-account.dto';
+import { LinkCustomerAccountsDto } from './dto/link-customer-accounts.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
+import { UpdateCreditLimitDto } from './dto/update-credit-limit.dto';
 import { CustomersService } from './customers.service';
 
 @ApiTags('Customers')
@@ -37,11 +45,25 @@ export class CustomersController {
     return this.customers.listDuplicates(user);
   }
 
+  @Get('duplicates/merges')
+  @RequirePermissions('duplicates.merge')
+  @ApiOperation({ summary: 'عمليات دمج العملاء الحديثة وحالة مهلة التراجع' })
+  duplicateMerges(@CurrentUser() user: AuthUser) {
+    return this.customers.listMerges(user);
+  }
+
   @Get('data-quality')
   @RequirePermissions('duplicates.review')
   @ApiOperation({ summary: 'Data quality KPIs: missing phone, pending duplicates, multi-currency, suspicious balances (read-only)' })
   dataQuality(@CurrentUser() user: AuthUser) {
     return this.customers.dataQuality(user);
+  }
+
+  @Get('advances/summary')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'إجمالي حسابات السلف على الغير حسب العملة ضمن نطاق المستخدم' })
+  advancesSummary(@CurrentUser() user: AuthUser) {
+    return this.customers.advancesSummary(user);
   }
 
   @Patch('duplicates/:pairId')
@@ -56,11 +78,105 @@ export class CustomersController {
     return this.customers.reviewDuplicate(user, pairId, dto.decision, req);
   }
 
+  @Post('duplicates/:pairId/merge')
+  @Idempotent()
+  @RequirePermissions('duplicates.merge')
+  @ApiOperation({ summary: 'دمج عميلين بعد تأكيد بشري، مع إمكانية التراجع خلال 24 ساعة' })
+  mergeDuplicate(
+    @CurrentUser() user: AuthUser,
+    @Param('pairId', ParseUUIDPipe) pairId: string,
+    @Body() dto: MergeDuplicateDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.mergeDuplicate(user, pairId, dto, req);
+  }
+
+  @Post('duplicates/merges/:mergeId/reverse')
+  @Idempotent()
+  @RequirePermissions('duplicates.merge')
+  @ApiOperation({ summary: 'التراجع عن دمج عميل خلال المهلة المحددة' })
+  reverseMerge(
+    @CurrentUser() user: AuthUser,
+    @Param('mergeId', ParseUUIDPipe) mergeId: string,
+    @Body() dto: ReverseCustomerMergeDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.reverseMerge(user, mergeId, dto, req);
+  }
+
   @Get(':id')
   @RequirePermissions('customers.read')
   @ApiOperation({ summary: 'Customer 360: البيانات + الأرصدة + الإسناد + السياسة + العدادات' })
   find360(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.customers.find360(user, id);
+  }
+
+  @Get(':id/account-group')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'الحساب الرئيسي والفرعي مع الأرصدة المجمعة دون دمج السجلات' })
+  accountGroup(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.customers.accountGroup(user, id);
+  }
+
+  @Post(':id/account-group/children')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'ربط حساب عميل مستقل كحساب فرعي دون نقل أو حذف حركاته' })
+  linkChildAccount(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LinkCustomerAccountDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.linkChildAccount(user, id, dto.childCustomerId, req);
+  }
+
+  @Post(':id/account-group/children/bulk')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'ربط عدة حسابات فرعية محددة دفعة واحدة دون نقل الحركات أو دمجها' })
+  linkChildAccounts(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LinkCustomerAccountsDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.linkChildAccounts(user, id, dto.childCustomerIds, req);
+  }
+
+  @Delete(':id/account-group/children/:childId')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'فك ارتباط حساب فرعي مع إبقاء الحساب وحركاته كما هي' })
+  unlinkChildAccount(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('childId', ParseUUIDPipe) childId: string,
+    @Req() req: Request,
+  ) {
+    return this.customers.unlinkChildAccount(user, id, childId, req);
+  }
+
+  @Patch(':id/credit-policy')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'تحديث سياسة وحد الائتمان مع تحديث درجة المخاطر فورًا' })
+  updateCreditPolicy(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCreditPolicyDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.updateCreditPolicy(user, id, dto, req);
+  }
+
+  @Patch(':id/credit-limits/:currency')
+  @RequirePermissions('customers.write')
+  @ApiOperation({ summary: 'اعتماد سقف ائتمان مستقل لعملة محددة مع تاريخ السريان' })
+  updateCreditLimit(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('currency') currency: string,
+    @Body() dto: UpdateCreditLimitDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.updateCreditLimit(user, id, currency.toUpperCase(), dto, req);
   }
 
   @Get(':id/timeline')
@@ -93,6 +209,22 @@ export class CustomersController {
     @Query() q: StatementQueryDto,
   ) {
     return this.customers.statement(user, id, q);
+  }
+
+  @Get(':id/statement.pdf')
+  @RequirePermissions('customers.read', 'balances.read')
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @ApiOperation({ summary: 'كشف حساب PDF عربي بالترويسة وختم عدم الاعتماد' })
+  async statementPdf(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() q: StatementQueryDto,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.customers.statementPdf(user, id, q);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="customer-statement-${id}-${q.currency}.pdf"`);
+    res.send(buffer);
   }
 
   @Post()

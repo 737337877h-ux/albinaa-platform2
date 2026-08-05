@@ -1,14 +1,15 @@
-import { TASK_TYPE_PRIORITY, priorityOfTaskType, queueTaskKey } from './tasks.service';
+import { escalationForAging, TASK_TYPE_PRIORITY, priorityOfTaskType, queueTaskKey } from './tasks.service';
 
 describe('daily work queue helpers (PR 5)', () => {
   describe('TASK_TYPE_PRIORITY', () => {
-    it('ranks queue causes in owner-approved order 1..11', () => {
+    it('ranks queue causes in owner-approved order 1..12', () => {
       const ordered = [
         'promise_overdue',
         'promise_due_today',
         'followup_overdue',
         'risk_critical',
         'risk_high',
+        'large_debt_7plus',
         'debt_120plus',
         'high_balance_no_followup',
         'repeated_no_answer',
@@ -26,6 +27,11 @@ describe('daily work queue helpers (PR 5)', () => {
     it('maps promise sweep task types to top priorities (1 and 2)', () => {
       expect(priorityOfTaskType('promise_escalation')).toBe(1);
       expect(priorityOfTaskType('promise_due')).toBe(2);
+    });
+
+    it('ranks a primary account group with the high-balance follow-up tier', () => {
+      expect(priorityOfTaskType('account_group_priority'))
+        .toBe(priorityOfTaskType('high_balance_no_followup'));
     });
 
     it('falls back to 100 for unknown task types', () => {
@@ -54,6 +60,21 @@ describe('daily work queue helpers (PR 5)', () => {
       const base = queueTaskKey('c1', 'SAR', 'debt_120plus', today);
       expect(queueTaskKey('c1', 'USD', 'debt_120plus', today)).not.toBe(base);
       expect(queueTaskKey('c1', 'SAR', 'risk_high', today)).not.toBe(base);
+    });
+  });
+
+  describe('automatic debt escalation ladder', () => {
+    it.each([
+      [{ bucket31To60: 1, bucket61To90: 0, bucket91To120: 0, bucket120Plus: 0 }, 'escalation_message_30'],
+      [{ bucket31To60: 1, bucket61To90: 1, bucket91To120: 0, bucket120Plus: 0 }, 'escalation_call_60'],
+      [{ bucket31To60: 1, bucket61To90: 1, bucket91To120: 1, bucket120Plus: 0 }, 'escalation_visit_90'],
+      [{ bucket31To60: 1, bucket61To90: 1, bucket91To120: 1, bucket120Plus: 1 }, 'escalation_legal_120'],
+    ])('selects only the highest action for populated buckets', (buckets, expected) => {
+      expect(escalationForAging(buckets)?.taskType).toBe(expected);
+    });
+
+    it('does not escalate current debt', () => {
+      expect(escalationForAging({ bucket31To60: 0, bucket61To90: 0, bucket91To120: 0, bucket120Plus: 0 })).toBeNull();
     });
   });
 });

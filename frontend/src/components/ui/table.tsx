@@ -1,15 +1,30 @@
+'use client';
+
 import { cn } from '@/lib/utils';
+import { Rows3 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 export function Table({ children, className }: { children: React.ReactNode; className?: string }) {
+  const [compact, setCompact] = useState(false);
+  useEffect(() => { setCompact(localStorage.getItem('albinaa.table-density') === 'compact'); }, []);
+  const toggle = () => {
+    const next = !compact; setCompact(next);
+    localStorage.setItem('albinaa.table-density', next ? 'compact' : 'comfortable');
+  };
   return (
-    <div className="overflow-x-auto">
-      <table className={cn('w-full text-sm', className)}>{children}</table>
+    <div>
+      <div className="flex justify-end border-b border-line px-2 py-1 print:hidden">
+        <button onClick={toggle} aria-pressed={compact} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-ink-mid hover:bg-surface-2"><Rows3 className="h-3.5 w-3.5" />{compact ? 'عرض مريح' : 'عرض مضغوط'}</button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className={cn('w-full text-sm', compact && 'data-density-compact', className)}>{children}</table>
+      </div>
     </div>
   );
 }
 export function THead({ cols }: { cols: string[] }) {
   return (
-    <thead>
+    <thead className="sticky top-0 z-10 bg-surface-1">
       <tr className="border-b border-concrete-100 text-right text-xs text-concrete-500 dark:border-white/10 dark:text-concrete-400">
         {cols.map((c) => <th key={c} className="px-4 py-2.5 font-medium">{c}</th>)}
       </tr>

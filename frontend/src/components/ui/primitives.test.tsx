@@ -83,10 +83,10 @@ describe('Money', () => {
 });
 
 describe('Skeleton', () => {
-  it('renders a div with animate-pulse class', () => {
+  it('renders the branded shimmer skeleton', () => {
     const { container } = render(<Skeleton className="h-10" />);
     const el = container.firstChild as HTMLElement;
-    expect(el.className).toContain('animate-pulse');
+    expect(el.className).toContain('skeleton-shimmer');
     expect(el.className).toContain('h-10');
   });
 });

@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { priorityOfTaskType } from '../tasks/tasks.service';
+import { orgDateOnly, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
 
 /**
  * Dashboard API — المؤشرات الأساسية المتاحة من بيانات المرحلة الحالية.
@@ -15,16 +16,33 @@ import { priorityOfTaskType } from '../tasks/tasks.service';
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async navCounts(user: AuthUser) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const collector = user.permissions.includes('customers.read_all')
+      ? null
+      : await this.prisma.collector.findUnique({ where: { userId: user.id }, select: { id: true } });
+    const customerScope = user.permissions.includes('customers.read_all')
+      ? { organizationId: user.organizationId }
+      : { organizationId: user.organizationId, assignments: { some: { collectorId: collector?.id ?? 'no-access', effectiveTo: null } } };
+    const taskWhere = user.permissions.includes('customers.read_all')
+      ? { status: 'open', customer: { organizationId: user.organizationId } }
+      : { status: 'open', assignedTo: collector?.id ?? 'no-access' };
+    const tasks = await this.prisma.task.count({ where: taskWhere });
+    const followups = await this.prisma.followup.count({ where: { customer: customerScope, deletedAt: null, nextFollowupDate: { lte: today } } });
+    const promises = await this.prisma.paymentPromise.count({ where: { customer: customerScope, status: { in: ['upcoming', 'due_today', 'unfulfilled'] }, dueDate: { lte: today } } });
+    return { tasks, followups, promises };
+  }
+
   async summary(user: AuthUser) {
     const orgId = user.organizationId;
 
-    const [totalCustomers, activeCustomers, balances, lastImport, pendingDuplicates] =
+    const [totalCustomers, activeCustomers, balances, lastImport, pendingDuplicates, advanceBalances] =
       await Promise.all([
-        this.prisma.customer.count({ where: { organizationId: orgId } }),
-        this.prisma.customer.count({ where: { organizationId: orgId, status: 'active' } }),
+        this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' }, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
+        this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
         this.prisma.customerBalance.findMany({
-          where: { customer: { organizationId: orgId } },
-          select: { customerId: true, currencyCode: true, accountingBalance: true },
+          where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
+          select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
         }),
         this.prisma.importJob.findFirst({
           where: { organizationId: orgId, status: 'completed' },
@@ -34,7 +52,24 @@ export class DashboardService {
         this.prisma.potentialDuplicateCustomer.count({
           where: { reviewStatus: 'pending', customerA: { organizationId: orgId } },
         }),
+        this.prisma.customerBalance.findMany({
+          where: { customer: { organizationId: orgId, customerType: 'advance', status: 'active' } },
+          select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
+        }),
       ]);
+
+    const withOperationalBalance = async <T extends { customerId: string; currencyCode: string; accountingBalance: unknown; lastImportJob: { importedAt: Date } | null }>(rows: T[]) => Promise.all(rows.map(async (row) => {
+      const ledger = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: row.customerId, currencyCode: row.currencyCode,
+          ...(row.lastImportJob ? { createdAt: { gt: row.lastImportJob.importedAt } } : {}),
+        },
+      });
+      return { ...row, effectiveBalance: Number(row.accountingBalance) + Number(ledger._sum.amountSigned ?? 0) };
+    }));
+    const effectiveBalances = await withOperationalBalance(balances);
+    const effectiveAdvanceBalances = await withOperationalBalance(advanceBalances);
 
     // ---- تجميع حسب العملة: مدينون/دائنون/صفر + الإجماليات ----
     const byCurrency: Record<string, {
@@ -42,21 +77,29 @@ export class DashboardService {
       creditors: number; creditTotal: number;
       zero: number;
     }> = {};
-    for (const b of balances) {
+    for (const b of effectiveBalances) {
       const ccy = b.currencyCode;
       byCurrency[ccy] ??= { debtors: 0, debtTotal: 0, creditors: 0, creditTotal: 0, zero: 0 };
-      const v = Number(b.accountingBalance);
+      const v = b.effectiveBalance;
       if (v > 0) { byCurrency[ccy].debtors += 1; byCurrency[ccy].debtTotal += v; }
       else if (v < 0) { byCurrency[ccy].creditors += 1; byCurrency[ccy].creditTotal += -v; }
       else byCurrency[ccy].zero += 1;
+    }
+
+    const advanceByCurrency: Record<string, { accounts: number; balance: number }> = {};
+    for (const balance of effectiveAdvanceBalances) {
+      advanceByCurrency[balance.currencyCode] ??= { accounts: 0, balance: 0 };
+      advanceByCurrency[balance.currencyCode].accounts += 1;
+      advanceByCurrency[balance.currencyCode].balance += balance.effectiveBalance;
     }
 
     return {
       customers: {
         total: totalCustomers,
         active: activeCustomers,
-        withBalances: new Set(balances.map((b) => b.customerId)).size,
+        withBalances: new Set(effectiveBalances.filter((b) => Math.abs(b.effectiveBalance) > 0.005).map((b) => b.customerId)).size,
       },
+      advances: { accounts: new Set(effectiveAdvanceBalances.map((row) => row.customerId)).size, byCurrency: advanceByCurrency },
       byCurrency,
       lastImport,
       pendingDuplicateAlerts: pendingDuplicates,
@@ -66,6 +109,9 @@ export class DashboardService {
       followupsToday: null,
       promisesDueToday: null,
       collectionsToday: null,
+      methodology: {
+        debtScope: 'أرصدة الحسابات النشطة فقط؛ الحسابات المدمجة محفوظة للتدقيق ولا تدخل في إجمالي المديونية',
+      },
     };
   }
 
@@ -81,13 +127,19 @@ export class DashboardService {
 
     const [latest, previous] = lastTwo;
     const latestSnaps = await this.prisma.balanceSnapshot.findMany({
-      where: { importJobId: latest.id },
+      where: {
+        importJobId: latest.id,
+        customer: { status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+      },
       select: { customerId: true, currencyCode: true, balance: true },
     });
     const prevMap = new Map<string, number>();
     if (previous) {
       const prevSnaps = await this.prisma.balanceSnapshot.findMany({
-        where: { importJobId: previous.id },
+        where: {
+          importJobId: previous.id,
+          customer: { status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        },
         select: { customerId: true, currencyCode: true, balance: true },
       });
       for (const s of prevSnaps) {
@@ -125,14 +177,20 @@ export class DashboardService {
    */
   private async estimatedAging(orgId: string) {
     const debtors = await this.prisma.customerBalance.findMany({
-      where: { customer: { organizationId: orgId }, accountingBalance: { gt: 0 } },
+      where: {
+        customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        accountingBalance: { gt: 0 },
+      },
       select: { customerId: true, currencyCode: true, accountingBalance: true },
     });
     if (debtors.length === 0) return { estimated: true, buckets: {}, note: 'لا مدينين' };
 
     const oldest = await this.prisma.importedTransaction.groupBy({
       by: ['customerId', 'currencyCode'],
-      where: { customer: { organizationId: orgId } },
+      where: {
+        customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        reversedAt: null,
+      },
       _min: { txDate: true },
     });
     const oldestMap = new Map<string, Date>();
@@ -169,39 +227,52 @@ export class DashboardService {
    */
   async kpis(user: AuthUser) {
     const orgId = user.organizationId;
-    const today = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
-    const tomorrow = new Date(today.getTime() + 86_400_000);
+    const todayDate = orgDateOnly();
+    const today = startOfOrgDay(todayDate);
+    const tomorrow = startOfNextOrgDay(todayDate);
 
     const [totalCustomers, activeCustomers, balances, scores, todayTasks, aging] = await Promise.all([
-      this.prisma.customer.count({ where: { organizationId: orgId } }),
-      this.prisma.customer.count({ where: { organizationId: orgId, status: 'active' } }),
+      this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' }, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
+      this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
       this.prisma.customerBalance.findMany({
-        where: { customer: { organizationId: orgId }, accountingBalance: { gt: 0 } },
-        select: { customerId: true, currencyCode: true, accountingBalance: true },
+        where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
+        select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
       }),
       this.prisma.customerScore.findMany({
-        where: { customer: { organizationId: orgId } },
+        where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
         orderBy: { computedAt: 'desc' },
         select: { customerId: true, score: true, riskLevel: true },
       }),
       this.prisma.task.findMany({
-        where: { status: 'open', dueDate: { gte: today, lt: tomorrow }, customer: { organizationId: orgId } },
+        where: { status: 'open', dueDate: { gte: today, lt: tomorrow }, customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
         select: {
           id: true, customerId: true, assignedTo: true, taskType: true, priorityReason: true,
           expectedAmount: true, expectedCurrency: true,
         },
       }),
       this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId }, bucket_120_plus: { gt: 0 } },
+        where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] }, bucket_120_plus: { gt: 0 }, reversedAt: null },
         select: { customerId: true, currencyCode: true, totalDue: true },
       }),
     ]);
 
-    const debtors = new Set(balances.map((b) => b.customerId)).size;
+    const operationalBalances = await Promise.all(balances.map(async (balance) => {
+      const ledger = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: balance.customerId,
+          currencyCode: balance.currencyCode,
+          ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
+        },
+      });
+      return { ...balance, effectiveBalance: Number(balance.accountingBalance) + Number(ledger._sum.amountSigned ?? 0) };
+    }));
+    const debtorBalances = operationalBalances.filter((balance) => balance.effectiveBalance > 0.005);
+    const debtors = new Set(debtorBalances.map((b) => b.customerId)).size;
 
     const debtByCurrency: Record<string, number> = {};
-    for (const b of balances) {
-      debtByCurrency[b.currencyCode] = (debtByCurrency[b.currencyCode] ?? 0) + Number(b.accountingBalance);
+    for (const b of debtorBalances) {
+      debtByCurrency[b.currencyCode] = (debtByCurrency[b.currencyCode] ?? 0) + b.effectiveBalance;
     }
 
     // أحدث درجة لكل عميل (computedAt تنازلي — الأول لكل عميل يفوز)
@@ -238,6 +309,7 @@ export class DashboardService {
     const highRisk = await this.prisma.customer.findMany({
       where: {
         organizationId: orgId,
+        OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
         scores: { some: { riskLevel: { in: ['high', 'critical'] } } },
       },
       select: {
@@ -285,8 +357,8 @@ export class DashboardService {
     // Collector performance today: today's collections grouped by collector + currency.
     // Amounts stay separated by currency (no cross-currency summing), consistent with the rest
     // of this service. Uses only existing Collection/Collector data — no schema changes.
-    const today0 = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
-    const tomorrow0 = new Date(today0.getTime() + 86_400_000);
+    const today0 = today;
+    const tomorrow0 = tomorrow;
     const collectionsByCollector = await this.prisma.collection.groupBy({
       by: ['collectorId', 'currencyCode'],
       where: {
@@ -344,7 +416,8 @@ export class DashboardService {
       collectorId = own.id;
     }
 
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const today = startOfOrgDay(orgDateOnly());
+    const tomorrow = startOfNextOrgDay(orgDateOnly());
     const weekAgo = new Date(today.getTime() - 6 * 86_400_000);
 
     const [assignedCount, assignedCustomerIds] = await Promise.all([
@@ -379,7 +452,7 @@ export class DashboardService {
           by: ['currencyCode'],
           where: {
             collectorId, status: { not: 'reversed' },
-            collectedAt: { gte: today },
+            collectedAt: { gte: today, lt: tomorrow },
           },
           _sum: { amount: true }, _count: true,
         }),

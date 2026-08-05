@@ -7,8 +7,10 @@ import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nes
 import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { ExecuteImportDto } from './dto/execute-import.dto';
+import { ReverseImportDto } from './dto/reverse-import.dto';
 import { ImportsService } from './imports.service';
 
 @ApiTags('Imports')
@@ -51,7 +53,21 @@ export class ImportsController {
     @Body() dto: ExecuteImportDto,
     @Req() req: Request,
   ) {
-    return this.imports.execute(user, id, dto.force ?? false, req);
+    return this.imports.execute(user, id, dto.force ?? false, req, dto.accountingOverrideReason);
+  }
+
+  @Post(':id/reverse')
+  @HttpCode(200)
+  @Idempotent()
+  @RequirePermissions('imports.reverse')
+  @ApiOperation({ summary: 'التراجع الآمن عن أحدث دفعة استيراد مع حفظ جميع سجلات المصدر' })
+  reverse(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReverseImportDto,
+    @Req() req: Request,
+  ) {
+    return this.imports.reverse(user, id, dto.reason, req);
   }
 
   @Get()

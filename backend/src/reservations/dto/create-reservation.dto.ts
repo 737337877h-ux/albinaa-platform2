@@ -20,9 +20,13 @@ export class CreateReservationDto {
   @IsNumber() @IsPositive()
   quantity!: number;
 
-  @ApiProperty({ description: 'Unit of measure (e.g. ton, piece)' })
-  @IsString() @MaxLength(50)
-  unit!: string;
+  @ApiPropertyOptional({ description: 'Normalized unit id. Preferred over legacy unit text.' })
+  @IsOptional() @IsUUID()
+  unitId?: string;
+
+  @ApiPropertyOptional({ description: 'Legacy unit text; resolved to an active normalized unit.' })
+  @IsOptional() @IsString() @MaxLength(50)
+  unit?: string;
 
   @ApiProperty({ description: 'Unit price' })
   @IsNumber() @IsPositive()
@@ -43,6 +47,10 @@ export class CreateReservationDto {
   @ApiPropertyOptional()
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string;
+
+  @ApiPropertyOptional({ description: 'سبب تجاوز سقف الائتمان، ويتطلب صلاحية credit.override' })
+  @IsOptional() @IsString() @MaxLength(500)
+  overrideReason?: string;
 
   @ApiPropertyOptional()
   @IsOptional() @IsDateString()

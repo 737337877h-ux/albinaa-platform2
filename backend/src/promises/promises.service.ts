@@ -1,5 +1,5 @@
 import {
-  BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException,
+  BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
@@ -7,6 +7,7 @@ import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RiskRefreshService } from '../risk/risk-refresh.service';
 import { CreatePromiseDto } from './dto/create-promise.dto';
 import { PromiseStatusDto } from './dto/promise-status.dto';
 import { QueryPromisesDto } from './dto/query-promises.dto';
@@ -50,6 +51,7 @@ export class PromisesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly riskRefresh?: RiskRefreshService,
   ) {}
 
   private async collectorOf(user: AuthUser) {
@@ -370,6 +372,9 @@ export class PromisesService {
       },
       req,
     });
+    if (dto.status === 'unfulfilled') {
+      await this.riskRefresh?.trigger(actor, [before.customerId], 'promise_broken', req);
+    }
     return updated;
   }
 
@@ -435,6 +440,13 @@ export class PromisesService {
       },
       data: { status: 'due_today' },
     });
+    if (overdue.length) {
+      await this.riskRefresh?.triggerSystem(
+        orgId,
+        overdue.map((promise) => promise.customerId),
+        'promise_broken',
+      );
+    }
     this.logger.log(`[sweepOverdue] org=${orgId} — تم مسح ${overdue.length} وعدًا متأخرًا`);
     return { swept: overdue.length };
   }

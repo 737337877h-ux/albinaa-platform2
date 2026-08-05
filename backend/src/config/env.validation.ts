@@ -44,6 +44,16 @@ class EnvVars {
   @Min(1)
   @Max(50)
   MAX_SESSIONS_PER_USER?: number;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  RISK_AUTO_RECALCULATE_ENABLED?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(23)
+  RISK_RECALCULATE_HOUR?: number;
 }
 
 export function validateEnv(config: Record<string, unknown>) {
@@ -52,6 +62,8 @@ export function validateEnv(config: Record<string, unknown>) {
     JWT_ACCESS_TTL: Number(config.JWT_ACCESS_TTL ?? 900),
     JWT_REFRESH_TTL: Number(config.JWT_REFRESH_TTL ?? 604800),
     MAX_SESSIONS_PER_USER: Number(config.MAX_SESSIONS_PER_USER ?? 5),
+    RISK_AUTO_RECALCULATE_ENABLED: String(config.RISK_AUTO_RECALCULATE_ENABLED ?? 'true'),
+    RISK_RECALCULATE_HOUR: Number(config.RISK_RECALCULATE_HOUR ?? 2),
   });
   const errors = validateSync(validated, { skipMissingProperties: false });
   if (errors.length > 0) {

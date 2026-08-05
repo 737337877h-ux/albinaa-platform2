@@ -22,6 +22,7 @@ describe('M5 Review Fixes (e2e)', () => {
   let prisma: PrismaService;
   let adminToken: string;
   let collectorToken: string;
+  let checkerToken: string;
   let collectorId: string;
   let assignedCustomerId: string;    // 90001 — مسند للمحصل
   let unassignedCustomerId: string;  // 90003 — غير مسند
@@ -71,6 +72,15 @@ describe('M5 Review Fixes (e2e)', () => {
     collectorToken = (await request(app.getHttpServer())
       .post('/auth/login')
       .send({ username: `rev_${uniq}`, password: 'Test1234pass' }).expect(200)).body.accessToken;
+
+    const checker = await request(app.getHttpServer()).post('/users')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: `rev_checker_${uniq}`, fullName: 'مراجع عكس مستقل', password: 'Test1234pass' }).expect(201);
+    const cashierRole = await prisma.role.findFirstOrThrow({ where: { name: 'أمين الصندوق' } });
+    await request(app.getHttpServer()).post(`/users/${checker.body.id}/roles`)
+      .set('Authorization', `Bearer ${adminToken}`).send({ roleIds: [cashierRole.id] }).expect(201);
+    checkerToken = (await request(app.getHttpServer()).post('/auth/login')
+      .send({ username: `rev_checker_${uniq}`, password: 'Test1234pass' }).expect(200)).body.accessToken;
 
     methodId = (await prisma.collectionMethod.findFirstOrThrow({ where: { name: 'نقدي' } })).id;
   });
@@ -321,7 +331,17 @@ describe('M5 Review Fixes (e2e)', () => {
       const statuses = [r1.status, r2.status].sort();
       expect(statuses).toEqual([200, 409]);
 
-      // قيد دفتر عكسي واحد فقط (القيد الفريد في القاعدة هو الصمام)
+      const accepted = r1.status === 200 ? r1 : r2;
+      expect(accepted.body.status).toBe('pending');
+      expect(await prisma.operationalLedger.count({
+        where: { sourceTable: 'collections', sourceId: col.id, entryType: 'collection_reversal' },
+      })).toBe(0);
+
+      await request(app.getHttpServer())
+        .post(`/collections/reconciliation/reversal-requests/${accepted.body.requestId}/review`)
+        .set('Authorization', `Bearer ${checkerToken}`).send({ approve: true }).expect(200);
+
+      // بعد اعتماد المستخدم الثاني: قيد دفتر عكسي واحد فقط (القيد الفريد هو الصمام)
       const ledgerCount = await prisma.operationalLedger.count({
         where: { sourceTable: 'collections', sourceId: col.id, entryType: 'collection_reversal' },
       });

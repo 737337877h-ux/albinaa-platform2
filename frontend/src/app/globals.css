@@ -2,18 +2,70 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: light; }
-.dark { color-scheme: dark; }
+:root, .dark {
+  color-scheme: dark;
+  --surface-0: #0A1416;
+  --surface-1: #10201F;
+  --surface-2: #16302C;
+  --surface-3: #1E3F38;
+  --border: #24473F;
+  --border-lit: #2F6B5C;
+  --text-hi: #EAF6F2;
+  --text-mid: #A7C4BC;
+  --text-low: #6E8F87;
+  --brand: #00E5A0;
+  --brand-dim: #00B07C;
+  --brand-glow: rgba(0,229,160,0.28);
+  --gold: #FFC53D;
+  --gold-dim: #C99A20;
+  --gold-glow: rgba(255,197,61,0.22);
+  --risk-low: #00E5A0;
+  --risk-mid: #FFC53D;
+  --risk-high: #FF8A3D;
+  --risk-crit: #FF4D6D;
+  --crit-glow: rgba(255,77,109,0.30);
+  --info: #38BDF8;
+  --wa: #25D366;
+  --glow-brand: 0 0 0 1px var(--brand-glow), 0 8px 32px -8px var(--brand-glow);
+  --glow-crit: 0 0 0 1px var(--crit-glow), 0 8px 32px -8px var(--crit-glow);
+  --shadow-card: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  --radius: 14px;
+}
+.light {
+  color-scheme: light;
+  --surface-0: #F0F3F1; --surface-1: #FFFFFF; --surface-2: #E8EFEC; --surface-3: #D8E4DF;
+  --border: #C5D5CF; --border-lit: #2F6B5C; --text-hi: #10201F; --text-mid: #344B46; --text-low: #60736E;
+  --brand: #087A59; --brand-dim: #0B5F49; --brand-glow: rgba(8,122,89,.18);
+  --gold: #8A6200; --gold-dim: #6F5000; --gold-glow: rgba(138,98,0,.14);
+  --risk-low: #087A59; --risk-mid: #8A6200; --risk-high: #B45309; --risk-crit: #B4233C;
+  --crit-glow: rgba(180,35,60,.18); --info: #0369A1; --wa: #128C3E;
+  --glow-brand: 0 0 0 1px var(--brand-glow), 0 8px 24px -10px var(--brand-glow);
+  --glow-crit: 0 0 0 1px var(--crit-glow), 0 8px 24px -10px var(--crit-glow);
+  --shadow-card: 0 2px 4px rgba(15,26,28,.05), 0 10px 28px rgba(15,26,28,.07);
+}
 
 body {
-  @apply bg-concrete-50 text-iron-900 font-body antialiased;
-}
-.dark body {
-  @apply bg-iron-900 text-concrete-100;
+  background: var(--surface-0);
+  color: var(--text-hi);
+  font-family: 'Cairo', Tahoma, 'Segoe UI', system-ui, sans-serif;
+  @apply antialiased;
 }
 
+/* Keep secondary labels readable on the dark accounting screens. */
+.dark .text-concrete-500 { color: #A7C4BC; }
+.dark .text-concrete-600 { color: #C7D9D4; }
+.dark .text-pine-700 { color: #8FE3CB; }
+
 /* الأرقام المالية: جدولية دائمًا — قرار تصميمي أساسي لقراءة الكشوف */
-.tnum { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+.tnum { font-family: 'Space Grotesk', 'Segoe UI', Arial, sans-serif; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+
+@keyframes card-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes skeleton-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.ui-card { animation: card-enter 240ms ease-out both; }
+.reservation-glow { border-top: 2px solid transparent; background-image: linear-gradient(var(--surface-1), var(--surface-1)), linear-gradient(90deg, var(--info), var(--brand)); background-origin: border-box; background-clip: padding-box, border-box; }
+.critical-glow { box-shadow: var(--glow-crit) !important; }
+.data-density-compact th { padding-top: .35rem !important; padding-bottom: .35rem !important; }
+.data-density-compact td { padding-top: .4rem !important; padding-bottom: .4rem !important; }
 
 /* شريط التحذير المائل — يظهر حصريًا على المتأخر والتصعيد (معنى لا زينة) */
 .hazard-strip {
@@ -26,4 +78,17 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+@media print {
+  @page { size: A4; margin: 12mm; }
+  html, body { background: #fff !important; color: #0f1a1c !important; }
+  aside, header, nav, button, .print\:hidden { display: none !important; }
+  main { padding: 0 !important; margin: 0 !important; }
+  .report-print { display: block !important; width: 100% !important; }
+  .report-print input, .report-print select, .report-print label { display: none !important; }
+  .report-print table { width: 100% !important; border-collapse: collapse !important; }
+  .report-print tr, .report-print article { break-inside: avoid; }
+  .report-print th, .report-print td { border-color: #cbd5e1 !important; color: #0f1a1c !important; }
+  * { box-shadow: none !important; text-shadow: none !important; }
 }

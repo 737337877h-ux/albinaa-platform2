@@ -1,16 +1,25 @@
 import {
-  BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
+  BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
+import { BRANDING_KEYS } from '../common/branding';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { normalizeUploadedFilename } from '../common/uploaded-filename';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RiskRefreshService } from '../risk/risk-refresh.service';
 import { AssignCollectorDto } from './dto/assign-collector.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
 import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
+import { UpdateCreditLimitDto } from './dto/update-credit-limit.dto';
+import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
+import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
+import { renderCustomerStatementPdf } from './statement-pdf.renderer';
 
 /**
  * شكل استجابة GET /customers/:id/balances — تعريف صريح (بدل مصفوفة فارغة
@@ -37,11 +46,17 @@ function normalizeName(s: string): string {
     .trim();
 }
 
+function normalizeAlias(s: string): string {
+  return normalizeName(s).toLowerCase().replace(/[\s()+-]/g, '');
+}
+
 @Injectable()
 export class CustomersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
+    @Optional() private readonly riskRefresh?: RiskRefreshService,
   ) {}
 
   // --------------------------------------------------------------------------
@@ -50,23 +65,34 @@ export class CustomersService {
   // --------------------------------------------------------------------------
   private async scopeWhere(user: AuthUser): Promise<Prisma.CustomerWhereInput> {
     const base: Prisma.CustomerWhereInput = { organizationId: user.organizationId };
-    if (user.permissions.includes('customers.read_all')) return base;
-
     const collector = await this.prisma.collector.findUnique({ where: { userId: user.id } });
-    if (!collector) {
-      // ليس محصلاً ولا يملك رؤية شاملة → لا يرى أي عميل
-      return { ...base, id: 'no-access' };
+    const isCollectorOnly = user.roles.includes('المحصل')
+      && !user.roles.some((role) => ['مدير النظام', 'مدير المديونية', 'المحاسب'].includes(role));
+    if (isCollectorOnly) {
+      if (!collector) return { ...base, id: 'no-access' };
+      return {
+        ...base,
+        assignments: { some: { collectorId: collector.id, effectiveTo: null } },
+      };
     }
-    return {
-      ...base,
-      assignments: { some: { collectorId: collector.id, effectiveTo: null } },
-    };
+    if (user.permissions.includes('customers.read_all')) return base;
+    if (collector) {
+      return {
+        ...base,
+        assignments: { some: { collectorId: collector.id, effectiveTo: null } },
+      };
+    }
+    // ليس محصلاً ولا يملك رؤية شاملة → لا يرى أي عميل
+    return { ...base, id: 'no-access' };
   }
 
   private async assertAccess(user: AuthUser, customerId: string) {
     const where = await this.scopeWhere(user);
     const found = await this.prisma.customer.findFirst({ where: { ...where, id: customerId } });
     if (!found) throw new NotFoundException('العميل غير موجود أو خارج نطاق صلاحيتك');
+    if (found.mergedIntoId) {
+      throw new ConflictException(`تم دمج هذا السجل. استخدم العميل الأساسي: ${found.mergedIntoId}`);
+    }
     return found;
   }
 
@@ -77,6 +103,8 @@ export class CustomersService {
     const page = q.page ?? 1;
     const limit = q.limit ?? 25;
     const where = await this.scopeWhere(user);
+    if (q.accountClass === 'advance') where.customerType = 'advance';
+    else where.AND = [{ OR: [{ customerType: null }, { customerType: { not: 'advance' } }] }];
 
     if (q.search) {
       const s = q.search.trim();
@@ -86,13 +114,18 @@ export class CustomersService {
         { phonePrimary: { contains: s } },
         { phoneSecondary: { contains: s } },
         { whatsapp: { contains: s } },
+        { aliases: { some: { aliasNormalized: { contains: normalizeAlias(s) } } } },
       ];
     }
     if (q.region) where.region = q.region;
     if (q.branchId) where.branchId = q.branchId;
     if (q.status) where.status = q.status;
+    else where.status = { not: 'merged' };
     if (q.collectorId) {
       where.assignments = { some: { collectorId: q.collectorId, effectiveTo: null } };
+    }
+    if (q.currency && !q.balanceState) {
+      where.balances = { some: { currencyCode: q.currency } };
     }
     if (q.balanceState) {
       const balFilter: Prisma.CustomerBalanceWhereInput =
@@ -103,6 +136,10 @@ export class CustomersService {
             : { accountingBalance: 0 };
       if (q.currency) balFilter.currencyCode = q.currency;
       where.balances = { some: balFilter };
+    } else if (q.excludeZero) {
+      const nonZero: Prisma.CustomerBalanceWhereInput = { accountingBalance: { not: 0 } };
+      if (q.currency) nonZero.currencyCode = q.currency;
+      where.balances = { some: nonZero };
     }
 
     // الترتيب بالرصيد يتطلب عملة محددة (رصيد العميل معرّف لكل عملة، لا إجمالي مخلوط)
@@ -168,6 +205,11 @@ export class CustomersService {
         include: { collector: { include: { user: { select: { fullName: true } } } } },
       },
       branch: { select: { id: true, name: true } },
+      scores: {
+        orderBy: { computedAt: 'desc' as const },
+        take: 1,
+        select: { score: true, riskLevel: true, computedAt: true },
+      },
     } satisfies Prisma.CustomerInclude;
   }
 
@@ -175,13 +217,22 @@ export class CustomersService {
     return {
       id: c.id,
       externalCustomerCode: c.externalCustomerCode,
+      accountNumber: c.accountNumber,
       name: c.name,
       phonePrimary: c.phonePrimary,
       region: c.region,
       status: c.status,
+      customerType: c.customerType,
       branch: c.branch,
       currentCollector: c.assignments[0]
         ? { id: c.assignments[0].collectorId, name: c.assignments[0].collector.user.fullName }
+        : null,
+      riskRating: c.scores[0]
+        ? {
+            score: Number(c.scores[0].score),
+            level: c.scores[0].riskLevel,
+            computedAt: c.scores[0].computedAt,
+          }
         : null,
       balances: c.balances.map((b: any) => ({
         currency: b.currencyCode,
@@ -201,6 +252,7 @@ export class CustomersService {
       include: {
         branch: { select: { id: true, name: true } },
         creditPolicy: true,
+        creditLimits: { include: { approver: { select: { fullName: true } } }, orderBy: { currencyCode: 'asc' } },
         balances: { include: { lastImportJob: { select: { id: true, importedAt: true, fileName: true } } } },
         assignments: {
           orderBy: { effectiveFrom: 'desc' },
@@ -214,6 +266,18 @@ export class CustomersService {
     });
 
     const current = c.assignments.find((a) => a.effectiveTo === null) ?? null;
+    const ledgerDeltas = new Map<string, number>();
+    for (const balance of c.balances) {
+      const aggregate = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: id,
+          currencyCode: balance.currencyCode,
+          ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
+        },
+      });
+      ledgerDeltas.set(balance.currencyCode, Number(aggregate._sum.amountSigned ?? 0));
+    }
     return {
       // البيانات الأساسية
       id: c.id,
@@ -236,11 +300,12 @@ export class CustomersService {
       balances: c.balances.map((b) => ({
         currency: b.currencyCode,
         accountingBalance: Number(b.accountingBalance),
+        operationalBalance: Number(b.accountingBalance) + (ledgerDeltas.get(b.currencyCode) ?? 0),
         declaredBalance: b.declaredBalance === null ? null : Number(b.declaredBalance),
         openingDebit: Number(b.openingDebit),
         openingCredit: Number(b.openingCredit),
         lastImport: b.lastImportJob
-          ? { jobId: b.lastImportJob.id, at: b.lastImportJob.importedAt, file: b.lastImportJob.fileName }
+          ? { jobId: b.lastImportJob.id, at: b.lastImportJob.importedAt, file: normalizeUploadedFilename(b.lastImportJob.fileName) }
           : null,
         updatedAt: b.updatedAt,
       })),
@@ -255,6 +320,18 @@ export class CustomersService {
       assignmentHistoryCount: c.assignments.length,
       // السياسة الائتمانية والمخاطر
       creditPolicy: c.creditPolicy,
+      creditLimits: c.creditLimits.map((limit) => {
+        const balance = c.balances.find((item) => item.currencyCode === limit.currencyCode);
+        const used = Math.max(0, Number(balance?.accountingBalance ?? 0));
+        const amount = Number(limit.amount);
+        return {
+          ...limit,
+          amount,
+          used,
+          available: Math.max(0, amount - used),
+          usagePercent: amount > 0 ? (used / amount) * 100 : used > 0 ? 100 : 0,
+        };
+      }),
       latestScore: c.scores[0] ?? null,
       pendingDuplicateAlerts: c.duplicatesAsA.length + c.duplicatesAsB.length,
       // عدادات النشاط (المتابعات/الوعود/التحصيل تُفعَّل في مراحلها)
@@ -270,7 +347,7 @@ export class CustomersService {
     const [snapshots, assignments, audits, customer, followups, promises, collections] =
       await Promise.all([
         this.prisma.balanceSnapshot.findMany({
-          where: { customerId: id },
+          where: { customerId: id, reversedAt: null },
           include: { importJob: { select: { fileName: true } } },
         }),
         this.prisma.customerAssignment.findMany({
@@ -314,7 +391,7 @@ export class CustomersService {
       events.push({
         at: s.snapshotAt,
         type: 'balance_snapshot',
-        title: `تحديث رصيد من استيراد (${s.importJob.fileName})`,
+        title: `تحديث رصيد من استيراد (${normalizeUploadedFilename(s.importJob.fileName)})`,
         details: { currency: s.currencyCode, balance: Number(s.balance) },
       });
     }
@@ -384,17 +461,14 @@ export class CustomersService {
     const result: CustomerBalanceResult[] = [];
     for (const b of rows) {
       // الرصيد التشغيلي = المحاسبي + صافي قيود الدفتر بعد آخر استيراد (لا يُعدل يدويًا)
-      let ledgerDelta = 0;
-      if (b.lastImportJob) {
-        const agg = await this.prisma.operationalLedger.aggregate({
-          _sum: { amountSigned: true },
-          where: {
-            customerId: id, currencyCode: b.currencyCode,
-            createdAt: { gt: b.lastImportJob.importedAt },
-          },
-        });
-        ledgerDelta = Number(agg._sum.amountSigned ?? 0);
-      }
+      const agg = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: id, currencyCode: b.currencyCode,
+          ...(b.lastImportJob ? { createdAt: { gt: b.lastImportJob.importedAt } } : {}),
+        },
+      });
+      const ledgerDelta = Number(agg._sum.amountSigned ?? 0);
       result.push({
         currency: b.currencyCode,
         accountingBalance: Number(b.accountingBalance),
@@ -419,10 +493,9 @@ export class CustomersService {
     const balance = await this.prisma.customerBalance.findUnique({
       where: { customerId_currencyCode: { customerId: id, currencyCode: q.currency } },
     });
-    if (!balance) throw new NotFoundException(`لا يوجد حساب بعملة ${q.currency} لهذا العميل`);
 
     const baseWhere: Prisma.ImportedTransactionWhereInput = {
-      customerId: id, currencyCode: q.currency,
+      customerId: id, currencyCode: q.currency, reversedAt: null,
     };
     const rangeWhere: Prisma.ImportedTransactionWhereInput = { ...baseWhere };
     if (q.fromDate || q.toDate) {
@@ -431,56 +504,90 @@ export class CustomersService {
       if (q.toDate) (rangeWhere.txDate as any).lte = new Date(q.toDate);
     }
 
-    // رصيد بداية الفترة = الافتتاحي + كل الحركات السابقة لبداية الفترة
-    const opening = Number(balance.openingDebit) - Number(balance.openingCredit);
-    let startBalance = opening;
-    if (q.fromDate) {
-      const prior = await this.prisma.importedTransaction.aggregate({
-        _sum: { debit: true, credit: true },
-        where: { ...baseWhere, txDate: { lt: new Date(q.fromDate) } },
-      });
-      startBalance += Number(prior._sum.debit ?? 0) - Number(prior._sum.credit ?? 0);
+    const ledgerBaseWhere: Prisma.OperationalLedgerWhereInput = {
+      customerId: id,
+      currencyCode: q.currency,
+      ...(balance?.lastImportJobId
+        ? { createdAt: { gt: (await this.prisma.importJob.findUniqueOrThrow({ where: { id: balance.lastImportJobId }, select: { importedAt: true } })).importedAt } }
+        : {}),
+    };
+    const ledgerRangeWhere: Prisma.OperationalLedgerWhereInput = { ...ledgerBaseWhere };
+    if (q.fromDate || q.toDate) {
+      const createdAt: Prisma.DateTimeFilter = { ...((ledgerBaseWhere.createdAt as Prisma.DateTimeFilter | undefined) ?? {}) };
+      if (q.fromDate) createdAt.gte = new Date(`${q.fromDate}T00:00:00.000+03:00`);
+      if (q.toDate) createdAt.lt = new Date(new Date(`${q.toDate}T00:00:00.000+03:00`).getTime() + 86_400_000);
+      ledgerRangeWhere.createdAt = createdAt;
     }
 
-    const total = await this.prisma.importedTransaction.count({ where: rangeWhere });
-    // الرصيد الجاري يتطلب معرفة مجموع ما قبل الصفحة الحالية داخل الفترة
-    const beforePage = await this.prisma.importedTransaction.findMany({
-      where: rangeWhere,
-      orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
-      take: (page - 1) * limit,
-      select: { debit: true, credit: true },
-    });
-    let running = startBalance
-      + beforePage.reduce((s, t) => s + Number(t.debit) - Number(t.credit), 0);
+    // رصيد بداية الفترة = الافتتاحي + الحركات المحاسبية + القيود التشغيلية غير المستوردة بعد.
+    const opening = balance ? Number(balance.openingDebit) - Number(balance.openingCredit) : 0;
+    let startBalance = opening;
+    if (q.fromDate) {
+      const [prior, priorLedger] = await Promise.all([
+        this.prisma.importedTransaction.aggregate({
+          _sum: { debit: true, credit: true },
+          where: { ...baseWhere, txDate: { lt: new Date(q.fromDate) } },
+        }),
+        this.prisma.operationalLedger.aggregate({
+          _sum: { amountSigned: true },
+          where: { ...ledgerBaseWhere, createdAt: { ...((ledgerBaseWhere.createdAt as Prisma.DateTimeFilter | undefined) ?? {}), lt: new Date(`${q.fromDate}T00:00:00.000+03:00`) } },
+        }),
+      ]);
+      startBalance += Number(prior._sum.debit ?? 0) - Number(prior._sum.credit ?? 0)
+        + Number(priorLedger._sum.amountSigned ?? 0);
+    }
 
-    const txns = await this.prisma.importedTransaction.findMany({
-      where: rangeWhere,
-      orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
-      skip: (page - 1) * limit,
-      take: limit,
-      include: { documentType: { select: { name: true } } },
-    });
+    const [txns, ledgerRows] = await Promise.all([
+      this.prisma.importedTransaction.findMany({
+        where: rangeWhere,
+        orderBy: [{ txDate: 'asc' }, { sourceRowNumber: 'asc' }],
+        include: { documentType: { select: { name: true } } },
+      }),
+      this.prisma.operationalLedger.findMany({ where: ledgerRangeWhere, orderBy: { createdAt: 'asc' } }),
+    ]);
+    const collectionSources = ledgerRows.length ? await this.prisma.collection.findMany({
+      where: { id: { in: ledgerRows.map((row) => row.sourceId) } },
+      select: { id: true, collectedAt: true, receiptNumber: true, referenceNumber: true },
+    }) : [];
+    const collectionById = new Map(collectionSources.map((row) => [row.id, row]));
+    const unified = [
+      ...txns.map((t) => ({
+        date: t.txDate, order: t.sourceRowNumber ?? 0, documentType: t.documentType.name,
+        documentNumber: t.documentNumber, description: t.description, reference: t.referenceNumber,
+        debit: Number(t.debit), credit: Number(t.credit),
+      })),
+      ...ledgerRows.map((entry, index) => ({
+        date: collectionById.get(entry.sourceId)?.collectedAt ?? entry.createdAt, order: 1_000_000 + index,
+        documentType: entry.entryType === 'collection_reversal' ? 'عكس تحصيل' : 'تحصيل',
+        documentNumber: null, description: entry.entryType === 'collection_reversal' ? 'عكس تحصيل موثق' : 'تحصيل مسجل في المنصة',
+        reference: collectionById.get(entry.sourceId)?.receiptNumber ?? collectionById.get(entry.sourceId)?.referenceNumber ?? entry.sourceId,
+        debit: Math.max(0, Number(entry.amountSigned)), credit: Math.max(0, -Number(entry.amountSigned)),
+      })),
+    ].sort((a, b) => a.date.getTime() - b.date.getTime() || a.order - b.order);
 
-    const items = txns.map((t) => {
-      running += Number(t.debit) - Number(t.credit);
-      return {
-        date: t.txDate,
-        documentType: t.documentType.name,
-        documentNumber: t.documentNumber,
-        description: t.description,
-        reference: t.referenceNumber,
-        debit: Number(t.debit),
-        credit: Number(t.credit),
-        runningBalance: running,
-      };
+    const periodTotals = unified.reduce((totals, row) => ({ debit: totals.debit + row.debit, credit: totals.credit + row.credit }), { debit: 0, credit: 0 });
+    const periodEndBalance = startBalance + periodTotals.debit - periodTotals.credit;
+    const beforePage = unified.slice(0, (page - 1) * limit);
+    let running = startBalance + beforePage.reduce((sum, row) => sum + row.debit - row.credit, 0);
+    const items = unified.slice((page - 1) * limit, page * limit).map((row) => {
+      running += row.debit - row.credit;
+      return { ...row, runningBalance: running };
     });
+    const currentLedger = await this.prisma.operationalLedger.aggregate({
+      _sum: { amountSigned: true }, where: ledgerBaseWhere,
+    });
+    const currentBalance = (balance ? Number(balance.accountingBalance) : periodEndBalance)
+      + Number(currentLedger._sum.amountSigned ?? 0);
 
     return {
       currency: q.currency,
       openingBalance: opening,
       periodStartBalance: startBalance,
-      currentBalance: Number(balance.accountingBalance),
-      page, limit, total, totalPages: Math.ceil(total / limit),
+      periodEndBalance,
+      currentBalance,
+      accountingBalance: balance ? Number(balance.accountingBalance) : periodEndBalance,
+      equationClosed: Math.abs(periodEndBalance - currentBalance) < 0.005,
+      page, limit, total: unified.length, totalPages: Math.ceil(unified.length / limit),
       items,
     };
   }
@@ -701,20 +808,415 @@ export class CustomersService {
       where: {
         reviewStatus: 'pending',
         customerA: { organizationId: actor.organizationId },
+        customerB: { organizationId: actor.organizationId },
       },
       include: {
         customerA: {
           select: {
-            id: true, externalCustomerCode: true, name: true,
+            id: true, externalCustomerCode: true, name: true, phonePrimary: true, whatsapp: true,
             balances: { select: { currencyCode: true, accountingBalance: true } },
+            _count: { select: { importedTxns: true, followups: true, promises: true, collections: true, reservations: true, tasks: true } },
           },
         },
         customerB: {
           select: {
-            id: true, externalCustomerCode: true, name: true,
+            id: true, externalCustomerCode: true, name: true, phonePrimary: true, whatsapp: true,
             balances: { select: { currencyCode: true, accountingBalance: true } },
+            _count: { select: { importedTxns: true, followups: true, promises: true, collections: true, reservations: true, tasks: true } },
           },
         },
+      },
+    });
+  }
+
+  async advancesSummary(user: AuthUser) {
+    const where = await this.scopeWhere(user);
+    where.customerType = 'advance';
+    where.status = 'active';
+    const rows = await this.prisma.customer.findMany({
+      where,
+      select: {
+        id: true,
+        balances: { select: { currencyCode: true, accountingBalance: true } },
+      },
+    });
+    const byCurrency: Record<string, { accounts: number; balance: number }> = {};
+    for (const row of rows) {
+      for (const balance of row.balances) {
+        byCurrency[balance.currencyCode] ??= { accounts: 0, balance: 0 };
+        byCurrency[balance.currencyCode].accounts += 1;
+        byCurrency[balance.currencyCode].balance += Number(balance.accountingBalance);
+      }
+    }
+    return { accounts: rows.length, byCurrency };
+  }
+
+  // --------------------------------------------------------------------------
+  // Customer account groups (primary + sub-accounts), without merging data.
+  // --------------------------------------------------------------------------
+  async accountGroup(user: AuthUser, id: string) {
+    await this.assertAccess(user, id);
+    const childLink = await this.prisma.customerAccountLink.findUnique({
+      where: { childCustomerId: id },
+      select: { primaryCustomerId: true },
+    });
+    const primaryId = childLink?.primaryCustomerId ?? id;
+    const links = await this.prisma.customerAccountLink.findMany({
+      where: { organizationId: user.organizationId, primaryCustomerId: primaryId },
+      select: { childCustomerId: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const memberIds = [primaryId, ...links.map((link) => link.childCustomerId)];
+    const scope = await this.scopeWhere(user);
+    const members = await this.prisma.customer.findMany({
+      where: { ...scope, id: { in: memberIds }, status: { not: 'merged' } },
+      select: {
+        id: true,
+        externalCustomerCode: true,
+        name: true,
+        balances: {
+          select: {
+            currencyCode: true,
+            accountingBalance: true,
+            lastImportJob: { select: { importedAt: true } },
+          },
+        },
+      },
+    });
+    const enrichedMembers = await Promise.all(members.map(async (member) => ({
+      ...member,
+      balances: await Promise.all(member.balances.map(async (balance) => {
+        const ledger = await this.prisma.operationalLedger.aggregate({
+          _sum: { amountSigned: true },
+          where: {
+            customerId: member.id,
+            currencyCode: balance.currencyCode,
+            ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
+          },
+        });
+        return {
+          currencyCode: balance.currencyCode,
+          accountingBalance: Number(balance.accountingBalance),
+          operationalBalance: Number(balance.accountingBalance) + Number(ledger._sum.amountSigned ?? 0),
+        };
+      })),
+    })));
+    const memberMap = new Map(enrichedMembers.map((member) => [member.id, member]));
+    const primary = memberMap.get(primaryId) ?? null;
+    const children = links
+      .map((link) => memberMap.get(link.childCustomerId))
+      .filter((member): member is NonNullable<typeof member> => !!member);
+    const groupTotals = new Map<string, number>();
+    const childTotals = new Map<string, number>();
+    for (const member of enrichedMembers) {
+      for (const balance of member.balances) {
+        groupTotals.set(
+          balance.currencyCode,
+          (groupTotals.get(balance.currencyCode) ?? 0) + balance.operationalBalance,
+        );
+        if (member.id !== primaryId) {
+          childTotals.set(
+            balance.currencyCode,
+            (childTotals.get(balance.currencyCode) ?? 0) + balance.operationalBalance,
+          );
+        }
+      }
+    }
+    const sortedBalances = (totals: Map<string, number>) => [...totals.entries()]
+      .map(([currency, balance]) => ({ currency, balance }))
+      .sort((a, b) => a.currency.localeCompare(b.currency));
+    return {
+      role: id === primaryId ? (links.length ? 'primary' : 'standalone') : 'child',
+      primary,
+      children,
+      childBalances: sortedBalances(childTotals),
+      aggregateBalances: sortedBalances(groupTotals),
+    };
+  }
+
+  async linkChildAccount(
+    actor: AuthUser,
+    primaryCustomerId: string,
+    childCustomerId: string,
+    req?: Request,
+  ) {
+    if (primaryCustomerId === childCustomerId) {
+      throw new BadRequestException('لا يمكن ربط الحساب بنفسه');
+    }
+    const [primary, child] = await Promise.all([
+      this.assertAccess(actor, primaryCustomerId),
+      this.assertAccess(actor, childCustomerId),
+    ]);
+    if (primary.organizationId !== child.organizationId || primary.organizationId !== actor.organizationId) {
+      throw new BadRequestException('يجب أن يكون الحسابان ضمن المنشأة نفسها');
+    }
+    const [primaryAsChild, childAsPrimary, currentLink] = await Promise.all([
+      this.prisma.customerAccountLink.findUnique({ where: { childCustomerId: primaryCustomerId } }),
+      this.prisma.customerAccountLink.count({ where: { primaryCustomerId: childCustomerId } }),
+      this.prisma.customerAccountLink.findUnique({ where: { childCustomerId } }),
+    ]);
+    if (primaryAsChild) {
+      throw new ConflictException('الحساب المختار كرئيسي هو حساب فرعي حاليًا؛ فك ارتباطه أولًا');
+    }
+    if (childAsPrimary > 0) {
+      throw new ConflictException('الحساب الفرعي المختار رئيسي لمجموعة أخرى؛ انقل حساباته أولًا');
+    }
+    if (currentLink) {
+      if (currentLink.primaryCustomerId === primaryCustomerId) return this.accountGroup(actor, primaryCustomerId);
+      throw new ConflictException('الحساب الفرعي مرتبط بحساب رئيسي آخر؛ فك الارتباط أولًا');
+    }
+    const link = await this.prisma.customerAccountLink.create({
+      data: { organizationId: actor.organizationId, primaryCustomerId, childCustomerId },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'customer_sub_account_linked',
+      entityTable: 'customers',
+      entityId: primaryCustomerId,
+      newValue: {
+        linkId: link.id,
+        primaryCustomerId,
+        primaryCode: primary.externalCustomerCode,
+        childCustomerId,
+        childCode: child.externalCustomerCode,
+      },
+      req,
+    });
+    return this.accountGroup(actor, primaryCustomerId);
+  }
+
+  async linkChildAccounts(
+    actor: AuthUser,
+    primaryCustomerId: string,
+    childCustomerIds: string[],
+    req?: Request,
+  ) {
+    const uniqueIds = [...new Set(childCustomerIds)].filter((id) => id !== primaryCustomerId);
+    if (uniqueIds.length === 0) throw new BadRequestException('حدد حسابًا فرعيًا واحدًا على الأقل');
+
+    const primary = await this.assertAccess(actor, primaryCustomerId);
+    const scope = await this.scopeWhere(actor);
+    const [children, primaryAsChild, currentLinks, childPrimaryLinks] = await Promise.all([
+      this.prisma.customer.findMany({
+        where: { ...scope, id: { in: uniqueIds }, status: { not: 'merged' } },
+        select: { id: true, externalCustomerCode: true, name: true, organizationId: true, customerType: true },
+      }),
+      this.prisma.customerAccountLink.findUnique({ where: { childCustomerId: primaryCustomerId } }),
+      this.prisma.customerAccountLink.findMany({ where: { childCustomerId: { in: uniqueIds } } }),
+      this.prisma.customerAccountLink.findMany({
+        where: { primaryCustomerId: { in: uniqueIds } },
+        select: { primaryCustomerId: true },
+      }),
+    ]);
+
+    if (children.length !== uniqueIds.length) {
+      throw new BadRequestException('بعض الحسابات المحددة غير موجودة أو خارج نطاق صلاحيتك');
+    }
+    if (primaryAsChild) {
+      throw new ConflictException('الحساب المختار كرئيسي هو حساب فرعي حاليًا؛ فك ارتباطه أولًا');
+    }
+    const childPrimaryIds = new Set(childPrimaryLinks.map((link) => link.primaryCustomerId));
+    const conflicts = children.filter((child) => {
+      const current = currentLinks.find((link) => link.childCustomerId === child.id);
+      return child.organizationId !== primary.organizationId
+        || (child.customerType === 'advance') !== (primary.customerType === 'advance')
+        || childPrimaryIds.has(child.id)
+        || (!!current && current.primaryCustomerId !== primaryCustomerId);
+    });
+    if (conflicts.length > 0) {
+      throw new ConflictException(
+        `تعذر ربط حسابات من نوع مختلف أو مرتبطة بمجموعات أخرى: ${conflicts.map((c) => c.externalCustomerCode).join('، ')}`,
+      );
+    }
+
+    const alreadyLinked = new Set(
+      currentLinks
+        .filter((link) => link.primaryCustomerId === primaryCustomerId)
+        .map((link) => link.childCustomerId),
+    );
+    const toCreate = children.filter((child) => !alreadyLinked.has(child.id));
+    if (toCreate.length > 0) {
+      await this.prisma.customerAccountLink.createMany({
+        data: toCreate.map((child) => ({
+          organizationId: actor.organizationId,
+          primaryCustomerId,
+          childCustomerId: child.id,
+        })),
+      });
+      for (const child of toCreate) {
+        await this.audit.log({
+          userId: actor.id,
+          action: 'customer_sub_account_linked',
+          entityTable: 'customers',
+          entityId: primaryCustomerId,
+          newValue: {
+            primaryCustomerId,
+            primaryCode: primary.externalCustomerCode,
+            childCustomerId: child.id,
+            childCode: child.externalCustomerCode,
+            bulk: true,
+          },
+          req,
+        });
+      }
+    }
+    return { linkedCount: toCreate.length, ...(await this.accountGroup(actor, primaryCustomerId)) };
+  }
+
+  async unlinkChildAccount(
+    actor: AuthUser,
+    primaryCustomerId: string,
+    childCustomerId: string,
+    req?: Request,
+  ) {
+    await Promise.all([
+      this.assertAccess(actor, primaryCustomerId),
+      this.assertAccess(actor, childCustomerId),
+    ]);
+    const link = await this.prisma.customerAccountLink.findFirst({
+      where: { organizationId: actor.organizationId, primaryCustomerId, childCustomerId },
+    });
+    if (!link) throw new NotFoundException('رابط الحساب الفرعي غير موجود');
+    await this.prisma.customerAccountLink.delete({ where: { id: link.id } });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'customer_sub_account_unlinked',
+      entityTable: 'customers',
+      entityId: primaryCustomerId,
+      oldValue: { linkId: link.id, primaryCustomerId, childCustomerId },
+      req,
+    });
+    return this.accountGroup(actor, primaryCustomerId);
+  }
+
+  async statementPdf(user: AuthUser, id: string, q: StatementQueryDto): Promise<Buffer> {
+    await this.assertAccess(user, id);
+    const customer = await this.prisma.customer.findUniqueOrThrow({
+      where: { id },
+      include: {
+        organization: {
+          select: {
+            name: true,
+            systemSettings: {
+              where: { key: { in: [...BRANDING_KEYS] } },
+              select: { key: true, value: true },
+            },
+          },
+        },
+      },
+    });
+    const first = await this.statement(user, id, { ...q, page: 1, limit: 200 });
+    const items = [...first.items];
+    for (let page = 2; page <= first.totalPages; page += 1) {
+      const next = await this.statement(user, id, { ...q, page, limit: 200 });
+      items.push(...next.items);
+    }
+
+    return renderCustomerStatementPdf(customer, first, items, {
+      ...q,
+      printedBy: user.username,
+    });
+  }
+
+  async updateCreditPolicy(
+    actor: AuthUser, id: string, dto: UpdateCreditPolicyDto, req?: Request,
+  ) {
+    await this.assertAccess(actor, id);
+    if (!actor.permissions.includes('customers.write')) {
+      throw new ForbiddenException('تعديل السياسة الائتمانية يتطلب صلاحية customers.write');
+    }
+    const before = await this.prisma.customerCreditPolicy.findUnique({ where: { customerId: id } });
+    const currencyCode = dto.creditLimitCurrency ?? before?.creditLimitCurrency ?? null;
+    const amount = dto.creditLimitAmount === undefined
+      ? before?.creditLimitAmount ?? null
+      : dto.creditLimitAmount;
+    if (amount != null && !currencyCode) {
+      throw new BadRequestException('حدد عملة حد الائتمان عند إدخال قيمة الحد');
+    }
+    if (currencyCode) {
+      const currency = await this.prisma.currency.findFirst({
+        where: { code: currencyCode, active: true },
+      });
+      if (!currency) throw new BadRequestException('عملة حد الائتمان غير معروفة أو معطلة');
+    }
+    const data = {
+      ...dto,
+      ...(dto.creditLimitAmount === null ? { creditLimitCurrency: null } : {}),
+      decidedBy: actor.id,
+      decidedAt: new Date(),
+    };
+    const policy = await this.prisma.customerCreditPolicy.upsert({
+      where: { customerId: id },
+      update: data,
+      create: {
+        customerId: id,
+        allowCreditSale: dto.allowCreditSale ?? false,
+        allowPurchaseWithDebt: dto.allowPurchaseWithDebt ?? false,
+        defaultPaymentDays: dto.defaultPaymentDays ?? null,
+        creditLimitAmount: dto.creditLimitAmount ?? null,
+        creditLimitCurrency: dto.creditLimitAmount == null ? null : dto.creditLimitCurrency,
+        creditStatus: dto.creditStatus ?? 'open',
+        restrictionReason: dto.restrictionReason ?? null,
+        decidedBy: actor.id,
+        decidedAt: new Date(),
+      },
+    });
+    if (amount != null && currencyCode) {
+      await this.prisma.customerCreditLimit.upsert({
+        where: { customerId_currencyCode: { customerId: id, currencyCode } },
+        update: { amount, approvedBy: actor.id, approvedAt: new Date() },
+        create: { customerId: id, currencyCode, amount, approvedBy: actor.id },
+      });
+    }
+    await this.audit.log({
+      userId: actor.id,
+      action: 'credit_policy_updated',
+      entityTable: 'customer_credit_policies',
+      entityId: id,
+      oldValue: before ? JSON.parse(JSON.stringify(before)) : null,
+      newValue: JSON.parse(JSON.stringify(policy)),
+      req,
+    });
+    await this.riskRefresh?.trigger(actor, [id], 'credit_policy_changed', req);
+    return policy;
+  }
+
+  async updateCreditLimit(
+    actor: AuthUser, id: string, currencyCode: string, dto: UpdateCreditLimitDto, req?: Request,
+  ) {
+    await this.assertAccess(actor, id);
+    const currency = await this.prisma.currency.findFirst({ where: { code: currencyCode, active: true } });
+    if (!currency) throw new BadRequestException('عملة سقف الائتمان غير معروفة أو معطلة');
+    const effectiveFrom = dto.effectiveFrom ? new Date(dto.effectiveFrom) : new Date();
+    const before = await this.prisma.customerCreditLimit.findUnique({
+      where: { customerId_currencyCode: { customerId: id, currencyCode } },
+    });
+    const limit = await this.prisma.customerCreditLimit.upsert({
+      where: { customerId_currencyCode: { customerId: id, currencyCode } },
+      update: { amount: dto.amount, effectiveFrom, approvedBy: actor.id, approvedAt: new Date() },
+      create: { customerId: id, currencyCode, amount: dto.amount, effectiveFrom, approvedBy: actor.id },
+      include: { approver: { select: { fullName: true } } },
+    });
+    await this.audit.log({
+      userId: actor.id, action: 'credit_limit_approved', entityTable: 'customer_credit_limits',
+      entityId: limit.id, oldValue: before ? JSON.parse(JSON.stringify(before)) : null,
+      newValue: JSON.parse(JSON.stringify(limit)), reason: dto.reason ?? null, req,
+    });
+    await this.riskRefresh?.trigger(actor, [id], 'credit_policy_changed', req);
+    return limit;
+  }
+
+  async listMerges(actor: AuthUser) {
+    return this.prisma.customerMerge.findMany({
+      where: { organizationId: actor.organizationId },
+      orderBy: { mergedAt: 'desc' },
+      take: 50,
+      select: {
+        id: true, status: true, mergedAt: true, reversibleUntil: true, reversedAt: true,
+        master: { select: { id: true, name: true, externalCustomerCode: true } },
+        source: { select: { id: true, name: true, externalCustomerCode: true } },
+        creator: { select: { fullName: true } },
+        reverser: { select: { fullName: true } },
       },
     });
   }
@@ -726,7 +1228,7 @@ export class CustomersService {
   async dataQuality(actor: AuthUser) {
     const orgId = actor.organizationId;
 
-    const [missingPhone, pendingDuplicatePairs, currencyGroups, balances] = await Promise.all([
+    const [missingPhone, pendingDuplicatePairs, currencyGroups, balances, unclassifiedReservationUnits] = await Promise.all([
       this.prisma.customer.count({
         where: { organizationId: orgId, OR: [{ phonePrimary: null }, { phonePrimary: '' }] },
       }),
@@ -745,6 +1247,13 @@ export class CustomersService {
         },
         select: { accountingBalance: true, declaredBalance: true },
       }),
+      this.prisma.reservation.count({
+        where: {
+          customer: { organizationId: orgId },
+          unit: { not: null },
+          unitId: null,
+        },
+      }),
     ]);
 
     const multiCurrencyCustomers = currencyGroups.filter((g) => g._count.currencyCode > 1).length;
@@ -752,7 +1261,13 @@ export class CustomersService {
       (b) => b.declaredBalance !== null && Number(b.declaredBalance) !== Number(b.accountingBalance),
     ).length;
 
-    return { missingPhone, pendingDuplicatePairs, multiCurrencyCustomers, suspiciousBalances };
+    return {
+      missingPhone,
+      pendingDuplicatePairs,
+      multiCurrencyCustomers,
+      suspiciousBalances,
+      unclassifiedReservationUnits,
+    };
   }
 
   async reviewDuplicate(actor: AuthUser, pairId: string, decision: string, req?: Request) {
@@ -772,5 +1287,398 @@ export class CustomersService {
       entityId: pairId, newValue: { decision }, req,
     });
     return updated;
+  }
+
+  async mergeDuplicate(actor: AuthUser, pairId: string, dto: MergeDuplicateDto, req?: Request) {
+    const now = new Date();
+    const reversibleUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const pair = await tx.potentialDuplicateCustomer.findFirst({
+        where: { id: pairId, reviewStatus: 'pending', customerA: { organizationId: actor.organizationId } },
+      });
+      if (!pair) throw new NotFoundException('حالة التشابه غير موجودة أو تمت مراجعتها');
+      if (![pair.customerAId, pair.customerBId].includes(dto.masterCustomerId)) {
+        throw new BadRequestException('العميل الأساسي يجب أن يكون أحد طرفي حالة التشابه');
+      }
+
+      const sourceCustomerId = pair.customerAId === dto.masterCustomerId
+        ? pair.customerBId
+        : pair.customerAId;
+      const [master, source] = await Promise.all([
+        tx.customer.findFirst({
+          where: { id: dto.masterCustomerId, organizationId: actor.organizationId },
+          include: { balances: true, creditPolicy: true, creditLimits: true },
+        }),
+        tx.customer.findFirst({
+          where: { id: sourceCustomerId, organizationId: actor.organizationId },
+          include: { balances: true, creditPolicy: true, creditLimits: true },
+        }),
+      ]);
+      if (!master || !source) throw new NotFoundException('أحد سجلي العميل غير موجود');
+      if (master.mergedIntoId || source.mergedIntoId || master.status === 'merged' || source.status === 'merged') {
+        throw new ConflictException('لا يمكن دمج سجل مؤرشف أو مدمج مسبقًا');
+      }
+      if (master.creditPolicy && source.creditPolicy) {
+        throw new ConflictException('لكلا العميلين سياسة ائتمانية. راجع السياسة واختر واحدة قبل الدمج');
+      }
+      const masterLimitCurrencies = new Set(master.creditLimits.map((limit) => limit.currencyCode));
+      if (source.creditLimits.some((limit) => masterLimitCurrencies.has(limit.currencyCode))) {
+        throw new ConflictException('يوجد سقف ائتمان للعملة نفسها لدى العميلين؛ راجع الحدود قبل الدمج');
+      }
+
+      const sourceReconciliations = await tx.balanceReconciliation.findMany({
+        where: { customerId: source.id },
+        select: { importJobId: true, currencyCode: true },
+      });
+      if (sourceReconciliations.length) {
+        const collision = await tx.balanceReconciliation.findFirst({
+          where: {
+            customerId: master.id,
+            OR: sourceReconciliations.map((r) => ({ importJobId: r.importJobId, currencyCode: r.currencyCode })),
+          },
+        });
+        if (collision) {
+          throw new ConflictException('يوجد تعارض تسوية لنفس دفعة الاستيراد والعملة؛ يجب مراجعته قبل الدمج');
+        }
+      }
+
+      const [
+        importedTransactions, balanceSnapshots, ledgerEntries, reconciliations, collections,
+        followups, promises, tasks, reservations, scores, agingRows, agingDocuments,
+        assignments, attachments, gpsLogs, duplicatePairs,
+      ] = await Promise.all([
+        tx.importedTransaction.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.balanceSnapshot.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.operationalLedger.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.balanceReconciliation.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.collection.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.followup.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.paymentPromise.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.task.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.reservation.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.customerScore.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.debtAgingSummary.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.debtAgingDetail.findMany({ where: { customerId: source.id }, select: { id: true } }),
+        tx.customerAssignment.findMany({ where: { customerId: source.id }, select: { id: true, effectiveTo: true } }),
+        tx.attachment.findMany({ where: { entityTable: 'customers', entityId: source.id }, select: { id: true } }),
+        tx.gpsLog.findMany({ where: { entityTable: 'customers', entityId: source.id }, select: { id: true } }),
+        tx.potentialDuplicateCustomer.findMany({
+          where: {
+            reviewStatus: 'pending',
+            OR: [{ customerAId: source.id }, { customerBId: source.id }],
+          },
+          select: { id: true },
+        }),
+      ]);
+
+      const ids = <T extends { id: string }>(rows: T[]) => rows.map((row) => row.id);
+      const movedIds = {
+        importedTransactions: ids(importedTransactions), balanceSnapshots: ids(balanceSnapshots),
+        ledgerEntriesPreserved: ids(ledgerEntries), reconciliations: ids(reconciliations), collections: ids(collections),
+        followups: ids(followups), promises: ids(promises), tasks: ids(tasks), reservations: ids(reservations),
+        scores: ids(scores), agingRows: ids(agingRows), agingDocuments: ids(agingDocuments),
+        assignments: ids(assignments), attachments: ids(attachments), gpsLogs: ids(gpsLogs),
+        creditLimits: ids(source.creditLimits),
+      };
+
+      const masterBalanceBefore = master.balances.map((b) => ({
+        id: b.id, openingDebit: b.openingDebit.toString(), openingCredit: b.openingCredit.toString(),
+        accountingBalance: b.accountingBalance.toString(),
+        declaredBalance: b.declaredBalance?.toString() ?? null,
+        declaredLabel: b.declaredLabel, lastImportJobId: b.lastImportJobId,
+        updatedAt: b.updatedAt.toISOString(), currencyCode: b.currencyCode,
+      }));
+      const movedBalanceIds: string[] = [];
+      const mergedBalanceExpected: Array<{ id: string; accountingBalance: string; openingDebit: string; openingCredit: string }> = [];
+      const ledgerTransferByCurrency: Array<{ currencyCode: string; amount: string }> = [];
+      const masterByCurrency = new Map(master.balances.map((b) => [b.currencyCode, b]));
+      for (const sourceBalance of source.balances) {
+        if (sourceBalance.lastImportJobId) {
+          const sourceImport = await tx.importJob.findUnique({
+            where: { id: sourceBalance.lastImportJobId }, select: { importedAt: true },
+          });
+          if (sourceImport) {
+            const delta = await tx.operationalLedger.aggregate({
+              where: {
+                customerId: source.id, currencyCode: sourceBalance.currencyCode,
+                createdAt: { gt: sourceImport.importedAt },
+              },
+              _sum: { amountSigned: true },
+            });
+            if (delta._sum.amountSigned && !delta._sum.amountSigned.isZero()) {
+              ledgerTransferByCurrency.push({
+                currencyCode: sourceBalance.currencyCode, amount: delta._sum.amountSigned.toString(),
+              });
+            }
+          }
+        }
+        const masterBalance = masterByCurrency.get(sourceBalance.currencyCode);
+        if (!masterBalance) {
+          await tx.customerBalance.update({ where: { id: sourceBalance.id }, data: { customerId: master.id } });
+          movedBalanceIds.push(sourceBalance.id);
+          mergedBalanceExpected.push({
+            id: sourceBalance.id, accountingBalance: sourceBalance.accountingBalance.toString(),
+            openingDebit: sourceBalance.openingDebit.toString(), openingCredit: sourceBalance.openingCredit.toString(),
+          });
+          continue;
+        }
+        const openingDebit = masterBalance.openingDebit.plus(sourceBalance.openingDebit);
+        const openingCredit = masterBalance.openingCredit.plus(sourceBalance.openingCredit);
+        const accountingBalance = masterBalance.accountingBalance.plus(sourceBalance.accountingBalance);
+        const declaredBalance = masterBalance.declaredBalance === null && sourceBalance.declaredBalance === null
+          ? null
+          : (masterBalance.declaredBalance ?? new Prisma.Decimal(0))
+              .plus(sourceBalance.declaredBalance ?? new Prisma.Decimal(0));
+        await tx.customerBalance.update({
+          where: { id: masterBalance.id },
+          data: {
+            openingDebit, openingCredit, accountingBalance, declaredBalance,
+            declaredLabel: masterBalance.declaredLabel ?? sourceBalance.declaredLabel,
+            // Keep the master's accounting cut-off. Source post-import ledger delta is
+            // transferred below as an append-only entry, so no historical row is mutated.
+            lastImportJobId: masterBalance.lastImportJobId,
+            updatedAt: now,
+          },
+        });
+        mergedBalanceExpected.push({
+          id: masterBalance.id, accountingBalance: accountingBalance.toString(),
+          openingDebit: openingDebit.toString(), openingCredit: openingCredit.toString(),
+        });
+      }
+
+      const masterOpenAssignment = await tx.customerAssignment.findFirst({
+        where: { customerId: master.id, effectiveTo: null }, select: { id: true },
+      });
+      const sourceOpenAssignment = assignments.find((a) => a.effectiveTo === null) ?? null;
+      if (masterOpenAssignment && sourceOpenAssignment) {
+        await tx.customerAssignment.update({
+          where: { id: sourceOpenAssignment.id }, data: { effectiveTo: now },
+        });
+      }
+
+      const move = async (model: any, rowIds: string[]) => {
+        if (rowIds.length) await model.updateMany({ where: { id: { in: rowIds } }, data: { customerId: master.id } });
+      };
+      await move(tx.importedTransaction, movedIds.importedTransactions);
+      await move(tx.balanceSnapshot, movedIds.balanceSnapshots);
+      await move(tx.balanceReconciliation, movedIds.reconciliations);
+      await move(tx.collection, movedIds.collections);
+      await move(tx.followup, movedIds.followups);
+      await move(tx.paymentPromise, movedIds.promises);
+      await move(tx.task, movedIds.tasks);
+      await move(tx.reservation, movedIds.reservations);
+      await move(tx.customerScore, movedIds.scores);
+      await move(tx.debtAgingSummary, movedIds.agingRows);
+      await move(tx.debtAgingDetail, movedIds.agingDocuments);
+      await move(tx.customerAssignment, movedIds.assignments);
+      await move(tx.customerCreditLimit, movedIds.creditLimits);
+      if (movedIds.attachments.length) {
+        await tx.attachment.updateMany({ where: { id: { in: movedIds.attachments } }, data: { entityId: master.id } });
+      }
+      if (movedIds.gpsLogs.length) {
+        await tx.gpsLog.updateMany({ where: { id: { in: movedIds.gpsLogs } }, data: { entityId: master.id } });
+      }
+
+      const movedCreditPolicy = Boolean(source.creditPolicy && !master.creditPolicy);
+      const movedCreditPolicyExpected = movedCreditPolicy
+        ? JSON.parse(JSON.stringify({ ...source.creditPolicy, customerId: master.id }))
+        : null;
+      if (movedCreditPolicy) {
+        await tx.customerCreditPolicy.update({ where: { customerId: source.id }, data: { customerId: master.id } });
+      }
+
+      const restorePayload = JSON.parse(JSON.stringify({
+        sourceBefore: { status: source.status, mergedIntoId: source.mergedIntoId, mergedAt: source.mergedAt },
+        movedIds, movedBalanceIds, masterBalanceBefore, mergedBalanceExpected, movedCreditPolicy,
+        ledgerTransferByCurrency, movedCreditPolicyExpected,
+        movedCreditLimitsExpected: source.creditLimits.map((limit) => ({ ...limit, customerId: master.id })),
+        sourceOpenAssignmentId: masterOpenAssignment ? sourceOpenAssignment?.id ?? null : null,
+        duplicatePairIds: ids(duplicatePairs),
+      })) as Prisma.InputJsonValue;
+      const merge = await tx.customerMerge.create({
+        data: {
+          organizationId: actor.organizationId, masterCustomerId: master.id, sourceCustomerId: source.id,
+          pairId, restorePayload, mergedBy: actor.id, mergedAt: now, reversibleUntil,
+        },
+      });
+      for (const transfer of ledgerTransferByCurrency) {
+        await tx.operationalLedger.create({
+          data: {
+            customerId: master.id, currencyCode: transfer.currencyCode,
+            entryType: 'customer_merge_transfer',
+            amountSigned: transfer.amount, sourceTable: `customer_merges:${transfer.currencyCode}`, sourceId: merge.id,
+            createdBy: actor.id,
+          },
+        });
+      }
+
+      const aliasCandidates = [
+        ['external_code', source.externalCustomerCode], ['name', source.name],
+        ['phone', source.phonePrimary], ['phone', source.phoneSecondary], ['whatsapp', source.whatsapp],
+      ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+      if (aliasCandidates.length) {
+        await tx.customerAlias.createMany({
+          data: aliasCandidates.map(([aliasType, aliasValue]) => ({
+            organizationId: actor.organizationId, customerId: master.id, sourceCustomerId: source.id,
+            mergeId: merge.id, aliasType, aliasValue, aliasNormalized: normalizeAlias(aliasValue),
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      await tx.potentialDuplicateCustomer.updateMany({
+        where: { id: { in: ids(duplicatePairs) } },
+        data: { reviewStatus: 'merged', reviewedBy: actor.id, reviewedAt: now },
+      });
+      await tx.customer.update({
+        where: { id: source.id }, data: { status: 'merged', mergedIntoId: master.id, mergedAt: now },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: actor.id, action: 'customer_merged', entityTable: 'customer_merges', entityId: merge.id,
+          oldValue: { masterCustomerId: master.id, sourceCustomerId: source.id },
+          newValue: { movedCounts: Object.fromEntries(Object.entries(movedIds).map(([k, v]) => [k, v.length])), reversibleUntil },
+          reason: dto.reason ?? null, ipAddress: req?.ip ?? null,
+          userAgent: (req?.headers['user-agent'] as string) ?? null,
+        },
+      });
+
+      return {
+        mergeId: merge.id, masterCustomerId: master.id, sourceCustomerId: source.id,
+        reversibleUntil, movedCounts: Object.fromEntries(Object.entries(movedIds).map(([k, v]) => [k, v.length])),
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
+    await this.notifications.notifyFinance(actor.organizationId, 'customer_merged', {
+      mergeId: result.mergeId,
+      masterCustomerId: result.masterCustomerId,
+      sourceCustomerId: result.sourceCustomerId,
+      reason: dto.reason ?? null,
+      actorName: actor.fullName,
+      href: '/admin/data-quality',
+    });
+    return result;
+  }
+
+  async reverseMerge(actor: AuthUser, mergeId: string, dto: ReverseCustomerMergeDto, req?: Request) {
+    return this.prisma.$transaction(async (tx) => {
+      const merge = await tx.customerMerge.findFirst({
+        where: { id: mergeId, organizationId: actor.organizationId },
+      });
+      if (!merge) throw new NotFoundException('عملية الدمج غير موجودة');
+      if (merge.status !== 'active') throw new ConflictException('تم التراجع عن هذه العملية مسبقًا');
+      if (merge.reversibleUntil.getTime() < Date.now()) {
+        throw new ConflictException('انتهت مهلة التراجع البالغة 24 ساعة');
+      }
+
+      const payload = merge.restorePayload as any;
+      for (const expected of payload.mergedBalanceExpected ?? []) {
+        const current = await tx.customerBalance.findUnique({ where: { id: expected.id } });
+        if (!current
+          || current.accountingBalance.toString() !== expected.accountingBalance
+          || current.openingDebit.toString() !== expected.openingDebit
+          || current.openingCredit.toString() !== expected.openingCredit) {
+          throw new ConflictException('تغير رصيد العميل الأساسي بعد الدمج؛ أوقف التراجع وراجعه محاسبيًا');
+        }
+      }
+      if (payload.movedCreditPolicyExpected) {
+        const currentPolicy = await tx.customerCreditPolicy.findUnique({
+          where: { customerId: merge.masterCustomerId },
+        });
+        if (JSON.stringify(currentPolicy) !== JSON.stringify(payload.movedCreditPolicyExpected)) {
+          throw new ConflictException('تغيرت السياسة الائتمانية بعد الدمج؛ أوقف التراجع وراجعها يدويًا');
+        }
+      }
+      for (const expected of payload.movedCreditLimitsExpected ?? []) {
+        const current = await tx.customerCreditLimit.findUnique({ where: { id: expected.id } });
+        if (JSON.stringify(current) !== JSON.stringify(expected)) {
+          throw new ConflictException('تغيّر سقف الائتمان بعد الدمج؛ أوقف التراجع وراجعه يدويًا');
+        }
+      }
+
+      const moved = payload.movedIds as Record<string, string[]>;
+      const restore = async (model: any, rowIds: string[] = []) => {
+        if (rowIds.length) await model.updateMany({ where: { id: { in: rowIds } }, data: { customerId: merge.sourceCustomerId } });
+      };
+      await restore(tx.importedTransaction, moved.importedTransactions);
+      await restore(tx.balanceSnapshot, moved.balanceSnapshots);
+      await restore(tx.balanceReconciliation, moved.reconciliations);
+      await restore(tx.collection, moved.collections);
+      await restore(tx.followup, moved.followups);
+      await restore(tx.paymentPromise, moved.promises);
+      await restore(tx.task, moved.tasks);
+      await restore(tx.reservation, moved.reservations);
+      await restore(tx.customerScore, moved.scores);
+      await restore(tx.debtAgingSummary, moved.agingRows);
+      await restore(tx.debtAgingDetail, moved.agingDocuments);
+      await restore(tx.customerAssignment, moved.assignments);
+      await restore(tx.customerCreditLimit, moved.creditLimits);
+      if (payload.sourceOpenAssignmentId) {
+        await tx.customerAssignment.update({ where: { id: payload.sourceOpenAssignmentId }, data: { effectiveTo: null } });
+      }
+      if ((payload.movedBalanceIds as string[]).length) {
+        await tx.customerBalance.updateMany({
+          where: { id: { in: payload.movedBalanceIds } }, data: { customerId: merge.sourceCustomerId },
+        });
+      }
+      for (const balance of payload.masterBalanceBefore ?? []) {
+        await tx.customerBalance.update({
+          where: { id: balance.id },
+          data: {
+            openingDebit: balance.openingDebit, openingCredit: balance.openingCredit,
+            accountingBalance: balance.accountingBalance, declaredBalance: balance.declaredBalance,
+            declaredLabel: balance.declaredLabel, lastImportJobId: balance.lastImportJobId,
+            updatedAt: new Date(balance.updatedAt),
+          },
+        });
+      }
+      if (payload.movedCreditPolicy) {
+        await tx.customerCreditPolicy.update({
+          where: { customerId: merge.masterCustomerId }, data: { customerId: merge.sourceCustomerId },
+        });
+      }
+      for (const transfer of payload.ledgerTransferByCurrency ?? []) {
+        await tx.operationalLedger.create({
+          data: {
+            customerId: merge.masterCustomerId, currencyCode: transfer.currencyCode,
+            entryType: 'customer_merge_reversal',
+            amountSigned: new Prisma.Decimal(transfer.amount).negated(),
+            sourceTable: `customer_merge_reversals:${transfer.currencyCode}`, sourceId: merge.id, createdBy: actor.id,
+          },
+        });
+      }
+      if (moved.attachments?.length) {
+        await tx.attachment.updateMany({ where: { id: { in: moved.attachments } }, data: { entityId: merge.sourceCustomerId } });
+      }
+      if (moved.gpsLogs?.length) {
+        await tx.gpsLog.updateMany({ where: { id: { in: moved.gpsLogs } }, data: { entityId: merge.sourceCustomerId } });
+      }
+      if (payload.duplicatePairIds?.length) {
+        await tx.potentialDuplicateCustomer.updateMany({
+          where: { id: { in: payload.duplicatePairIds } },
+          data: { reviewStatus: 'pending', reviewedBy: null, reviewedAt: null },
+        });
+      }
+      await tx.customerAlias.deleteMany({ where: { mergeId } });
+      await tx.customer.update({
+        where: { id: merge.sourceCustomerId },
+        data: {
+          status: payload.sourceBefore.status,
+          mergedIntoId: payload.sourceBefore.mergedIntoId,
+          mergedAt: payload.sourceBefore.mergedAt ? new Date(payload.sourceBefore.mergedAt) : null,
+        },
+      });
+      await tx.customerMerge.update({
+        where: { id: mergeId }, data: { status: 'reversed', reversedBy: actor.id, reversedAt: new Date() },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: actor.id, action: 'customer_merge_reversed', entityTable: 'customer_merges', entityId: mergeId,
+          oldValue: { status: 'active' }, newValue: { status: 'reversed' }, reason: dto.reason ?? null,
+          ipAddress: req?.ip ?? null, userAgent: (req?.headers['user-agent'] as string) ?? null,
+        },
+      });
+      return { mergeId, reversed: true, masterCustomerId: merge.masterCustomerId, sourceCustomerId: merge.sourceCustomerId };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
   }
 }

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsPositive, IsString } from 'class-validator';
 
 export class UpdateCurrencyDto {
   @ApiPropertyOptional()
@@ -19,6 +19,6 @@ export class UpdateCurrencyDto {
   active?: boolean;
 
   @ApiPropertyOptional()
-  @IsOptional() @IsNumber()
+  @IsOptional() @IsNumber() @IsPositive()
   exchangeRate?: number;
 }

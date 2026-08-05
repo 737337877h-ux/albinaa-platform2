@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
+import { validateBrandingSetting } from '../common/branding';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -18,6 +19,7 @@ export class SettingsService {
   }
 
   async upsert(actor: AuthUser, key: string, value: any, req?: Request) {
+    validateBrandingSetting(key, value);
     const before = await this.prisma.systemSetting.findUnique({
       where: { organizationId_key: { organizationId: actor.organizationId, key } },
     });

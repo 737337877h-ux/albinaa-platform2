@@ -13,8 +13,8 @@
 // ============================================================================
 
 generator client {
-  provider      = "prisma-client-js"
-  output        = "../backend/node_modules/.prisma/client"
+  provider = "prisma-client-js"
+  output   = "../backend/node_modules/.prisma/client"
 }
 
 datasource db {
@@ -30,18 +30,23 @@ model Organization {
   name      String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  branches          Branch[]
-  users             User[]
-  roles             Role[]
-  documentTypes     DocumentType[]
-  customers         Customer[]
-  importTemplates   ImportTemplate[]
-  importJobs        ImportJob[]
-  collectionMethods CollectionMethod[]
-  followupTypes     FollowupType[]
-  followupResults   FollowupResult[]
-  systemSettings    SystemSetting[]
-  analyticalAccounts AnalyticalAccount[]
+  branches             Branch[]
+  users                User[]
+  roles                Role[]
+  documentTypes        DocumentType[]
+  customers            Customer[]
+  importTemplates      ImportTemplate[]
+  importJobs           ImportJob[]
+  collectionMethods    CollectionMethod[]
+  followupTypes        FollowupType[]
+  followupResults      FollowupResult[]
+  systemSettings       SystemSetting[]
+  analyticalAccounts   AnalyticalAccount[]
+  customerAliases      CustomerAlias[]
+  customerMerges       CustomerMerge[]
+  customerAccountLinks CustomerAccountLink[]
+  agingSnapshots       AgingSnapshot[]
+  handoverVouchers     CollectionHandoverVoucher[]
 
   @@map("organizations")
 }
@@ -53,11 +58,14 @@ model Branch {
   active         Boolean  @default(true)
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  users        User[]
-  collectors   Collector[]
-  customers    Customer[]
-  collections  Collection[]
+  organization     Organization                @relation(fields: [organizationId], references: [id])
+  users            User[]
+  collectors       Collector[]
+  customers        Customer[]
+  collections      Collection[]
+  handoverVouchers CollectionHandoverVoucher[]
+  receiptSequence  BranchReceiptSequence[]
+  voucherSequence  BranchVoucherSequence[]
 
   @@unique([organizationId, name], map: "uq_branches_org_name")
   @@map("branches")
@@ -81,26 +89,36 @@ model User {
   organization Organization @relation(fields: [organizationId], references: [id])
   branch       Branch?      @relation(fields: [branchId], references: [id])
 
-  collector            Collector?
-  userRoles            UserRole[]              @relation("UserOwnRoles")
-  rolesGranted         UserRole[]              @relation("RoleGranter")
-  assignmentsMade      CustomerAssignment[]    @relation("AssignmentMaker")
-  creditDecisions      CustomerCreditPolicy[]  @relation("CreditDecider")
-  duplicateReviews     PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
-  importTemplates      ImportTemplate[]
-  importJobs           ImportJob[]
-  ledgerEntries        OperationalLedger[]
-  reconciliationsDone  BalanceReconciliation[] @relation("ReconReviewer")
-  cashReceived         CashHandover[]
-  followups            Followup[]
-  tasksCreated         Task[]                  @relation("TaskCreator")
-  reservationsCreated  Reservation[]           @relation("ReservationCreator")
-  analyticalAccountsCreated AnalyticalAccount[] @relation("AnalyticalAccountCreator")
-  attachments          Attachment[]
-  gpsLogs              GpsLog[]
-  notifications        Notification[]
-  auditLogs            AuditLog[]
-  authSessions         AuthSession[]
+  collector                 Collector?
+  userRoles                 UserRole[]                   @relation("UserOwnRoles")
+  rolesGranted              UserRole[]                   @relation("RoleGranter")
+  assignmentsMade           CustomerAssignment[]         @relation("AssignmentMaker")
+  creditDecisions           CustomerCreditPolicy[]       @relation("CreditDecider")
+  creditLimitApprovals      CustomerCreditLimit[]        @relation("CreditLimitApprover")
+  collectorTargetsSet       CollectorTarget[]            @relation("CollectorTargetSetter")
+  duplicateReviews          PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
+  customerMergesCreated     CustomerMerge[]              @relation("CustomerMergeCreator")
+  customerMergesReversed    CustomerMerge[]              @relation("CustomerMergeReverser")
+  importTemplates           ImportTemplate[]
+  importJobs                ImportJob[]
+  importJobsReversed        ImportJob[]                  @relation("ImportJobReverser")
+  ledgerEntries             OperationalLedger[]
+  reconciliationsDone       BalanceReconciliation[]      @relation("ReconReviewer")
+  cashReceived              CashHandover[]
+  handoverVouchersCreated   CollectionHandoverVoucher[]  @relation("HandoverVoucherCreator")
+  handoverVouchersMatched   CollectionHandoverVoucher[]  @relation("HandoverVoucherMatcher")
+  handoverVouchersApproved  CollectionHandoverVoucher[]  @relation("HandoverVoucherApprover")
+  reversalRequestsMade      CollectionReversalRequest[]  @relation("CollectionReversalRequester")
+  reversalRequestsReviewed  CollectionReversalRequest[]  @relation("CollectionReversalReviewer")
+  followups                 Followup[]
+  tasksCreated              Task[]                       @relation("TaskCreator")
+  reservationsCreated       Reservation[]                @relation("ReservationCreator")
+  analyticalAccountsCreated AnalyticalAccount[]          @relation("AnalyticalAccountCreator")
+  attachments               Attachment[]
+  gpsLogs                   GpsLog[]
+  notifications             Notification[]
+  auditLogs                 AuditLog[]
+  authSessions              AuthSession[]
 
   @@unique([organizationId, username], map: "uq_users_org_username")
   @@map("users")
@@ -164,10 +182,12 @@ model Collector {
   user   User    @relation(fields: [userId], references: [id])
   branch Branch? @relation(fields: [branchId], references: [id])
 
-  assignments     CustomerAssignment[]
-  collections     Collection[]
-  paymentPromises PaymentPromise[]
-  tasks           Task[]
+  assignments      CustomerAssignment[]
+  collections      Collection[]
+  paymentPromises  PaymentPromise[]
+  tasks            Task[]
+  targets          CollectorTarget[]
+  handoverVouchers CollectionHandoverVoucher[]
 
   @@map("collectors")
 }
@@ -176,30 +196,53 @@ model Collector {
 // 3) البيانات المرجعية: العملات وأنواع المستندات
 // ---------------------------------------------------------------------------
 model Currency {
-  code       String  @id
-  sourceCode String  @map("source_code")
-  nameAr     String  @map("name_ar")
-  decimals   Int     @default(2) @db.SmallInt
-  active     Boolean @default(true)
+  code         String  @id
+  sourceCode   String  @map("source_code")
+  nameAr       String  @map("name_ar")
+  decimals     Int     @default(2) @db.SmallInt
+  active       Boolean @default(true)
+  exchangeRate Decimal @default(1) @map("exchange_rate") @db.Decimal(18, 6)
 
-  balances            CustomerBalance[]
-  importedTxns        ImportedTransaction[]
-  ledgerEntries       OperationalLedger[]
-  reconciliations     BalanceReconciliation[]
-  collections         Collection[]
-  cashHandovers       CashHandover[]
-  promises            PaymentPromise[]
-  reservations        Reservation[]
-  tasksExpected       Task[]
-  followupsExpected   Followup[]
-  creditLimits        CustomerCreditPolicy[]
-  balanceSnapshots    BalanceSnapshot[]
-  agingRows           DebtAgingSummary[]
-  agingDocuments      DebtAgingDetail[]
-  analyticalAccounts  AnalyticalAccount[]
-  analyticalMovements AnalyticalMovement[]
+  balances                   CustomerBalance[]
+  importedTxns               ImportedTransaction[]
+  ledgerEntries              OperationalLedger[]
+  reconciliations            BalanceReconciliation[]
+  collections                Collection[]
+  cashHandovers              CashHandover[]
+  promises                   PaymentPromise[]
+  reservations               Reservation[]
+  tasksExpected              Task[]
+  followupsExpected          Followup[]
+  creditPolicies             CustomerCreditPolicy[]
+  customerCreditLimits       CustomerCreditLimit[]
+  collectorTargets           CollectorTarget[]
+  balanceSnapshots           BalanceSnapshot[]
+  agingRows                  DebtAgingSummary[]
+  agingDocuments             DebtAgingDetail[]
+  analyticalAccounts         AnalyticalAccount[]
+  analyticalMovements        AnalyticalMovement[]
+  agingSnapshots             AgingSnapshot[]
+  collectionHandoverVouchers CollectionHandoverVoucher[]
 
   @@map("currencies")
+}
+
+model CollectorTarget {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  collectorId  String   @map("collector_id") @db.Uuid
+  currencyCode String   @map("currency_code")
+  month        DateTime @db.Date
+  targetAmount Decimal  @map("target_amount") @db.Decimal(18, 4)
+  setBy        String   @map("set_by") @db.Uuid
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  collector Collector @relation(fields: [collectorId], references: [id])
+  currency  Currency  @relation(fields: [currencyCode], references: [code])
+  setter    User      @relation("CollectorTargetSetter", fields: [setBy], references: [id])
+
+  @@unique([collectorId, currencyCode, month], map: "uq_collector_target_month_currency")
+  @@index([month, currencyCode], map: "idx_collector_targets_month_currency")
+  @@map("collector_targets")
 }
 
 model DocumentType {
@@ -243,32 +286,112 @@ model Customer {
   createdByImportJob    String?   @map("created_by_import_job") @db.Uuid
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt             DateTime  @default(now()) @map("updated_at") @db.Timestamptz()
+  mergedIntoId          String?   @map("merged_into_id") @db.Uuid
+  mergedAt              DateTime? @map("merged_at") @db.Timestamptz()
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  branch       Branch?      @relation(fields: [branchId], references: [id])
+  organization  Organization @relation(fields: [organizationId], references: [id])
+  branch        Branch?      @relation(fields: [branchId], references: [id])
+  mergedInto    Customer?    @relation("CustomerMergeTarget", fields: [mergedIntoId], references: [id])
+  mergedSources Customer[]   @relation("CustomerMergeTarget")
 
-  balances         CustomerBalance[]
-  creditPolicy     CustomerCreditPolicy?
-  assignments      CustomerAssignment[]
-  importedTxns     ImportedTransaction[]
-  balanceSnapshots BalanceSnapshot[]
-  ledgerEntries    OperationalLedger[]
-  reconciliations  BalanceReconciliation[]
-  followups        Followup[]
-  promises         PaymentPromise[]
-  collections      Collection[]
-  reservations     Reservation[]
-  tasks            Task[]
-  scores           CustomerScore[]
-  duplicatesAsA    PotentialDuplicateCustomer[] @relation("DupCustomerA")
-  duplicatesAsB    PotentialDuplicateCustomer[] @relation("DupCustomerB")
-  agingRows        DebtAgingSummary[]
-  agingDocuments   DebtAgingDetail[]
+  balances                CustomerBalance[]
+  creditPolicy            CustomerCreditPolicy?
+  creditLimits            CustomerCreditLimit[]
+  assignments             CustomerAssignment[]
+  importedTxns            ImportedTransaction[]
+  balanceSnapshots        BalanceSnapshot[]
+  ledgerEntries           OperationalLedger[]
+  reconciliations         BalanceReconciliation[]
+  followups               Followup[]
+  promises                PaymentPromise[]
+  collections             Collection[]
+  reservations            Reservation[]
+  tasks                   Task[]
+  scores                  CustomerScore[]
+  duplicatesAsA           PotentialDuplicateCustomer[] @relation("DupCustomerA")
+  duplicatesAsB           PotentialDuplicateCustomer[] @relation("DupCustomerB")
+  agingRows               DebtAgingSummary[]
+  agingDocuments          DebtAgingDetail[]
+  aliases                 CustomerAlias[]              @relation("CustomerAliasTarget")
+  aliasesFromMerge        CustomerAlias[]              @relation("CustomerAliasSource")
+  mergeOperationsAsMaster CustomerMerge[]              @relation("CustomerMergeMaster")
+  mergeOperationsAsSource CustomerMerge[]              @relation("CustomerMergeSource")
+  primaryAccountLinks     CustomerAccountLink[]        @relation("PrimaryCustomerAccount")
+  childAccountLink        CustomerAccountLink?         @relation("ChildCustomerAccount")
+  agingSnapshots          AgingSnapshot[]
 
   @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
   @@index([organizationId, nameNormalized], map: "idx_customers_name_norm")
   @@index([phonePrimary], map: "idx_customers_phone")
+  @@index([mergedIntoId], map: "idx_customers_merged_into")
   @@map("customers")
+}
+
+model CustomerAlias {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId   String   @map("organization_id") @db.Uuid
+  customerId       String   @map("customer_id") @db.Uuid
+  sourceCustomerId String?  @map("source_customer_id") @db.Uuid
+  mergeId          String?  @map("merge_id") @db.Uuid
+  aliasType        String   @map("alias_type")
+  aliasValue       String   @map("alias_value")
+  aliasNormalized  String   @map("alias_normalized")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  customer       Customer       @relation("CustomerAliasTarget", fields: [customerId], references: [id])
+  sourceCustomer Customer?      @relation("CustomerAliasSource", fields: [sourceCustomerId], references: [id])
+  merge          CustomerMerge? @relation(fields: [mergeId], references: [id])
+
+  @@unique([organizationId, customerId, aliasType, aliasNormalized], map: "uq_customer_alias_org_customer_type_value")
+  @@index([customerId], map: "idx_customer_alias_customer")
+  @@index([sourceCustomerId], map: "idx_customer_alias_source")
+  @@map("customer_aliases")
+}
+
+model CustomerMerge {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId   String    @map("organization_id") @db.Uuid
+  masterCustomerId String    @map("master_customer_id") @db.Uuid
+  sourceCustomerId String    @map("source_customer_id") @db.Uuid
+  pairId           String?   @map("pair_id") @db.Uuid
+  status           String    @default("active")
+  restorePayload   Json      @map("restore_payload") @db.JsonB
+  mergedBy         String    @map("merged_by") @db.Uuid
+  mergedAt         DateTime  @default(now()) @map("merged_at") @db.Timestamptz()
+  reversibleUntil  DateTime  @map("reversible_until") @db.Timestamptz()
+  reversedBy       String?   @map("reversed_by") @db.Uuid
+  reversedAt       DateTime? @map("reversed_at") @db.Timestamptz()
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  master       Customer        @relation("CustomerMergeMaster", fields: [masterCustomerId], references: [id])
+  source       Customer        @relation("CustomerMergeSource", fields: [sourceCustomerId], references: [id])
+  creator      User            @relation("CustomerMergeCreator", fields: [mergedBy], references: [id])
+  reverser     User?           @relation("CustomerMergeReverser", fields: [reversedBy], references: [id])
+  aliases      CustomerAlias[]
+
+  @@index([organizationId, mergedAt], map: "idx_customer_merges_org_date")
+  @@index([sourceCustomerId, status], map: "idx_customer_merges_source_status")
+  @@map("customer_merges")
+}
+
+/// Non-destructive relationship between separate customer accounts.
+/// The child keeps its own ledger and identity; the primary account only
+/// receives a read-only consolidated view of all linked balances.
+model CustomerAccountLink {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId    String   @map("organization_id") @db.Uuid
+  primaryCustomerId String   @map("primary_customer_id") @db.Uuid
+  childCustomerId   String   @unique(map: "uq_customer_account_link_child") @map("child_customer_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  primary      Customer     @relation("PrimaryCustomerAccount", fields: [primaryCustomerId], references: [id], onDelete: Cascade)
+  child        Customer     @relation("ChildCustomerAccount", fields: [childCustomerId], references: [id], onDelete: Cascade)
+
+  @@unique([primaryCustomerId, childCustomerId], map: "uq_customer_account_link_pair")
+  @@index([organizationId, primaryCustomerId], map: "idx_customer_account_link_primary")
+  @@map("customer_account_links")
 }
 
 model CustomerAssignment {
@@ -281,9 +404,9 @@ model CustomerAssignment {
   assignedBy    String?   @map("assigned_by") @db.Uuid
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
 
-  customer Customer  @relation(fields: [customerId], references: [id])
+  customer  Customer  @relation(fields: [customerId], references: [id])
   collector Collector @relation(fields: [collectorId], references: [id])
-  assigner User?     @relation("AssignmentMaker", fields: [assignedBy], references: [id])
+  assigner  User?     @relation("AssignmentMaker", fields: [assignedBy], references: [id])
 
   // ملاحظة: الفهرس الفريد الجزئي uq_current_assignment (WHERE effective_to IS NULL)
   // معرّف في migration SQL — يضمن إسنادًا حاليًا واحدًا فقط لكل عميل.
@@ -308,6 +431,25 @@ model CustomerCreditPolicy {
   decider  User?     @relation("CreditDecider", fields: [decidedBy], references: [id])
 
   @@map("customer_credit_policies")
+}
+
+model CustomerCreditLimit {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId    String   @map("customer_id") @db.Uuid
+  currencyCode  String   @map("currency_code")
+  amount        Decimal  @db.Decimal(18, 4)
+  effectiveFrom DateTime @default(dbgenerated("CURRENT_DATE")) @map("effective_from") @db.Date
+  approvedBy    String   @map("approved_by") @db.Uuid
+  approvedAt    DateTime @default(now()) @map("approved_at") @db.Timestamptz()
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  currency Currency @relation(fields: [currencyCode], references: [code])
+  approver User     @relation("CreditLimitApprover", fields: [approvedBy], references: [id])
+
+  @@unique([customerId, currencyCode], map: "uq_customer_credit_limit_currency")
+  @@index([currencyCode, amount], map: "idx_credit_limits_currency_amount")
+  @@map("customer_credit_limits")
 }
 
 model PotentialDuplicateCustomer {
@@ -346,38 +488,43 @@ model ImportTemplate {
 }
 
 model ImportJob {
-  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId       String   @map("organization_id") @db.Uuid
-  templateId           String?  @map("template_id") @db.Uuid
-  fileName             String   @map("file_name")
-  fileHash             String   @map("file_hash")
-  uploadedBy           String   @map("uploaded_by") @db.Uuid
-  importedAt           DateTime @default(now()) @map("imported_at") @db.Timestamptz()
-  status               String   @default("completed")
-  rowsTotal            Int?     @map("rows_total")
-  txnsInFile           Int?     @map("txns_in_file")
-  customersNew         Int?     @map("customers_new")
-  customersUpdated     Int?     @map("customers_updated")
-  txnsInserted         Int?     @map("txns_inserted")
-  txnsSkippedDuplicate Int?     @map("txns_skipped_duplicate")
-  errorsCount          Int?     @map("errors_count")
-  totalBalanceBefore   Json?    @map("total_balance_before") @db.JsonB
-  totalBalanceAfter    Json?    @map("total_balance_after") @db.JsonB
-  errorReport          Json?    @map("error_report") @db.JsonB
-  agingRowsWritten      Int? @map("aging_rows_written")
-  agingDocumentsWritten Int? @map("aging_documents_written")
-  agingSkippedDuplicate Int? @map("aging_skipped_duplicate")
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId        String    @map("organization_id") @db.Uuid
+  templateId            String?   @map("template_id") @db.Uuid
+  fileName              String    @map("file_name")
+  fileHash              String    @map("file_hash")
+  uploadedBy            String    @map("uploaded_by") @db.Uuid
+  importedAt            DateTime  @default(now()) @map("imported_at") @db.Timestamptz()
+  status                String    @default("completed")
+  rowsTotal             Int?      @map("rows_total")
+  txnsInFile            Int?      @map("txns_in_file")
+  customersNew          Int?      @map("customers_new")
+  customersUpdated      Int?      @map("customers_updated")
+  txnsInserted          Int?      @map("txns_inserted")
+  txnsSkippedDuplicate  Int?      @map("txns_skipped_duplicate")
+  errorsCount           Int?      @map("errors_count")
+  totalBalanceBefore    Json?     @map("total_balance_before") @db.JsonB
+  totalBalanceAfter     Json?     @map("total_balance_after") @db.JsonB
+  errorReport           Json?     @map("error_report") @db.JsonB
+  agingRowsWritten      Int?      @map("aging_rows_written")
+  agingDocumentsWritten Int?      @map("aging_documents_written")
+  agingSkippedDuplicate Int?      @map("aging_skipped_duplicate")
+  rollbackState         Json?     @map("rollback_state") @db.JsonB
+  reversedBy            String?   @map("reversed_by") @db.Uuid
+  reversedAt            DateTime? @map("reversed_at") @db.Timestamptz()
+  reversalReason        String?   @map("reversal_reason")
 
   organization Organization    @relation(fields: [organizationId], references: [id])
   template     ImportTemplate? @relation(fields: [templateId], references: [id])
   uploader     User            @relation(fields: [uploadedBy], references: [id])
+  reverser     User?           @relation("ImportJobReverser", fields: [reversedBy], references: [id])
 
-  transactions     ImportedTransaction[]
-  balancesUpdated  CustomerBalance[]
-  snapshots        BalanceSnapshot[]
-  reconciliations  BalanceReconciliation[]
-  agingRows        DebtAgingSummary[]
-  agingDocuments   DebtAgingDetail[]
+  transactions        ImportedTransaction[]
+  balancesUpdated     CustomerBalance[]
+  snapshots           BalanceSnapshot[]
+  reconciliations     BalanceReconciliation[]
+  agingRows           DebtAgingSummary[]
+  agingDocuments      DebtAgingDetail[]
   analyticalMovements AnalyticalMovement[]
 
   @@index([organizationId, fileHash], map: "idx_import_jobs_hash")
@@ -385,19 +532,20 @@ model ImportJob {
 }
 
 model ImportedTransaction {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customerId      String   @map("customer_id") @db.Uuid
-  currencyCode    String   @map("currency_code")
-  documentTypeId  String   @map("document_type_id") @db.Uuid
-  txDate          DateTime @map("tx_date") @db.Date
-  documentNumber  String?  @map("document_number")
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId      String    @map("customer_id") @db.Uuid
+  currencyCode    String    @map("currency_code")
+  documentTypeId  String    @map("document_type_id") @db.Uuid
+  txDate          DateTime  @map("tx_date") @db.Date
+  documentNumber  String?   @map("document_number")
   description     String?
-  referenceNumber String?  @map("reference_number")
-  debit           Decimal  @default(0) @db.Decimal(18, 4)
-  credit          Decimal  @default(0) @db.Decimal(18, 4)
-  lineHash        String   @unique @map("line_hash")
-  sourceRowNumber Int?     @map("source_row_number")
-  importJobId     String   @map("import_job_id") @db.Uuid
+  referenceNumber String?   @map("reference_number")
+  debit           Decimal   @default(0) @db.Decimal(18, 4)
+  credit          Decimal   @default(0) @db.Decimal(18, 4)
+  lineHash        String    @map("line_hash")
+  sourceRowNumber Int?      @map("source_row_number")
+  importJobId     String    @map("import_job_id") @db.Uuid
+  reversedAt      DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer     Customer     @relation(fields: [customerId], references: [id])
   currency     Currency     @relation(fields: [currencyCode], references: [code])
@@ -431,12 +579,13 @@ model CustomerBalance {
 }
 
 model BalanceSnapshot {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customerId   String   @map("customer_id") @db.Uuid
-  currencyCode String   @map("currency_code")
-  balance      Decimal  @db.Decimal(18, 4)
-  importJobId  String   @map("import_job_id") @db.Uuid
-  snapshotAt   DateTime @default(now()) @map("snapshot_at") @db.Timestamptz()
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId   String    @map("customer_id") @db.Uuid
+  currencyCode String    @map("currency_code")
+  balance      Decimal   @db.Decimal(18, 4)
+  importJobId  String    @map("import_job_id") @db.Uuid
+  snapshotAt   DateTime  @default(now()) @map("snapshot_at") @db.Timestamptz()
+  reversedAt   DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer  Customer  @relation(fields: [customerId], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
@@ -453,20 +602,21 @@ model BalanceSnapshot {
 //    - idempotent بحكم line_hash الفريد (تعاد الاستيراد لا تكرر البيانات)
 // ---------------------------------------------------------------------------
 model DebtAgingSummary {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  importJobId     String   @map("import_job_id") @db.Uuid
-  customerId      String   @map("customer_id") @db.Uuid
-  customerCode    String   @map("customer_code")
-  currencyCode    String   @map("currency_code")
-  bucket_0_30     Decimal  @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
-  bucket_31_60    Decimal  @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
-  bucket_61_90    Decimal  @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
-  bucket_91_120   Decimal  @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
-  bucket_120_plus Decimal  @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
-  totalDue        Decimal  @map("total_due") @db.Decimal(18, 4)
-  sourceRowNumber Int      @map("source_row_number")
-  lineHash        String   @unique @map("line_hash")
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  importJobId     String    @map("import_job_id") @db.Uuid
+  customerId      String    @map("customer_id") @db.Uuid
+  customerCode    String    @map("customer_code")
+  currencyCode    String    @map("currency_code")
+  bucket_0_30     Decimal   @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
+  bucket_31_60    Decimal   @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
+  bucket_61_90    Decimal   @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
+  bucket_91_120   Decimal   @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
+  bucket_120_plus Decimal   @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
+  totalDue        Decimal   @map("total_due") @db.Decimal(18, 4)
+  sourceRowNumber Int       @map("source_row_number")
+  lineHash        String    @map("line_hash")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reversedAt      DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer  Customer  @relation(fields: [customerId], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
@@ -493,8 +643,9 @@ model DebtAgingDetail {
   bucket_91_120   Decimal   @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
   bucket_120_plus Decimal   @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
   sourceRowNumber Int       @map("source_row_number")
-  lineHash        String    @unique @map("line_hash")
+  lineHash        String    @map("line_hash")
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reversedAt      DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer  Customer  @relation(fields: [customerId], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
@@ -503,6 +654,31 @@ model DebtAgingDetail {
   @@index([customerId, currencyCode], map: "idx_aging_details_customer")
   @@index([importJobId], map: "idx_aging_details_job")
   @@map("debt_aging_details")
+}
+
+model AgingSnapshot {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  String   @map("organization_id") @db.Uuid
+  customerId      String   @map("customer_id") @db.Uuid
+  currencyCode    String   @map("currency_code")
+  asOf            DateTime @map("as_of") @db.Date
+  bucket_0_30     Decimal  @default(0) @map("bucket_0_30") @db.Decimal(18, 4)
+  bucket_31_60    Decimal  @default(0) @map("bucket_31_60") @db.Decimal(18, 4)
+  bucket_61_90    Decimal  @default(0) @map("bucket_61_90") @db.Decimal(18, 4)
+  bucket_91_120   Decimal  @default(0) @map("bucket_91_120") @db.Decimal(18, 4)
+  bucket_120_plus Decimal  @default(0) @map("bucket_120_plus") @db.Decimal(18, 4)
+  undated         Decimal  @default(0) @db.Decimal(18, 4)
+  totalDue        Decimal  @map("total_due") @db.Decimal(18, 4)
+  provisionAmount Decimal  @map("provision_amount") @db.Decimal(18, 4)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  currency     Currency     @relation(fields: [currencyCode], references: [code])
+
+  @@unique([organizationId, customerId, currencyCode, asOf], map: "uq_aging_snapshot_org_customer_currency_date")
+  @@index([organizationId, asOf, currencyCode], map: "idx_aging_snapshot_report")
+  @@map("aging_snapshots")
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +720,7 @@ model BalanceReconciliation {
   reviewedBy         String?   @map("reviewed_by") @db.Uuid
   reviewedAt         DateTime? @map("reviewed_at") @db.Timestamptz()
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reversedAt         DateTime? @map("reversed_at") @db.Timestamptz()
 
   customer  Customer  @relation(fields: [customerId], references: [id])
   currency  Currency  @relation(fields: [currencyCode], references: [code])
@@ -590,14 +767,16 @@ model Collection {
   reversedById    String?   @map("reversed_by_id") @db.Uuid
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
 
-  customer   Customer         @relation(fields: [customerId], references: [id])
-  collector  Collector        @relation(fields: [collectorId], references: [id])
-  currency   Currency         @relation(fields: [currencyCode], references: [code])
-  method     CollectionMethod @relation(fields: [methodId], references: [id])
-  reversedBy Collection?      @relation("CollectionReversal", fields: [reversedById], references: [id])
-  reversals  Collection[]     @relation("CollectionReversal")
-  handover   CashHandover?
-  branch     Branch?          @relation(fields: [branchId], references: [id])
+  customer            Customer                    @relation(fields: [customerId], references: [id])
+  collector           Collector                   @relation(fields: [collectorId], references: [id])
+  currency            Currency                    @relation(fields: [currencyCode], references: [code])
+  method              CollectionMethod            @relation(fields: [methodId], references: [id])
+  reversedBy          Collection?                 @relation("CollectionReversal", fields: [reversedById], references: [id])
+  reversals           Collection[]                @relation("CollectionReversal")
+  handover            CashHandover?
+  branch              Branch?                     @relation(fields: [branchId], references: [id])
+  handoverVoucherItem CollectionHandoverItem?
+  reversalRequests    CollectionReversalRequest[]
 
   @@index([customerId, currencyCode, collectedAt], map: "idx_collections_customer")
   @@index([collectorId, collectedAt], map: "idx_collections_collector")
@@ -619,6 +798,94 @@ model CashHandover {
   cashier    User       @relation(fields: [cashierId], references: [id])
 
   @@map("cash_handover")
+}
+
+model BranchReceiptSequence {
+  branchId   String @map("branch_id") @db.Uuid
+  year       Int
+  nextNumber Int    @default(1) @map("next_number")
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@id([branchId, year])
+  @@map("branch_receipt_sequences")
+}
+
+model BranchVoucherSequence {
+  branchId   String @map("branch_id") @db.Uuid
+  year       Int
+  nextNumber Int    @default(1) @map("next_number")
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@id([branchId, year])
+  @@map("branch_voucher_sequences")
+}
+
+model CollectionHandoverVoucher {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  branchId       String    @map("branch_id") @db.Uuid
+  collectorId    String    @map("collector_id") @db.Uuid
+  currencyCode   String    @map("currency_code")
+  serialNumber   String    @map("serial_number")
+  sequenceYear   Int       @map("sequence_year")
+  sequenceNumber Int       @map("sequence_number")
+  totalAmount    Decimal   @map("total_amount") @db.Decimal(18, 4)
+  status         String    @default("submitted")
+  createdBy      String    @map("created_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  matchedBy      String?   @map("matched_by") @db.Uuid
+  matchedAt      DateTime? @map("matched_at") @db.Timestamptz()
+  approvedBy     String?   @map("approved_by") @db.Uuid
+  approvedAt     DateTime? @map("approved_at") @db.Timestamptz()
+
+  organization Organization             @relation(fields: [organizationId], references: [id])
+  branch       Branch                   @relation(fields: [branchId], references: [id])
+  collector    Collector                @relation(fields: [collectorId], references: [id])
+  currency     Currency                 @relation(fields: [currencyCode], references: [code])
+  creator      User                     @relation("HandoverVoucherCreator", fields: [createdBy], references: [id])
+  matcher      User?                    @relation("HandoverVoucherMatcher", fields: [matchedBy], references: [id])
+  approver     User?                    @relation("HandoverVoucherApprover", fields: [approvedBy], references: [id])
+  items        CollectionHandoverItem[]
+
+  @@unique([organizationId, serialNumber], map: "uq_handover_voucher_org_serial")
+  @@unique([branchId, sequenceYear, sequenceNumber], map: "uq_handover_voucher_branch_sequence")
+  @@index([organizationId, status, createdAt], map: "idx_handover_voucher_status")
+  @@map("collection_handover_vouchers")
+}
+
+model CollectionHandoverItem {
+  voucherId    String  @map("voucher_id") @db.Uuid
+  collectionId String  @unique @map("collection_id") @db.Uuid
+  amount       Decimal @db.Decimal(18, 4)
+
+  voucher    CollectionHandoverVoucher @relation(fields: [voucherId], references: [id])
+  collection Collection                @relation(fields: [collectionId], references: [id])
+
+  @@id([voucherId, collectionId])
+  @@map("collection_handover_items")
+}
+
+model CollectionReversalRequest {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  collectionId String    @map("collection_id") @db.Uuid
+  reason       String
+  status       String    @default("pending")
+  requestedBy  String    @map("requested_by") @db.Uuid
+  requestedAt  DateTime  @default(now()) @map("requested_at") @db.Timestamptz()
+  reviewedBy   String?   @map("reviewed_by") @db.Uuid
+  reviewedAt   DateTime? @map("reviewed_at") @db.Timestamptz()
+  reviewNote   String?   @map("review_note")
+  reversalId   String?   @map("reversal_id") @db.Uuid
+
+  collection Collection @relation(fields: [collectionId], references: [id])
+  requester  User       @relation("CollectionReversalRequester", fields: [requestedBy], references: [id])
+  reviewer   User?      @relation("CollectionReversalReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([collectionId, status], map: "idx_collection_reversal_request")
+  @@index([status, requestedAt], map: "idx_collection_reversal_pending")
+  @@map("collection_reversal_requests")
 }
 
 model FollowupType {
@@ -731,27 +998,28 @@ model Task {
 // 9) الحجوزات
 // ---------------------------------------------------------------------------
 model Reservation {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customerId     String    @map("customer_id") @db.Uuid
-  currencyCode   String    @map("currency_code")
+  id           String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId   String @map("customer_id") @db.Uuid
+  currencyCode String @map("currency_code")
 
   // --- Legacy fields (pre-PR-F credit-reservation shape) — kept as-is, not dropped, not used by app code ---
-  creditAmount   Decimal   @map("credit_amount") @db.Decimal(18, 4)
-  usedAmount     Decimal   @default(0) @map("used_amount") @db.Decimal(18, 4)
-  paymentDate    DateTime? @map("payment_date") @db.Date
+  creditAmount Decimal   @map("credit_amount") @db.Decimal(18, 4)
+  usedAmount   Decimal   @default(0) @map("used_amount") @db.Decimal(18, 4)
+  paymentDate  DateTime? @map("payment_date") @db.Date
 
   // --- Goods reservation fields (PR-F) — nullable so this ADD COLUMN stays non-destructive ---
-  itemName       String?   @map("item_name")
-  itemType       String?   @map("item_type")
-  quantity       Decimal?  @db.Decimal(18, 4)
-  unit           String?
-  unitPrice      Decimal?  @map("unit_price") @db.Decimal(18, 4)
-  totalAmount    Decimal?  @map("total_amount") @db.Decimal(18, 4)
-  issuedQty      Decimal   @default(0) @map("issued_qty") @db.Decimal(18, 4)
-  remainingQty   Decimal?  @map("remaining_qty") @db.Decimal(18, 4)
-  createdBy      String?   @map("created_by") @db.Uuid
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  itemName     String?  @map("item_name")
+  itemType     String?  @map("item_type")
+  quantity     Decimal? @db.Decimal(18, 4)
+  unit         String?
+  unitId       String?  @map("unit_id") @db.Uuid
+  unitPrice    Decimal? @map("unit_price") @db.Decimal(18, 4)
+  totalAmount  Decimal? @map("total_amount") @db.Decimal(18, 4)
+  issuedQty    Decimal  @default(0) @map("issued_qty") @db.Decimal(18, 4)
+  remainingQty Decimal? @map("remaining_qty") @db.Decimal(18, 4)
+  createdBy    String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
   documentNumber String?   @map("document_number")
   warehouse      String?
@@ -760,13 +1028,29 @@ model Reservation {
   status         String    @default("open")
   notes          String?
 
-  customer Customer          @relation(fields: [customerId], references: [id])
-  currency Currency          @relation(fields: [currencyCode], references: [code])
-  creator  User?             @relation("ReservationCreator", fields: [createdBy], references: [id])
-  items    ReservationItem[]
+  customer    Customer          @relation(fields: [customerId], references: [id])
+  currency    Currency          @relation(fields: [currencyCode], references: [code])
+  creator     User?             @relation("ReservationCreator", fields: [createdBy], references: [id])
+  measureUnit Unit?             @relation(fields: [unitId], references: [id])
+  items       ReservationItem[]
 
   @@index([customerId], map: "idx_reservations_customer")
+  @@index([status, expiresAt], map: "idx_reservations_status_expiry")
   @@map("reservations")
+}
+
+model Unit {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code      String   @unique
+  nameAr    String   @map("name_ar")
+  weightKg  Decimal? @map("weight_kg") @db.Decimal(14, 4)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  reservations Reservation[]
+
+  @@map("units")
 }
 
 model ReservationItem {
@@ -845,6 +1129,24 @@ model Notification {
   @@map("notifications")
 }
 
+model AccountingPeriod {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  year           Int
+  month          Int
+  status         String    @default("locked")
+  reason         String
+  lockedBy       String    @map("locked_by") @db.Uuid
+  lockedAt       DateTime  @default(now()) @map("locked_at") @db.Timestamptz()
+  unlockedBy     String?   @map("unlocked_by") @db.Uuid
+  unlockedAt     DateTime? @map("unlocked_at") @db.Timestamptz()
+  unlockReason   String?   @map("unlock_reason")
+
+  @@unique([organizationId, year, month], map: "uq_accounting_period_org_month")
+  @@index([organizationId, status, year, month], map: "idx_accounting_period_status")
+  @@map("accounting_periods")
+}
+
 model AuditLog {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId      String?  @map("user_id") @db.Uuid
@@ -880,9 +1182,9 @@ model SystemSetting {
 // Milestone 8: Idempotency keys (منع تكرار العمليات من تطبيق المحصل)
 // ---------------------------------------------------------------------------
 model IdempotencyKey {
-  key         String   @id
-  response    Json     @db.JsonB
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  key       String   @id
+  response  Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
   @@index([createdAt], map: "idx_idempotency_created")
   @@map("idempotency_keys")
@@ -922,7 +1224,7 @@ model AnalyticalAccount {
   organizationId String   @map("organization_id") @db.Uuid
   accountNumber  String   @map("account_number")
   accountName    String   @map("account_name")
-  category       String   // debtor | employee_advance | employee_custody | other
+  category       String // debtor | employee_advance | employee_custody | other
   personName     String?  @map("person_name")
   employeeNumber String?  @map("employee_number")
   currencyCode   String   @map("currency_code")
@@ -943,19 +1245,20 @@ model AnalyticalAccount {
 }
 
 model AnalyticalMovement {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  accountId         String   @map("account_id") @db.Uuid
-  currencyCode      String   @map("currency_code")
-  txDate            DateTime @map("tx_date") @db.Date
-  documentType      String?  @map("document_type")
-  documentNumber    String?  @map("document_number")
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId         String    @map("account_id") @db.Uuid
+  currencyCode      String    @map("currency_code")
+  txDate            DateTime  @map("tx_date") @db.Date
+  documentType      String?   @map("document_type")
+  documentNumber    String?   @map("document_number")
   description       String?
-  debit             Decimal  @default(0) @db.Decimal(18, 4)
-  credit            Decimal  @default(0) @db.Decimal(18, 4)
-  sourceImportJobId String?  @map("source_import_job_id") @db.Uuid
-  sourceRowNumber   Int?     @map("source_row_number")
-  lineHash          String   @unique @map("line_hash")
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  debit             Decimal   @default(0) @db.Decimal(18, 4)
+  credit            Decimal   @default(0) @db.Decimal(18, 4)
+  sourceImportJobId String?   @map("source_import_job_id") @db.Uuid
+  sourceRowNumber   Int?      @map("source_row_number")
+  lineHash          String    @map("line_hash")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reversedAt        DateTime? @map("reversed_at") @db.Timestamptz()
 
   account         AnalyticalAccount @relation(fields: [accountId], references: [id])
   currency        Currency          @relation(fields: [currencyCode], references: [code])

@@ -38,6 +38,9 @@ const KIND_AR: Record<string, { label: string; tone: KindTone }> = {
   promise_due: { label: 'وعد مستحق', tone: 'hazard' },
   promise_overdue: { label: 'وعد متأخر', tone: 'debt' },
   collection_created: { label: 'تحصيل جديد', tone: 'pine' },
+  collection_reversal_requested: { label: 'طلب عكس تحصيل', tone: 'debt' },
+  finance_alert: { label: 'تنبيه مالي فوري', tone: 'debt' },
+  scheduled_job_failed: { label: 'فشل مهمة مجدولة', tone: 'debt' },
   customer_transferred: { label: 'نقل عميل', tone: 'neutral' },
 };
 
@@ -73,6 +76,33 @@ function describe(n: NotificationItem): { title: string; text: string; href?: st
         title: 'تحصيل جديد بانتظار الاستلام',
         text: `سُجّل تحصيل من ${customerName || ''}${money ? ` بمبلغ ${money}` : ''}${p.method ? ` — ${p.method}` : ''}${p.collectorName ? ` بواسطة ${p.collectorName}` : ''}`,
         href: customerHref,
+      };
+    case 'collection_reversal_requested':
+      return {
+        title: 'طلب عكس يحتاج موافقة مالية',
+        text: `طُلب عكس تحصيل${money ? ` بمبلغ ${money}` : ''}${p.reason ? ` — ${p.reason}` : ''}`,
+        href: '/collections/reconciliation',
+      };
+    case 'finance_alert': {
+      const labels: Record<string, string> = {
+        collection_reversed: 'تم عكس تحصيل',
+        manual_balance_adjustment: 'تم تعديل رصيد يدويًا',
+        credit_limit_overridden: 'تم تجاوز سقف ائتمان',
+        customer_merged: 'تم دمج سجلّي عميل',
+        import_reversed: 'تم التراجع عن دفعة استيراد',
+      };
+      const eventLabel = labels[String(p.event)] ?? 'تمت عملية مالية حساسة';
+      return {
+        title: eventLabel,
+        text: `${eventLabel}${money ? ` بمبلغ ${money}` : ''}${p.actorName ? ` بواسطة ${p.actorName}` : ''}${p.reason ? ` — ${p.reason}` : ''}`,
+        href: typeof p.href === 'string' ? p.href : undefined,
+      };
+    }
+    case 'scheduled_job_failed':
+      return {
+        title: 'تعطلت مهمة مجدولة',
+        text: `فشلت المهمة ${p.job ?? ''}${p.message ? ` — ${p.message}` : ''}`,
+        href: typeof p.href === 'string' ? p.href : '/admin/audit',
       };
     case 'customer_transferred':
       return {

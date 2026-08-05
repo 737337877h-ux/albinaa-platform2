@@ -210,6 +210,10 @@ export default function AnalyticalAccountsPage() {
         }
       />
 
+      <Card className="border-pine-200 bg-pine-50/60 p-4 text-sm text-pine-900 dark:border-pine-800 dark:bg-pine-900/20 dark:text-pine-100">
+        السلف على الغير ليست سلف موظفين ولا تظهر في هذه الصفحة. تُدار حصريًا من تبويب «السلف» مع المتابعات والوعود والتحصيل.
+      </Card>
+
       <Card>
         <div className="flex flex-wrap items-center gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
           <div className="relative min-w-[200px] flex-1">
