@@ -35,7 +35,9 @@ describe('Global command palette search (e2e)', () => {
       customerId, currencyCode: 'YER', documentTypeId: documentType.id, txDate: new Date('2026-08-02'),
       documentNumber: 'CMD-INV-777', debit: 2000, credit: 0, lineHash: `cmd-doc-${Date.now()}`, importJobId: job.id,
     } });
-    const collectorId = (await prisma.collector.create({ data: { userId: admin.id } })).id;
+    const collectorId = (await prisma.collector.upsert({
+      where: { userId: admin.id }, update: { active: true }, create: { userId: admin.id },
+    })).id;
     const method = await prisma.collectionMethod.findFirstOrThrow({ where: { organizationId: admin.organizationId } });
     await prisma.collection.create({ data: {
       customerId, collectorId, currencyCode: 'YER', amount: 500, methodId: method.id,
