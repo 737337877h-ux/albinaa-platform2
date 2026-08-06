@@ -28,6 +28,15 @@ export class ReportsController {
     res.send(buffer);
   }
 
+  @Get('summary.pdf') @RequirePermissions('reports.export') @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @ApiOperation({ summary: 'تصدير التقرير الإداري الشامل إلى PDF عربي منسق ومفصول بالعملة' })
+  async summaryPdf(@CurrentUser() user: AuthUser, @Query('accountClass') accountClass: string | undefined, @Res() res: Response) {
+    const buffer = await this.reports.summaryPdf(user, accountClass === 'advance' ? 'advance' : 'customer');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="albinaa-report-${new Date().toISOString().slice(0, 10)}.pdf"`);
+    res.send(buffer);
+  }
+
   @Get('kpi') @RequirePermissions('reports.read')
   @ApiOperation({ summary: 'DSO وCEI وأداء التحصيل والوعود وترتيب المحصلين خلال 12 شهرًا' })
   kpi(@CurrentUser() user: AuthUser, @Query('accountClass') accountClass?: string) {

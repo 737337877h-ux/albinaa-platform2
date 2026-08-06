@@ -7,6 +7,7 @@ import { calculateCei, calculateDso, safePercent, weightedDebtAge } from './kpi-
 import { UpdateCollectorTargetDto } from './dto/update-collector-target.dto';
 import ExcelJS from 'exceljs';
 import { AgingService } from '../aging/aging.service';
+import { renderManagementSummaryPdf } from './summary-pdf.renderer';
 
 const key = (a: string, b: string) => `${a}|${b}`;
 const monthKey = (date: Date) => date.toISOString().slice(0, 7);
@@ -129,6 +130,15 @@ export class ReportsService {
     }
     const buffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(buffer);
+  }
+
+  async summaryPdf(actor: AuthUser, accountClass: 'customer' | 'advance' = 'customer') {
+    const report = await this.summary(actor, accountClass);
+    const organization = await this.prisma.organization.findUniqueOrThrow({
+      where: { id: actor.organizationId },
+      select: { name: true, systemSettings: { select: { key: true, value: true } } },
+    });
+    return renderManagementSummaryPdf(report, organization, actor.fullName || actor.username);
   }
 
   async updateTarget(actor: AuthUser, collectorId: string, currencyCode: string, dto: UpdateCollectorTargetDto, req?: Request) {
