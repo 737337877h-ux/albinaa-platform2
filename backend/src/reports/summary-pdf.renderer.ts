@@ -69,6 +69,10 @@ function dateTime(value: Date) {
   });
 }
 
+function hasArabic(value: string) {
+  return /[\u0600-\u06ff]/.test(value);
+}
+
 export async function renderManagementSummaryPdf(
   report: ManagementSummaryPdfReport,
   organization: ManagementSummaryPdfOrganization,
@@ -114,19 +118,32 @@ export async function renderManagementSummaryPdf(
     y += 31;
   };
 
+  const currencySectionTitle = (currency: string) => {
+    ensureSpace(34);
+    document.fillColor('#edf4f1').roundedRect(LEFT, y, CONTENT_WIDTH, 25, 5).fill();
+    document.fillColor(GREEN).font('LatinBold').fontSize(9)
+      .text(currency, LEFT + 8, y + 7, { width: 55, align: 'left' });
+    document.font('ArabicBold').fontSize(9);
+    arabic(document, 'ملخص العملة', LEFT + 70, y + 5, CONTENT_WIDTH - 78, { align: 'right' });
+    y += 31;
+  };
+
   const metric = (label: string, value: string, x: number, width: number) => {
     document.lineWidth(0.6).strokeColor(LINE).roundedRect(x, y, width, 48, 5).stroke();
     document.fillColor('#687773').font('Arabic').fontSize(6.6);
     arabic(document, label, x + 7, y + 5, width - 14, { align: 'right' });
-    document.fillColor(TEXT).font('LatinBold').fontSize(10.5).text(value, x + 7, y + 23, { width: width - 14, align: 'right' });
+    document.fillColor(TEXT).font(hasArabic(value) ? 'ArabicBold' : 'LatinBold').fontSize(10.5);
+    if (hasArabic(value)) arabic(document, value, x + 7, y + 21, width - 14, { align: 'right' });
+    else document.text(value, x + 7, y + 23, { width: width - 14, align: 'right' });
   };
 
   const tableHeader = (headers: string[], widths: number[]) => {
     document.fillColor(GREEN).rect(LEFT, y, CONTENT_WIDTH, 23).fill();
     let x = LEFT;
     headers.forEach((header, index) => {
-      document.fillColor('#ffffff').font('ArabicBold').fontSize(6.7);
-      arabic(document, header, x + 3, y + 5, widths[index] - 6, { align: 'center' });
+      document.fillColor('#ffffff').font(hasArabic(header) ? 'ArabicBold' : 'LatinBold').fontSize(6.7);
+      if (hasArabic(header)) arabic(document, header, x + 3, y + 5, widths[index] - 6, { align: 'center' });
+      else document.text(header, x + 3, y + 6, { width: widths[index] - 6, align: 'center' });
       x += widths[index];
     });
     y += 23;
@@ -151,13 +168,13 @@ export async function renderManagementSummaryPdf(
 
   drawHeader();
   for (const row of report.byCurrency) {
-    sectionTitle(`ملخص العملة - ${row.currency}`);
+    currencySectionTitle(row.currency);
     const gap = 7;
     const width = (CONTENT_WIDTH - gap * 3) / 4;
     metric('إجمالي المديونية', `${money(row.debtTotal)} ${row.currency}`, LEFT, width);
     metric('عدد الحسابات المدينة', String(row.debtorCount), LEFT + (width + gap), width);
-    metric('أيام التحصيل DSO', row.kpi?.dso == null ? 'غير متاح' : money(row.kpi.dso), LEFT + (width + gap) * 2, width);
-    metric('كفاءة التحصيل CEI', row.kpi?.cei == null ? 'بانتظار الإقفال' : `${money(row.kpi.cei)}%`, LEFT + (width + gap) * 3, width);
+    metric('أيام التحصيل', row.kpi?.dso == null ? 'غير متاح' : money(row.kpi.dso), LEFT + (width + gap) * 2, width);
+    metric('كفاءة التحصيل', row.kpi?.cei == null ? 'بانتظار الإقفال' : `${money(row.kpi.cei)}%`, LEFT + (width + gap) * 3, width);
     y += 56;
     const aging = row.aging;
     tableHeader(['0-30', '31-60', '61-90', '91-120', '+120', 'غير مؤرخ', 'الإجمالي'], [77, 77, 77, 77, 77, 77, 77]);
