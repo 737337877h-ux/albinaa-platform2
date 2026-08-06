@@ -17,6 +17,11 @@ interface DataQuality {
   multiCurrencyCustomers: number;
   suspiciousBalances: number;
   unclassifiedReservationUnits: number;
+  recentImportReports: {
+    id: string; fileName: string; importedAt: string; status: string; rowsTotal: number;
+    customersNew: number; customersUpdated: number; errorsCount: number;
+    duplicatePairsFlagged: number; requiresReview: boolean;
+  }[];
 }
 
 interface DuplicateCustomerRef {
@@ -206,6 +211,17 @@ export default function DataQualityPage() {
           </div>
         )}
       </DataState>
+
+      <Card className="overflow-hidden">
+        <div className="border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+          <h2 className="font-semibold">تقرير جودة آخر ملفات الاستيراد</h2>
+          <p className="text-xs text-concrete-500">يظهر تلقائيًا بعد كل استيراد، وأي ملف به أخطاء أو أزواج تشابه يبقى بحاجة إلى مراجعة بشرية.</p>
+        </div>
+        <Table><THead cols={['الملف', 'الصفوف', 'جديد', 'محدّث', 'أخطاء', 'أزواج تشابه', 'النتيجة']} /><tbody>{(summary.data?.recentImportReports ?? []).map((job) => <TRow key={job.id} hazard={job.requiresReview}>
+          <TD><span className="font-semibold">{job.fileName}</span><p className="text-xs text-concrete-500">{new Date(job.importedAt).toLocaleString('ar-YE')}</p></TD>
+          <TD className="tnum">{job.rowsTotal}</TD><TD className="tnum">{job.customersNew}</TD><TD className="tnum">{job.customersUpdated}</TD><TD className="tnum">{job.errorsCount}</TD><TD className="tnum">{job.duplicatePairsFlagged}</TD><TD>{job.requiresReview ? <span className="text-hazard-700 dark:text-hazard-400">يحتاج مراجعة</span> : <span className="text-pine-700 dark:text-pine-200">سليم</span>}</TD>
+        </TRow>)}</tbody></Table>
+      </Card>
 
       <Card>
         <DataState

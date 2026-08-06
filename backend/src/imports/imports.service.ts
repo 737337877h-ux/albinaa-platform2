@@ -730,6 +730,7 @@ export class ImportsService {
               customerAId: members[a].id,
               customerBId: members[b].id,
               matchReason: 'تطابق الاسم بعد التطبيع وإزالة لاحقة رقمية محتملة — للمراجعة فقط',
+              sourceImportJobId: jobId,
             },
           });
           dupPairs += 1;

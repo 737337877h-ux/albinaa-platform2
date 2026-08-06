@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { AlertTriangle, ChevronDown, ChevronLeft, ChevronUp, PackageCheck, Plus } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronLeft, ChevronUp, Download, Grid3X3, List, PackageCheck, Plus, Search } from 'lucide-react';
 import { api, tokenStore } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtMoney } from '@/lib/format';
@@ -68,6 +68,10 @@ export default function ReservationsPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [expiringOnly, setExpiringOnly] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [currencyFilter, setCurrencyFilter] = useState('all');
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
   const summary = useQuery({
     queryKey: ['reservations-summary'],
@@ -81,19 +85,43 @@ export default function ReservationsPage() {
     enabled: allowed && hasToken(),
   });
 
-  const grouped = useMemo(() => {
+  const filteredRows = useMemo(() => {
     const now = Date.now();
     const sevenDays = now + 7 * 86_400_000;
-    const visible = (reservations.data ?? []).filter((row) => {
-      if (!expiringOnly) return true;
-      if (!activeReservation(row) || !row.expiresAt) return false;
-      const expiry = new Date(row.expiresAt).getTime();
-      return expiry >= now && expiry <= sevenDays;
+    const needle = search.trim().toLocaleLowerCase('ar');
+    return (reservations.data ?? []).filter((row) => {
+      if (statusFilter !== 'all' && row.status !== statusFilter) return false;
+      if (currencyFilter !== 'all' && row.currencyCode !== currencyFilter) return false;
+      if (needle && !`${row.customer.name} ${row.customer.externalCustomerCode ?? ''} ${row.itemName ?? ''} ${row.documentNumber ?? ''}`.toLocaleLowerCase('ar').includes(needle)) return false;
+      if (expiringOnly) {
+        if (!activeReservation(row) || !row.expiresAt) return false;
+        const expiry = new Date(row.expiresAt).getTime();
+        return expiry >= now && expiry <= sevenDays;
+      }
+      return true;
     });
+  }, [reservations.data, expiringOnly, search, statusFilter, currencyFilter]);
+  const grouped = useMemo(() => {
     const map = new Map<string, Reservation[]>();
-    for (const row of visible) map.set(row.customer.id, [...(map.get(row.customer.id) ?? []), row]);
+    for (const row of filteredRows) map.set(row.customer.id, [...(map.get(row.customer.id) ?? []), row]);
     return [...map.values()];
-  }, [reservations.data, expiringOnly]);
+  }, [filteredRows]);
+  const currencies = useMemo(() => [...new Set((reservations.data ?? []).map((row) => row.currencyCode))].sort(), [reservations.data]);
+
+  const exportCsv = () => {
+    const cell = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const header = ['العميل', 'كود العميل', 'الصنف', 'الكمية المتبقية', 'الوحدة', 'العملة', 'سعر الوحدة', 'الحالة', 'المخزن', 'المستند', 'الانتهاء'];
+    const lines = filteredRows.map((row) => [
+      row.customer.name, row.customer.externalCustomerCode, row.itemName, row.remainingQty,
+      row.measureUnit?.nameAr, row.currencyCode, row.unitPrice, STATUS_AR[row.status] ?? row.status,
+      row.warehouse, row.documentNumber, row.expiresAt?.slice(0, 10),
+    ].map(cell).join(','));
+    const blob = new Blob([`\uFEFF${header.map(cell).join(',')}\n${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = `reservations-${new Date().toISOString().slice(0, 10)}.csv`; link.click();
+    URL.revokeObjectURL(url);
+  };
 
   if (!allowed) return <Card><PermissionNotice message="لا تملك صلاحية عرض حجوزات البضاعة" /></Card>;
 
@@ -151,6 +179,25 @@ export default function ReservationsPage() {
         )}
       </DataState>
 
+      <Card className="p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-64 flex-1">
+            <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-concrete-400" />
+            <Input value={search} onChange={(event) => setSearch(event.target.value)} className="pr-9" placeholder="بحث بالعميل أو الكود أو الصنف أو المستند" />
+          </div>
+          <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="w-40">
+            <option value="all">كل الحالات</option><option value="open">نشط</option><option value="partial">مسلم جزئيًا</option><option value="completed">مكتمل</option><option value="cancelled">ملغي</option>
+          </Select>
+          <Select value={currencyFilter} onChange={(event) => setCurrencyFilter(event.target.value)} className="w-32">
+            <option value="all">كل العملات</option>{currencies.map((code) => <option key={code} value={code}>{code}</option>)}
+          </Select>
+          <Button variant="secondary" onClick={() => setViewMode((value) => value === 'table' ? 'cards' : 'table')}>
+            {viewMode === 'table' ? <Grid3X3 className="h-4 w-4" /> : <List className="h-4 w-4" />}{viewMode === 'table' ? 'عرض بطاقات' : 'عرض جدول'}
+          </Button>
+          <Button variant="secondary" onClick={exportCsv}><Download className="h-4 w-4" />تصدير CSV</Button>
+        </div>
+      </Card>
+
       <Card className="overflow-hidden">
         <div className="flex items-center gap-2 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
           <PackageCheck className="h-4 w-4 text-sky-500" />
@@ -166,7 +213,7 @@ export default function ReservationsPage() {
           emptyTitle={expiringOnly ? 'لا توجد حجوزات تنتهي خلال 7 أيام' : 'لا توجد حجوزات'}
           skeletonClassName="h-52"
         >
-          <Table>
+          {viewMode === 'table' ? <Table>
             <THead cols={['العميل', 'المحصل', 'الحجوزات', 'الأطنان النشطة', 'القيمة', 'أقرب انتهاء', '']} />
             <tbody>
               {grouped.map((rows) => {
@@ -210,7 +257,18 @@ export default function ReservationsPage() {
                 );
               })}
             </tbody>
-          </Table>
+          </Table> : <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+            {filteredRows.map((row) => {
+              const tons = row.measureUnit?.weightKg == null ? null : Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.measureUnit.weightKg) / 1000;
+              return <div key={row.id} className="rounded-xl border border-concrete-100 bg-white p-4 dark:border-white/10 dark:bg-iron-800">
+                <div className="flex items-start justify-between gap-2"><Link href={`/customers/${row.customer.id}`} className="font-semibold text-pine-700 hover:underline dark:text-pine-100">{row.customer.name}</Link><Badge tone={row.status === 'cancelled' ? 'debt' : row.status === 'completed' ? 'pine' : 'neutral'}>{STATUS_AR[row.status] ?? row.status}</Badge></div>
+                <p className="mt-2 text-sm font-semibold">{row.itemName ?? 'صنف غير مسمى'}</p>
+                <p className="mt-1 text-xs text-concrete-500">{fmtMoney(Number(row.remainingQty ?? row.quantity ?? 0))} {row.measureUnit?.nameAr ?? 'وحدة غير مصنفة'}{tons == null ? '' : ` • ${fmtMoney(tons)} طن`}</p>
+                <p className="mt-2"><Money value={Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.unitPrice ?? 0)} currency={row.currencyCode} /></p>
+                <p className="mt-2 text-xs text-concrete-500">{row.warehouse ?? 'مخزن غير محدد'} • {row.documentNumber ?? 'بلا مستند'} • {row.expiresAt ? fmtDate(row.expiresAt) : 'بلا انتهاء'}</p>
+              </div>;
+            })}
+          </div>}
         </DataState>
       </Card>
       <Link href="/dashboard" className="inline-flex items-center gap-1 text-xs text-pine-700 dark:text-pine-100">العودة للوحة التحكم <ChevronLeft className="h-4 w-4" /></Link>

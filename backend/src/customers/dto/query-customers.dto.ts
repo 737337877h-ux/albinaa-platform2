@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 
 export class QueryCustomersDto {
   @ApiPropertyOptional({
@@ -32,7 +32,7 @@ export class QueryCustomersDto {
   region?: string;
 
   @ApiPropertyOptional({ description: 'تصفية حسب المحصل الحالي' })
-  @IsOptional() @IsUUID()
+  @IsOptional() @ValidateIf((_, value) => value !== 'unassigned') @IsUUID()
   collectorId?: string;
 
   @ApiPropertyOptional({ description: 'تصفية حسب الفرع' })

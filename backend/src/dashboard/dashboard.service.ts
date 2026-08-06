@@ -306,6 +306,34 @@ export class DashboardService {
     }
     const debt120Plus = { count: debt120Customers.size, totalByCurrency: debt120TotalByCurrency };
 
+    const concentrationByCurrency: Record<string, {
+      totalDebt: number;
+      top10Debt: number;
+      percentage: number;
+      topCustomers: Array<{ customerId: string; customerName: string; customerCode: string | null; amount: number }>;
+    }> = {};
+    const agingByCurrency = new Map<string, typeof agingReport.customers>();
+    for (const row of agingReport.customers) {
+      agingByCurrency.set(row.currency, [...(agingByCurrency.get(row.currency) ?? []), row]);
+    }
+    for (const [currency, rows] of agingByCurrency) {
+      const ranked = [...rows].sort((a, b) => Number(b.totalDue) - Number(a.totalDue));
+      const totalDebt = ranked.reduce((sum, row) => sum + Number(row.totalDue), 0);
+      const top = ranked.slice(0, 10);
+      const top10Debt = top.reduce((sum, row) => sum + Number(row.totalDue), 0);
+      concentrationByCurrency[currency] = {
+        totalDebt,
+        top10Debt,
+        percentage: totalDebt > 0 ? (top10Debt / totalDebt) * 100 : 0,
+        topCustomers: top.map((row) => ({
+          customerId: String(row.customerId),
+          customerName: String(row.customerName),
+          customerCode: row.customerCode == null ? null : String(row.customerCode),
+          amount: Number(row.totalDue),
+        })),
+      };
+    }
+
     const highRisk = await this.prisma.customer.findMany({
       where: {
         organizationId: orgId,
@@ -395,6 +423,7 @@ export class DashboardService {
       tasksToday,
       topReasons,
       debt120Plus,
+      concentrationByCurrency,
       highRiskCustomers,
       topPriorityTasks,
       collectorPerformanceToday,
