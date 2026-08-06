@@ -17,7 +17,11 @@ describe('Collection KPI report (e2e)', () => {
     prisma = app.get(PrismaService);
     token = (await request(app.getHttpServer()).post('/auth/login').send(ADMIN).expect(200)).body.accessToken;
     const admin = await prisma.user.findFirstOrThrow({ where: { username: 'admin' } });
-    collectorId = (await prisma.collector.create({ data: { userId: admin.id } })).id;
+    collectorId = (await prisma.collector.upsert({
+      where: { userId: admin.id },
+      update: {},
+      create: { userId: admin.id },
+    })).id;
     await prisma.currency.upsert({
       where: { code: CURRENCY }, update: { active: true },
       create: { code: CURRENCY, sourceCode: CURRENCY, nameAr: 'عملة اختبار المؤشرات', decimals: 2 },
