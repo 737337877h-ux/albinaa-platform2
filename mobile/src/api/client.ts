@@ -11,7 +11,10 @@ let pendingRequests: Array<{
 
 async function buildClient(): Promise<AxiosInstance> {
   const baseURL = await getBaseUrl();
-  const c = axios.create({ baseURL, timeout: 15_000 });
+  // React Native's legacy XHR adapter can report a generic Network Error for
+  // reachable clear-text LAN hosts. The fetch adapter uses the same native
+  // transport as the successful health probe and works consistently on Android.
+  const c = axios.create({ baseURL, timeout: 15_000, adapter: 'fetch' });
 
   c.interceptors.request.use(async (config) => {
     const token = await getAccessToken();
@@ -38,7 +41,7 @@ async function buildClient(): Promise<AxiosInstance> {
       try {
         const refreshToken = await getRefreshToken();
         if (!refreshToken) throw new Error('No refresh token');
-        const { data } = await axios.post(`${baseURL}/auth/refresh`, { refreshToken });
+        const { data } = await axios.post(`${baseURL}/auth/refresh`, { refreshToken }, { adapter: 'fetch' });
         await setTokens(data.accessToken, data.refreshToken);
         pendingRequests.forEach((pending) => pending.resolve(data.accessToken));
         pendingRequests = [];

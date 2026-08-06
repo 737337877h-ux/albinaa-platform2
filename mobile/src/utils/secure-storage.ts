@@ -4,6 +4,7 @@ import type { AuthUser } from '../api/auth';
 const TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
 const CACHED_USER_KEY = 'albinaa.cached_user';
+const BIOMETRIC_KEY = 'albinaa.biometric_enabled';
 
 export async function getAccessToken(): Promise<string | null> {
   return SecureStore.getItemAsync(TOKEN_KEY);
@@ -44,6 +45,14 @@ export async function clearCachedUser(): Promise<void> {
 
 export async function clearSession(): Promise<void> {
   await Promise.all([clearTokens(), clearCachedUser()]);
+}
+
+export async function isBiometricEnabled(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(BIOMETRIC_KEY)) === 'true';
+}
+
+export async function setBiometricEnabled(enabled: boolean): Promise<void> {
+  await SecureStore.setItemAsync(BIOMETRIC_KEY, enabled ? 'true' : 'false');
 }
 
 export async function isAuthenticated(): Promise<boolean> {

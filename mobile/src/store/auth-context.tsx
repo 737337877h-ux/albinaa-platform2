@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import * as SecureStore from 'expo-secure-store';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { AuthUser, login as apiLogin, logout as apiLogout, getMe } from '../api/auth';
 import {
-  clearSession, getCachedUser, setCachedUser,
+  clearTokens, getCachedUser, isBiometricEnabled, setCachedUser,
 } from '../utils/secure-storage';
 import { ensureDataOwner } from '../db/database';
 
@@ -12,6 +13,8 @@ interface AuthState {
   isAuthenticated: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  unlockOffline: () => Promise<boolean>;
+  cachedUser: AuthUser | null;
 }
 
 const AuthContext = createContext<AuthState>({
@@ -20,10 +23,13 @@ const AuthContext = createContext<AuthState>({
   isAuthenticated: false,
   login: async () => {},
   logout: async () => {},
+  unlockOffline: async () => false,
+  cachedUser: null,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [cachedUser, setLocalCachedUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -31,24 +37,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const token = await SecureStore.getItemAsync('access_token');
         const cached = await getCachedUser();
-        if (token && cached) {
+        setLocalCachedUser(cached);
+        if (cached) {
           await ensureDataOwner(`${cached.organizationId}:${cached.id}`);
-          // Open immediately from the encrypted cached identity. A network
-          // validation follows, but lack of connectivity must not lock the
-          // collector out of an already-provisioned device.
-          setUser(cached);
-          try {
-            const me = await getMe();
-            await ensureDataOwner(`${me.organizationId}:${me.id}`);
-            await setCachedUser(me);
-            setUser(me);
-          } catch (error: any) {
-            // Only an explicit server-side authentication rejection invalidates
-            // the offline session. Network errors keep the cached user active.
-            if ([400, 401, 403].includes(error?.response?.status)) {
-              await clearSession();
-              setUser(null);
-            }
+          const biometric = await isBiometricEnabled();
+          if (!biometric) setUser(cached);
+          if (token) {
+            try {
+              const me = await getMe();
+              await ensureDataOwner(`${me.organizationId}:${me.id}`);
+              await setCachedUser(me);
+              setLocalCachedUser(me);
+              if (!biometric) setUser(me);
+            } catch { /* keep encrypted identity, tokens, and offline data */ }
           }
         } else if (token) {
           const me = await getMe();
@@ -56,9 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await setCachedUser(me);
           setUser(me);
         }
-      } catch (error: any) {
-        if ([400, 401, 403].includes(error?.response?.status)) await clearSession();
-      } finally {
+      } catch { /* local database remains available */ } finally {
         setIsLoading(false);
       }
     })();
@@ -68,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const data = await apiLogin(username, password);
     await ensureDataOwner(`${data.user.organizationId}:${data.user.id}`);
     await setCachedUser(data.user);
+    setLocalCachedUser(data.user);
     setUser(data.user);
   }, []);
 
@@ -76,12 +76,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const refreshToken = await SecureStore.getItemAsync('refresh_token');
       if (refreshToken) await apiLogout(refreshToken);
     } catch { /* ignore */ }
-    await clearSession();
+    // Logging out locks server access but deliberately keeps the encrypted
+    // local identity and business cache so the device can be unlocked offline.
+    await clearTokens();
     setUser(null);
   }, []);
 
+  const unlockOffline = useCallback(async () => {
+    const cached = await getCachedUser();
+    if (!cached) return false;
+    const biometric = await isBiometricEnabled();
+    if (biometric) {
+      const available = await LocalAuthentication.hasHardwareAsync();
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!available || !enrolled) return false;
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'فتح تطبيق الراقي', cancelLabel: 'إلغاء', fallbackLabel: 'استخدام رمز الهاتف',
+      });
+      if (!result.success) return false;
+    }
+    await ensureDataOwner(`${cached.organizationId}:${cached.id}`);
+    setLocalCachedUser(cached);
+    setUser(cached);
+    return true;
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, isAuthenticated: !!user, login, logout }}>
+    <AuthContext.Provider value={{ user, cachedUser, isLoading, isAuthenticated: !!user, login, logout, unlockOffline }}>
       {children}
     </AuthContext.Provider>
   );

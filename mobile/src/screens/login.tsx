@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Alert,
-  KeyboardAvoidingView, Platform, Modal, ActivityIndicator, ScrollView,
+  KeyboardAvoidingView, Platform, Modal, ActivityIndicator, ScrollView, Image,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/auth-context';
 import {
   getBaseUrl, getStoredBaseUrl, getDefaultBaseUrl,
@@ -11,11 +12,14 @@ import {
 import { resetClient } from '../api/client';
 import { clearSession } from '../utils/secure-storage';
 import { APP_VERSION } from '../utils/constants';
+import { colors, radius, shadow } from '../theme';
+import brandImage from '../../assets/alraqi-brand.png';
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, unlockOffline, cachedUser } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [currentUrl, setCurrentUrl] = useState('');
@@ -52,11 +56,17 @@ export default function LoginScreen() {
     }
   };
 
+  const handleOffline = async () => {
+    const unlocked = await unlockOffline();
+    if (!unlocked) Alert.alert('تعذر الفتح', 'فعّل بصمة الهاتف أو سجّل الدخول بالخادم مرة واحدة لتجهيز العمل دون اتصال.');
+  };
+
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.card}>
-        <Text style={styles.logo}>البناء الراقي تحصيل</Text>
-        <Text style={styles.subtitle}>أساس تثق فيه</Text>
+        <Image source={brandImage} style={styles.brandImage} />
+        <Text style={styles.logo}>الراقي</Text>
+        <Text style={styles.subtitle}>إدارة المديونية والتحصيل</Text>
         <TextInput
           style={styles.input}
           placeholder="اسم المستخدم"
@@ -66,16 +76,35 @@ export default function LoginScreen() {
           autoCapitalize="none"
           autoCorrect={false}
         />
-        <TextInput
-          style={styles.input}
-          placeholder="كلمة المرور"
-          placeholderTextColor="#999"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-        />
+        <View style={styles.passwordWrap}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder="كلمة المرور"
+            placeholderTextColor="#879692"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={!showPassword}
+          />
+          <TouchableOpacity onPress={() => setShowPassword((value) => !value)} accessibilityLabel={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}>
+            <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={22} color={colors.muted} />
+          </TouchableOpacity>
+        </View>
         <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
           <Text style={styles.buttonText}>{loading ? 'جارٍ تسجيل الدخول...' : 'تسجيل الدخول'}</Text>
+        </TouchableOpacity>
+
+        {!!cachedUser && (
+          <TouchableOpacity style={styles.offlineButton} onPress={handleOffline}>
+            <Ionicons name="finger-print" size={22} color={colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.offlineTitle}>فتح البيانات المحفوظة</Text>
+              <Text style={styles.offlineHint}>يعمل دون إنترنت باسم {cachedUser.fullName}</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity onPress={() => Alert.alert('استعادة كلمة المرور', 'تواصل مع مدير النظام لإعادة تعيين كلمة المرور. ستبقى بياناتك المحلية محفوظة دون حذف.')}>
+          <Text style={styles.forgot}>نسيت كلمة المرور؟</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.serverLink} onPress={() => setSettingsOpen(true)}>
@@ -312,15 +341,22 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', backgroundColor: '#f0f4f8', padding: 20 },
-  card: { backgroundColor: '#fff', borderRadius: 16, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4 },
-  logo: { fontSize: 28, fontWeight: 'bold', color: '#1a73e8', textAlign: 'center', marginBottom: 4 },
-  subtitle: { fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 32 },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 12, padding: 14, fontSize: 16, marginBottom: 16, color: '#333', textAlign: 'right' },
-  button: { backgroundColor: '#1a73e8', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 8 },
+  container: { flex: 1, justifyContent: 'center', backgroundColor: colors.background, padding: 20 },
+  card: { backgroundColor: '#fff', borderRadius: radius.lg, padding: 24, borderWidth: 1, borderColor: colors.line, ...shadow },
+  brandImage: { width: 92, height: 92, borderRadius: 24, alignSelf: 'center', marginBottom: 12 },
+  logo: { fontSize: 29, fontWeight: '900', color: colors.primary, textAlign: 'center', marginBottom: 3 },
+  subtitle: { fontSize: 13, color: colors.muted, textAlign: 'center', marginBottom: 28 },
+  input: { borderWidth: 1, borderColor: colors.line, backgroundColor: '#FAFBFA', borderRadius: 14, padding: 14, fontSize: 16, marginBottom: 13, color: colors.ink, textAlign: 'right' },
+  passwordWrap: { borderWidth: 1, borderColor: colors.line, backgroundColor: '#FAFBFA', borderRadius: 14, paddingHorizontal: 14, marginBottom: 13, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  passwordInput: { flex: 1, paddingVertical: 14, fontSize: 16, color: colors.ink, textAlign: 'right' },
+  button: { backgroundColor: colors.primary, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 5 },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   serverLink: { marginTop: 16, padding: 10, alignItems: 'center' },
-  serverLinkText: { color: '#1a73e8', fontSize: 12 },
+  serverLinkText: { color: colors.secondary, fontSize: 11 },
+  offlineButton: { marginTop: 12, padding: 12, flexDirection: 'row-reverse', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: colors.primarySoft },
+  offlineTitle: { color: colors.primary, fontSize: 13, fontWeight: '800', textAlign: 'right' },
+  offlineHint: { color: colors.muted, fontSize: 10, marginTop: 2, textAlign: 'right' },
+  forgot: { color: colors.secondary, fontSize: 12, fontWeight: '700', textAlign: 'center', marginTop: 14 },
 
   // Modal
   modalContainer: { flex: 1, backgroundColor: '#f0f4f8' },

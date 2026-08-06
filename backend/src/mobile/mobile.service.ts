@@ -271,8 +271,15 @@ export class MobileService {
     return {
       id: c.id,
       fullName: c.name,
+      accountNumber: c.accountNumber,
+      externalCustomerCode: c.externalCustomerCode,
+      customerType: c.customerType,
       phonePrimary: c.phonePrimary,
+      phoneSecondary: c.phoneSecondary,
+      whatsapp: c.whatsapp,
       address: c.address,
+      geoLat: c.geoLat == null ? null : Number(c.geoLat),
+      geoLng: c.geoLng == null ? null : Number(c.geoLng),
       balances: c.balances.map((b: any) => ({
         currency: b.currencyCode,
         balance: Number(b.accountingBalance),

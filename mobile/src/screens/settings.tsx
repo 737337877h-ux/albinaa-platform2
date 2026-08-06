@@ -8,8 +8,11 @@ import {
   getBaseUrl, getLanOnlySync, isLocalNetworkUrl, setLanOnlySync,
 } from '../config/api';
 import {
-  requestGpsPermission, requestBackgroundGpsPermission, startGpsTracking, stopGpsTracking,
+  getWorkplace, requestGpsPermission, requestBackgroundGpsPermission, restoreGpsTracking,
+  setCurrentLocationAsWorkplace, startGpsTracking, stopGpsTracking,
 } from '../utils/gps';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { isBiometricEnabled, setBiometricEnabled } from '../utils/secure-storage';
 import { APP_VERSION, SYNC_INTERVAL_MS } from '../utils/constants';
 import {
   areLocalNotificationsEnabled, disableLocalNotifications,
@@ -27,12 +30,17 @@ export default function SettingsScreen() {
   const [lanOnly, setLanOnly] = useState(true);
   const [baseUrl, setBaseUrl] = useState('');
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [biometricEnabled, setBiometric] = useState(false);
+  const [workplaceSet, setWorkplaceSet] = useState(false);
 
   useEffect(() => {
-    Promise.all([getLanOnlySync(), getBaseUrl(), areLocalNotificationsEnabled()]).then(([localOnly, url, alertsEnabled]) => {
+    Promise.all([getLanOnlySync(), getBaseUrl(), areLocalNotificationsEnabled(), isBiometricEnabled(), restoreGpsTracking(), getWorkplace()]).then(([localOnly, url, alertsEnabled, biometric, gps, workplace]) => {
       setLanOnly(localOnly);
       setBaseUrl(url);
       setNotificationsEnabled(alertsEnabled);
+      setBiometric(biometric);
+      setGpsEnabled(gps);
+      setWorkplaceSet(!!workplace);
     });
     refreshStatus().catch(() => undefined);
   }, [refreshStatus]);
@@ -73,6 +81,30 @@ export default function SettingsScreen() {
       await disableLocalNotifications();
       setNotificationsEnabled(false);
     }
+  };
+
+  const toggleBiometric = async (value: boolean) => {
+    if (value) {
+      const available = await LocalAuthentication.hasHardwareAsync();
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!available || !enrolled) { Alert.alert('البصمة غير جاهزة', 'أضف بصمة أو قفل شاشة من إعدادات الهاتف أولاً.'); return; }
+      const result = await LocalAuthentication.authenticateAsync({ promptMessage: 'تفعيل دخول الراقي بالبصمة' });
+      if (!result.success) return;
+    }
+    await setBiometricEnabled(value);
+    setBiometric(value);
+  };
+
+  const saveWorkplace = async () => {
+    try {
+      const foreground = await requestGpsPermission();
+      if (!foreground) throw new Error('لم يتم منح صلاحية الموقع');
+      const background = await requestBackgroundGpsPermission();
+      if (!background) throw new Error('اختر السماح بالموقع دائماً لتفعيل تنبيه الوصول');
+      await setCurrentLocationAsWorkplace();
+      setWorkplaceSet(true);
+      Alert.alert('تم حفظ موقع العمل', 'سينبهك التطبيق عند الوصول لفتح التطبيق ومزامنة العمليات عبر الشبكة المحلية.');
+    } catch (error: any) { Alert.alert('تعذر حفظ الموقع', error?.message || 'تحقق من إعدادات GPS'); }
   };
 
   return (
@@ -129,6 +161,16 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>الموقع</Text>
         <SettingRow label="تسجيل موقع الزيارة" value={gpsEnabled} onChange={toggleGps} />
+        <TouchableOpacity style={styles.outlineBtn} onPress={saveWorkplace}>
+          <Text style={styles.outlineBtnText}>{workplaceSet ? 'تحديث موقع العمل الحالي' : 'اعتماد موقعي الحالي كموقع العمل'}</Text>
+        </TouchableOpacity>
+        <Text style={styles.hint}>عند دخول نطاق موقع العمل سيظهر تنبيه للمزامنة مع الخادم المحلي.</Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>الدخول والحماية</Text>
+        <SettingRow label="فتح التطبيق بالبصمة" value={biometricEnabled} onChange={toggleBiometric} />
+        <Text style={styles.hint}>بعد تسجيل الدخول أول مرة، تفتح البيانات المحفوظة بالبصمة حتى دون إنترنت.</Text>
       </View>
 
       <View style={styles.section}>

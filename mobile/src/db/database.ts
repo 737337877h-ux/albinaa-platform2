@@ -2,13 +2,14 @@ import * as SQLite from 'expo-sqlite';
 
 let db: SQLite.SQLiteDatabase;
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const BUSINESS_TABLES = ['customers', 'tasks', 'followups', 'promises', 'collections'] as const;
 type BusinessTable = typeof BUSINESS_TABLES[number];
 
 const TABLE_COLUMNS: Record<BusinessTable, string[]> = {
-  customers: ['id', 'fullName', 'phonePrimary', 'address', 'balances'],
+  customers: ['id', 'fullName', 'accountNumber', 'externalCustomerCode', 'customerType',
+    'phonePrimary', 'phoneSecondary', 'whatsapp', 'address', 'geoLat', 'geoLng', 'balances'],
   tasks: ['id', 'customerId', 'customerName', 'title', 'dueDate', 'priority', 'status'],
   followups: ['id', 'customerId', 'customerName', 'typeName', 'resultName', 'notes', 'followupAt'],
   promises: ['id', 'customerId', 'customerName', 'expectedAmount', 'currencyCode', 'dueDate', 'status', 'notes'],
@@ -59,6 +60,20 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => Promise<void>> =
       PRAGMA user_version = 5;
     `);
   },
+  6: async (d) => {
+    await d.execAsync(`
+      ALTER TABLE customers ADD COLUMN accountNumber TEXT;
+      ALTER TABLE customers ADD COLUMN externalCustomerCode TEXT;
+      ALTER TABLE customers ADD COLUMN customerType TEXT;
+      ALTER TABLE customers ADD COLUMN phoneSecondary TEXT;
+      ALTER TABLE customers ADD COLUMN whatsapp TEXT;
+      ALTER TABLE customers ADD COLUMN geoLat REAL;
+      ALTER TABLE customers ADD COLUMN geoLng REAL;
+      CREATE INDEX IF NOT EXISTS idx_customers_type_name ON customers(customerType, fullName);
+      CREATE INDEX IF NOT EXISTS idx_customers_account ON customers(accountNumber);
+      PRAGMA user_version = 6;
+    `);
+  },
 };
 
 async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
@@ -71,8 +86,15 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
       CREATE TABLE IF NOT EXISTS customers (
         id TEXT PRIMARY KEY,
         fullName TEXT NOT NULL,
+        accountNumber TEXT,
+        externalCustomerCode TEXT,
+        customerType TEXT,
         phonePrimary TEXT,
+        phoneSecondary TEXT,
+        whatsapp TEXT,
         address TEXT,
+        geoLat REAL,
+        geoLng REAL,
         balances TEXT,
         updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
       );
@@ -157,6 +179,8 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
         PRIMARY KEY (kind, id)
       );
       CREATE INDEX IF NOT EXISTS idx_reference_options_kind ON reference_options(kind, name);
+      CREATE INDEX IF NOT EXISTS idx_customers_type_name ON customers(customerType, fullName);
+      CREATE INDEX IF NOT EXISTS idx_customers_account ON customers(accountNumber);
       PRAGMA user_version = ${SCHEMA_VERSION};
     `);
     return;
@@ -262,6 +286,14 @@ export async function getById(table: string, id: string): Promise<any> {
   const d = await getDb();
   if (!BUSINESS_TABLES.includes(table as BusinessTable)) throw new Error(`Unsupported table: ${table}`);
   return await d.getFirstAsync(`SELECT * FROM ${table} WHERE id = ?`, id);
+}
+
+export async function updateCustomerPhoneOffline(id: string, phonePrimary: string): Promise<void> {
+  const d = await getDb();
+  await d.runAsync(
+    "UPDATE customers SET phonePrimary = ?, updatedAt = datetime('now') WHERE id = ?",
+    phonePrimary, id,
+  );
 }
 
 export async function getCustomerOffline360(id: string): Promise<any | null> {
