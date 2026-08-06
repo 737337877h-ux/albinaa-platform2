@@ -300,9 +300,19 @@ export class CollectionsService {
       where: { collectionId: id, status: 'pending' },
     });
     if (pending) throw new ConflictException('يوجد طلب عكس معلق لهذه العملية');
-    const reversalRequest = await this.prisma.collectionReversalRequest.create({
-      data: { collectionId: id, reason: dto.reason, requestedBy: actor.id },
-    });
+    let reversalRequest;
+    try {
+      reversalRequest = await this.prisma.collectionReversalRequest.create({
+        data: { collectionId: id, reason: dto.reason, requestedBy: actor.id },
+      });
+    } catch (error) {
+      // الفحص السابق يحسن الرسالة فقط، أما القيد الفريد فهو حارس التزامن الحقيقي.
+      // حوّل سباق طلبين متزامنين إلى 409 متوقع بدل تسريب خطأ قاعدة كـ500.
+      if ((error as { code?: string })?.code === 'P2002') {
+        throw new ConflictException('يوجد طلب عكس مسجل لهذه العملية');
+      }
+      throw error;
+    }
     await this.notifications.notifyByPermission(
       actor.organizationId, 'collections.approve', 'collection_reversal_requested', {
         requestId: reversalRequest.id, collectionId: id, amount: Number(original.amount),
