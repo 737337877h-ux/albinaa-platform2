@@ -119,6 +119,7 @@ model User {
   attachments               Attachment[]
   gpsLogs                   GpsLog[]
   notifications             Notification[]
+  pushTokens                DevicePushToken[]
   auditLogs                 AuditLog[]
   authSessions              AuthSession[]
 
@@ -1179,6 +1180,21 @@ model Notification {
 
   @@index([userId, readAt], map: "idx_notifications_user")
   @@map("notifications")
+}
+
+model DevicePushToken {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  token      String   @unique
+  platform   String
+  deviceName String?  @map("device_name")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz()
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_device_push_tokens_user")
+  @@map("device_push_tokens")
 }
 
 model AccountingPeriod {

@@ -6,6 +6,7 @@ import {
   clearTokens, getCachedUser, isBiometricEnabled, setCachedUser,
 } from '../utils/secure-storage';
 import { ensureDataOwner } from '../db/database';
+import { registerPushDevice, unregisterPushDevice } from '../utils/push-notifications';
 
 interface AuthState {
   user: AuthUser | null;
@@ -63,6 +64,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
+  useEffect(() => {
+    if (user) registerPushDevice().catch(() => undefined);
+  }, [user]);
+
   const login = useCallback(async (username: string, password: string) => {
     const data = await apiLogin(username, password);
     await ensureDataOwner(`${data.user.organizationId}:${data.user.id}`);
@@ -72,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    await unregisterPushDevice();
     try {
       const refreshToken = await SecureStore.getItemAsync('refresh_token');
       if (refreshToken) await apiLogout(refreshToken);
