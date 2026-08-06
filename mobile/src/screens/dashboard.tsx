@@ -77,7 +77,11 @@ export default function DashboardScreen({ navigation }: any) {
       <SectionHeader title="أولوية التواصل" subtitle="أعلى الحسابات رصيداً في نطاق إسنادك" />
       <View style={styles.priorityCard}>
         {priorities.length === 0 ? <Text style={styles.empty}>لا توجد حسابات مدينة حالياً</Text> : priorities.map((account, index) => (
-          <TouchableOpacity key={account.id} style={[styles.priorityRow, index > 0 && styles.priorityBorder]} onPress={() => navigation.navigate('Customer360', { id: account.id })}>
+          <TouchableOpacity
+            key={account.id}
+            style={[styles.priorityRow, index > 0 && styles.priorityBorder]}
+            onPress={() => navigation.navigate('Customer360', { id: String(account.id), customer: account })}
+          >
             <View style={styles.rank}><Text style={styles.rankText}>{index + 1}</Text></View>
             <View style={styles.priorityMain}>
               <Text style={styles.priorityName} numberOfLines={1}>{account.fullName}</Text>

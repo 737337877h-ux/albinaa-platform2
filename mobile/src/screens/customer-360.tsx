@@ -20,17 +20,22 @@ async function openLink(url: string, fallbackMsg: string) {
 
 export default function Customer360Screen({ route, navigation }: any) {
   const id = route?.params?.id;
+  const routeCustomer = route?.params?.customer;
   const { triggerSync } = useSync();
-  const [local, setLocal] = React.useState<any>(null);
+  // Keep the row selected by the user visible while a full snapshot is being
+  // committed. The database copy replaces it as soon as it is readable.
+  const [local, setLocal] = React.useState<any>(routeCustomer || null);
   const [loading, setLoading] = React.useState(true);
   const [contactModal, setContactModal] = React.useState(false);
   const [deviceContacts, setDeviceContacts] = React.useState<Contacts.ExistingContact[]>([]);
   const [contactSearch, setContactSearch] = React.useState('');
   const loadLocal = React.useCallback(async () => {
     if (!id) return;
-    setLocal(await getCustomerOffline360(id));
+    const cached = await getCustomerOffline360(String(id));
+    if (cached) setLocal(cached);
+    else if (!routeCustomer) setLocal(null);
     setLoading(false);
-  }, [id]);
+  }, [id, routeCustomer]);
   useFocusEffect(
     React.useCallback(() => {
       if (!id) return;

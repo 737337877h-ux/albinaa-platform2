@@ -100,7 +100,10 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
         windowSize={7}
         removeClippedSubviews
         renderItem={({ item }) => (
-          <AccountRow account={item} onPress={() => navigation.navigate('Customer360', { id: item.id })} />
+          <AccountRow
+            account={item}
+            onPress={() => navigation.navigate('Customer360', { id: String(item.id), customer: item })}
+          />
         )}
         ListEmptyComponent={(
           <View style={styles.empty}>
