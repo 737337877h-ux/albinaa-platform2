@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 
 const STORAGE_KEY = 'albinaa.api_base_url';
+const LAN_ONLY_KEY = 'albinaa.sync_lan_only';
 const DEFAULT_DEV_URL = 'http://localhost:3000';
 const DEFAULT_PROD_URL = 'https://api.albinaa.com';
 
@@ -58,6 +59,29 @@ export function isValidBaseUrl(url: string): boolean {
   const trimmed = url.trim();
   if (!trimmed) return false;
   return /^https?:\/\/.+/i.test(trimmed);
+}
+
+export function isLocalNetworkUrl(url: string): boolean {
+  try {
+    const host = new URL(url.trim()).hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local')) return true;
+    const parts = host.split('.').map(Number);
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+    if (parts[0] === 10 || parts[0] === 127) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    return parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31;
+  } catch {
+    return false;
+  }
+}
+
+export async function getLanOnlySync(): Promise<boolean> {
+  const stored = await SecureStore.getItemAsync(LAN_ONLY_KEY);
+  return stored !== 'false';
+}
+
+export async function setLanOnlySync(enabled: boolean): Promise<void> {
+  await SecureStore.setItemAsync(LAN_ONLY_KEY, enabled ? 'true' : 'false');
 }
 
 export interface ServerHealth {

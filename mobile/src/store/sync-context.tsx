@@ -1,163 +1,192 @@
-import React, { createContext, useContext, useEffect, useRef, ReactNode } from 'react';
+import React, {
+  createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode,
+} from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import { fetchSync, uploadGps } from '../api/endpoints';
 import {
-  getMeta, setMeta, upsert, getPendingMutations, removeMutation, incrementRetry,
-  getUnsyncedGps, markGpsSynced,
+  applySyncSnapshot, blockMutation, getMeta, getMutationQueueStats,
+  getPendingMutations, getUnsyncedGps, incrementRetry, markGpsSynced,
+  removeMutation, retryBlockedMutations,
 } from '../db/database';
 import { useAuth } from './auth-context';
 import { SYNC_INTERVAL_MS } from '../utils/constants';
+import {
+  getBaseUrl, getLanOnlySync, isLocalNetworkUrl, pingServer,
+} from '../config/api';
+import { rescheduleOfflineReminders } from '../utils/local-notifications';
+
+export type SyncPhase = 'idle' | 'syncing' | 'synced' | 'offline' | 'error';
+
+export interface SyncStatus {
+  phase: SyncPhase;
+  lastSyncAt: string | null;
+  pending: number;
+  blocked: number;
+  lastError: string | null;
+  lanOnly: boolean;
+}
 
 interface SyncContextValue {
   triggerSync: () => Promise<void>;
   processQueue: () => Promise<void>;
   syncGps: () => Promise<void>;
+  retryBlocked: () => Promise<void>;
+  refreshStatus: () => Promise<void>;
+  status: SyncStatus;
 }
+
+const INITIAL_STATUS: SyncStatus = {
+  phase: 'idle', lastSyncAt: null, pending: 0, blocked: 0, lastError: null, lanOnly: true,
+};
 
 const SyncContext = createContext<SyncContextValue>({
   triggerSync: async () => {},
   processQueue: async () => {},
   syncGps: async () => {},
+  retryBlocked: async () => {},
+  refreshStatus: async () => {},
+  status: INITIAL_STATUS,
 });
 
-const TABLE_COLUMNS: Record<string, string[]> = {
-  customers: ['id', 'fullName', 'phonePrimary', 'address', 'balances'],
-  tasks: ['id', 'customerId', 'customerName', 'title', 'dueDate', 'priority', 'status'],
-  followups: ['id', 'customerId', 'customerName', 'typeName', 'resultName', 'notes', 'followupAt'],
-  promises: ['id', 'customerId', 'customerName', 'expectedAmount', 'currencyCode', 'dueDate', 'status', 'notes'],
-  collections: ['id', 'customerId', 'customerName', 'amount', 'currencyCode', 'methodName', 'notes', 'collectedAt'],
-};
+function retryableStatus(status?: number): boolean {
+  return status === undefined || status === 401 || status === 408 || status === 425 || status === 429 || status >= 500;
+}
 
-function pickColumns(table: string, record: Record<string, any>) {
-  const allowed = TABLE_COLUMNS[table] || Object.keys(record);
-  const out: Record<string, any> = {};
-  for (const key of allowed) {
-    if (record[key] !== undefined) out[key] = record[key];
-  }
-  if (!out.id) return null;
-  return out;
+function errorMessage(error: any): string {
+  const serverMessage = error?.response?.data?.message;
+  if (Array.isArray(serverMessage)) return serverMessage.join('، ');
+  return serverMessage || error?.message || 'تعذر الاتصال بالخادم المحلي';
 }
 
 export function SyncProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuth();
+  const [status, setStatus] = useState<SyncStatus>(INITIAL_STATUS);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const syncingRef = useRef(false);
 
-  const processQueue = async () => {
+  const refreshStatus = useCallback(async () => {
+    const [queue, lastSyncAt, lanOnly] = await Promise.all([
+      getMutationQueueStats(), getMeta('lastSyncAt'), getLanOnlySync(),
+    ]);
+    setStatus((current) => ({ ...current, ...queue, lastSyncAt, lanOnly }));
+  }, []);
+
+  const processQueue = useCallback(async () => {
     const mutations = await getPendingMutations();
+    if (mutations.length === 0) return;
     const { getClient } = await import('../api/client');
     const client = await getClient();
-    for (const m of mutations) {
+    for (const mutation of mutations) {
       try {
-        const payload = JSON.parse(m.payload);
         await client({
-          method: m.type.toLowerCase(),
-          url: m.endpoint,
-          data: payload,
-          headers: { 'Idempotency-Key': m.operationId },
+          method: mutation.type.toLowerCase(),
+          url: mutation.endpoint,
+          data: JSON.parse(mutation.payload),
+          headers: { 'Idempotency-Key': mutation.operationId },
         });
-        await removeMutation(m.id);
-      } catch (err: any) {
-        if (err?.response?.status && err.response.status < 500 && err.response.status !== 409) {
-          await removeMutation(m.id);
-        } else {
-          await incrementRetry(m.id, err.message);
-          if (m.retryCount >= 5) await removeMutation(m.id);
-        }
+        await removeMutation(mutation.id);
+      } catch (error: any) {
+        const message = errorMessage(error);
+        const httpStatus = error?.response?.status;
+        if (retryableStatus(httpStatus)) await incrementRetry(mutation.id, message);
+        else await blockMutation(mutation.id, `HTTP ${httpStatus}: ${message}`);
       }
     }
-  };
+  }, []);
 
-  const syncGps = async () => {
+  const syncGps = useCallback(async () => {
     const points = await getUnsyncedGps();
     if (points.length === 0) return;
-    try {
-      const batch = points.map((p: any) => ({
-        latitude: p.latitude,
-        longitude: p.longitude,
-        accuracy: p.accuracy,
-        entityTable: p.entityTable,
-        entityId: p.entityId,
-        recordedAt: p.recordedAt,
-      }));
-      await uploadGps(batch);
-      await markGpsSynced(points.map((p: any) => p.id));
-    } catch { /* will retry next cycle */ }
-  };
+    const batch = points.map((point: any) => ({
+      latitude: point.latitude,
+      longitude: point.longitude,
+      accuracy: point.accuracy,
+      entityTable: point.entityTable,
+      entityId: point.entityId,
+      recordedAt: point.recordedAt,
+    }));
+    await uploadGps(batch);
+    await markGpsSynced(points.map((point: any) => point.id));
+  }, []);
 
-  const triggerSync = async () => {
-    if (!isAuthenticated) return;
+  const triggerSync = useCallback(async () => {
+    if (!isAuthenticated || syncingRef.current) return;
+    syncingRef.current = true;
+    setStatus((current) => ({ ...current, phase: 'syncing', lastError: null }));
     try {
+      const [baseUrl, lanOnly] = await Promise.all([getBaseUrl(), getLanOnlySync()]);
+      if (lanOnly && !isLocalNetworkUrl(baseUrl)) {
+        throw new Error('المزامنة المحلية مفعلة. أدخل عنوان الخادم داخل الشبكة مثل 192.168.x.x');
+      }
+      const health = await pingServer(baseUrl, 3_500);
+      if (!health.ok) {
+        const offlineError = new Error(health.error || 'الخادم المحلي غير متاح');
+        (offlineError as any).offline = true;
+        throw offlineError;
+      }
+
+      // Push first so a subsequent pull contains the accepted server records.
+      await processQueue();
+      try { await syncGps(); } catch { /* GPS must not block business data */ }
+
       const lastToken = await getMeta('syncToken');
-      const res = await fetchSync(lastToken || undefined);
-      const { syncToken, tasks, customers, followups, promises, collections } = res.data;
-      await setMeta('syncToken', syncToken);
+      const response = await fetchSync(lastToken || undefined);
+      const data = response.data;
+      await applySyncSnapshot({
+        customers: data.customers || [],
+        tasks: data.tasks || [],
+        followups: data.followups || [],
+        promises: data.promises || [],
+        collections: data.collections || [],
+        references: data.references || {},
+      }, data.syncToken);
+      await rescheduleOfflineReminders();
+      const queue = await getMutationQueueStats();
+      setStatus({
+        phase: 'synced',
+        lastSyncAt: new Date().toISOString(),
+        ...queue,
+        lastError: null,
+        lanOnly,
+      });
+    } catch (error: any) {
+      const queue = await getMutationQueueStats();
+      setStatus((current) => ({
+        ...current,
+        ...queue,
+        phase: error?.offline || !error?.response ? 'offline' : 'error',
+        lastError: errorMessage(error),
+      }));
+    } finally {
+      syncingRef.current = false;
+    }
+  }, [isAuthenticated, processQueue, syncGps]);
 
-      // Dedupe by id in case backend sent duplicates (defense in depth)
-      const dedupeById = <T extends { id: string }>(arr: T[]): T[] => {
-        const seen = new Set<string>();
-        const out: T[] = [];
-        for (const item of arr) {
-          if (seen.has(item.id)) continue;
-          seen.add(item.id);
-          out.push(item);
-        }
-        return out;
-      };
-
-      // Clean SQLite of any existing duplicates BEFORE inserting fresh data
-      const { dedupeTable } = await import('../db/database');
-      await dedupeTable('customers');
-      await dedupeTable('tasks');
-      await dedupeTable('followups');
-      await dedupeTable('promises');
-      await dedupeTable('collections');
-
-      const uniqueCustomers = dedupeById(customers || []);
-      for (const c of uniqueCustomers) {
-        const row = pickColumns('customers', {
-          ...c,
-          balances: typeof c.balances === 'string' ? c.balances : JSON.stringify(c.balances || []),
-        });
-        if (row) await upsert('customers', row);
-      }
-      for (const t of dedupeById(tasks || [])) {
-        const row = pickColumns('tasks', t);
-        if (row) await upsert('tasks', row);
-      }
-      for (const f of dedupeById(followups || [])) {
-        const row = pickColumns('followups', f);
-        if (row) await upsert('followups', row);
-      }
-      for (const p of dedupeById(promises || [])) {
-        const row = pickColumns('promises', p);
-        if (row) await upsert('promises', row);
-      }
-      for (const c of dedupeById(collections || [])) {
-        const row = pickColumns('collections', c);
-        if (row) await upsert('collections', row);
-      }
-    } catch { /* will retry next cycle */ }
-  };
+  const retryBlocked = useCallback(async () => {
+    await retryBlockedMutations();
+    await refreshStatus();
+    await triggerSync();
+  }, [refreshStatus, triggerSync]);
 
   useEffect(() => {
+    refreshStatus().catch(() => undefined);
     if (!isAuthenticated) return;
     triggerSync();
-    intervalRef.current = setInterval(() => {
-      triggerSync();
-      processQueue();
-      syncGps();
-    }, SYNC_INTERVAL_MS);
-    const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
+    intervalRef.current = setInterval(triggerSync, SYNC_INTERVAL_MS);
+    const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') triggerSync();
     });
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      sub.remove();
+      intervalRef.current = null;
+      subscription.remove();
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, refreshStatus, triggerSync]);
 
   return (
-    <SyncContext.Provider value={{ triggerSync, processQueue, syncGps }}>
+    <SyncContext.Provider value={{
+      triggerSync, processQueue, syncGps, retryBlocked, refreshStatus, status,
+    }}>
       {children}
     </SyncContext.Provider>
   );

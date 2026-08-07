@@ -1,0 +1,23 @@
+name: Production Health Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    if: ${{ vars.PRODUCTION_HEALTH_URL != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check live and ready endpoints
+        env:
+          HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          base="${HEALTH_URL%/}"
+          curl --fail --silent --show-error --retry 2 --max-time 15 "$base/health"
+          curl --fail --silent --show-error --retry 2 --max-time 15 "$base/health/ready"

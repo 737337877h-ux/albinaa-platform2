@@ -122,7 +122,9 @@ export class CustomersService {
     if (q.status) where.status = q.status;
     else where.status = { not: 'merged' };
     if (q.collectorId) {
-      where.assignments = { some: { collectorId: q.collectorId, effectiveTo: null } };
+      where.assignments = q.collectorId === 'unassigned'
+        ? { none: { effectiveTo: null } }
+        : { some: { collectorId: q.collectorId, effectiveTo: null } };
     }
     if (q.currency && !q.balanceState) {
       where.balances = { some: { currencyCode: q.currency } };
@@ -245,6 +247,50 @@ export class CustomersService {
   // --------------------------------------------------------------------------
   // Customer 360
   // --------------------------------------------------------------------------
+  async creditControl(user: AuthUser, rawPage = 1, rawLimit = 25, search?: string, missingOnly = false) {
+    const page = Math.max(1, rawPage || 1);
+    const limit = Math.min(100, Math.max(10, rawLimit || 25));
+    const where: Prisma.CustomerWhereInput = {
+      organizationId: user.organizationId,
+      status: 'active',
+      OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+      ...(search?.trim() ? {
+        AND: [{ OR: [
+          { name: { contains: search.trim(), mode: 'insensitive' } },
+          { externalCustomerCode: { contains: search.trim(), mode: 'insensitive' } },
+          { accountNumber: { contains: search.trim(), mode: 'insensitive' } },
+        ] }],
+      } : {}),
+      ...(missingOnly ? { creditLimits: { none: {} } } : {}),
+    };
+    const [total, missingLimits, customers] = await Promise.all([
+      this.prisma.customer.count({ where }),
+      this.prisma.customer.count({ where: { ...where, creditLimits: { none: {} } } }),
+      this.prisma.customer.findMany({
+        where, skip: (page - 1) * limit, take: limit,
+        orderBy: [{ creditLimits: { _count: 'asc' } }, { name: 'asc' }],
+        select: {
+          id: true, name: true, externalCustomerCode: true, accountNumber: true,
+          creditPolicy: true, creditLimits: { orderBy: { currencyCode: 'asc' } },
+          balances: { select: { currencyCode: true, accountingBalance: true } },
+        },
+      }),
+    ]);
+    return {
+      page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)), missingLimits,
+      items: customers.map((customer) => ({
+        ...customer,
+        balances: customer.balances.map((balance) => ({ currency: balance.currencyCode, amount: Number(balance.accountingBalance) })),
+        creditLimits: customer.creditLimits.map((creditLimit) => {
+          const balance = customer.balances.find((item) => item.currencyCode === creditLimit.currencyCode);
+          const amount = Number(creditLimit.amount);
+          const used = Math.max(0, Number(balance?.accountingBalance ?? 0));
+          return { ...creditLimit, amount, used, utilization: amount > 0 ? (used / amount) * 100 : null };
+        }),
+      })),
+    };
+  }
+
   async find360(user: AuthUser, id: string) {
     await this.assertAccess(user, id);
     const c = await this.prisma.customer.findUniqueOrThrow({
@@ -1228,7 +1274,7 @@ export class CustomersService {
   async dataQuality(actor: AuthUser) {
     const orgId = actor.organizationId;
 
-    const [missingPhone, pendingDuplicatePairs, currencyGroups, balances, unclassifiedReservationUnits] = await Promise.all([
+    const [missingPhone, pendingDuplicatePairs, currencyGroups, balances, unclassifiedReservationUnits, recentImports] = await Promise.all([
       this.prisma.customer.count({
         where: { organizationId: orgId, OR: [{ phonePrimary: null }, { phonePrimary: '' }] },
       }),
@@ -1254,6 +1300,14 @@ export class CustomersService {
           unitId: null,
         },
       }),
+      this.prisma.importJob.findMany({
+        where: { organizationId: orgId }, orderBy: { importedAt: 'desc' }, take: 10,
+        select: {
+          id: true, fileName: true, importedAt: true, status: true, rowsTotal: true,
+          customersNew: true, customersUpdated: true, errorsCount: true,
+          _count: { select: { duplicatePairs: true } },
+        },
+      }),
     ]);
 
     const multiCurrencyCustomers = currencyGroups.filter((g) => g._count.currencyCode > 1).length;
@@ -1267,6 +1321,13 @@ export class CustomersService {
       multiCurrencyCustomers,
       suspiciousBalances,
       unclassifiedReservationUnits,
+      recentImportReports: recentImports.map((job) => ({
+        id: job.id, fileName: job.fileName, importedAt: job.importedAt, status: job.status,
+        rowsTotal: job.rowsTotal ?? 0, customersNew: job.customersNew ?? 0,
+        customersUpdated: job.customersUpdated ?? 0, errorsCount: job.errorsCount ?? 0,
+        duplicatePairsFlagged: job._count.duplicatePairs,
+        requiresReview: job._count.duplicatePairs > 0 || Number(job.errorsCount ?? 0) > 0,
+      })),
     };
   }
 

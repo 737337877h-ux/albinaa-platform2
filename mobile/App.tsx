@@ -6,6 +6,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './src/store/auth-context';
 import { SyncProvider } from './src/store/sync-context';
 import RootNavigator from './src/navigation/root-navigator';
+import { initializeLocalNotifications } from './src/utils/local-notifications';
+import { restoreGpsTracking } from './src/utils/gps';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -47,6 +49,10 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 import { View, Text } from 'react-native';
 
 export default function App() {
+  React.useEffect(() => {
+    initializeLocalNotifications().catch(() => undefined);
+    restoreGpsTracking().catch(() => undefined);
+  }, []);
   return (
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>

@@ -7,11 +7,11 @@ import {
 
 describe('constants', () => {
   it('exports expected app version', () => {
-    expect(APP_VERSION).toBe('1.0.0');
+    expect(APP_VERSION).toBe('1.3.1');
   });
 
-  it('sync interval is 30 seconds', () => {
-    expect(SYNC_INTERVAL_MS).toBe(30_000);
+  it('sync interval is 5 minutes', () => {
+    expect(SYNC_INTERVAL_MS).toBe(300_000);
   });
 
   it('gps interval is 10 seconds', () => {
@@ -22,8 +22,8 @@ describe('constants', () => {
     expect(MUTATION_MAX_RETRIES).toBe(5);
   });
 
-  it('schema version is 3', () => {
-    expect(DB_SCHEMA_VERSION).toBe(3);
+  it('schema version is 6', () => {
+    expect(DB_SCHEMA_VERSION).toBe(6);
   });
 
   it('max image size is 10 MB', () => {

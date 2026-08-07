@@ -67,6 +67,8 @@ services:
       RISK_AUTO_RECALCULATE_ENABLED: ${RISK_AUTO_RECALCULATE_ENABLED:-true}
       RISK_RECALCULATE_HOUR: ${RISK_RECALCULATE_HOUR:-2}
       MAX_SESSIONS_PER_USER: ${MAX_SESSIONS_PER_USER:-5}
+      PUSH_ENABLED: ${PUSH_ENABLED:-false}
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
     volumes:
       - albinaa_uploads:/data/uploads
     healthcheck:

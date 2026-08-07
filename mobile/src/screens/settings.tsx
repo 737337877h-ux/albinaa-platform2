@@ -1,66 +1,229 @@
-import React, { useState } from 'react';
-import { View, Text, Switch, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View,
+} from 'react-native';
 import { useAuth } from '../store/auth-context';
-import { requestGpsPermission, requestBackgroundGpsPermission, startGpsTracking, stopGpsTracking } from '../utils/gps';
-import { SYNC_INTERVAL_MS } from '../utils/constants';
+import { useSync } from '../store/sync-context';
+import {
+  getBaseUrl, getLanOnlySync, isLocalNetworkUrl, setLanOnlySync,
+} from '../config/api';
+import {
+  getWorkplace, requestGpsPermission, requestBackgroundGpsPermission, restoreGpsTracking,
+  setCurrentLocationAsWorkplace, startGpsTracking, stopGpsTracking,
+} from '../utils/gps';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { isBiometricEnabled, setBiometricEnabled } from '../utils/secure-storage';
+import { APP_VERSION, SYNC_INTERVAL_MS } from '../utils/constants';
+import {
+  areLocalNotificationsEnabled, disableLocalNotifications,
+  initializeLocalNotifications, rescheduleOfflineReminders,
+} from '../utils/local-notifications';
+
+const PHASE_LABELS = {
+  idle: 'جاهز', syncing: 'جارٍ المزامنة', synced: 'تمت المزامنة', offline: 'دون اتصال', error: 'تحتاج مراجعة',
+};
 
 export default function SettingsScreen() {
   const { logout } = useAuth();
+  const { status, triggerSync, retryBlocked, refreshStatus } = useSync();
   const [gpsEnabled, setGpsEnabled] = useState(false);
-  const [backgroundSync, setBackgroundSync] = useState(true);
+  const [lanOnly, setLanOnly] = useState(true);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [biometricEnabled, setBiometric] = useState(false);
+  const [workplaceSet, setWorkplaceSet] = useState(false);
+
+  useEffect(() => {
+    Promise.all([getLanOnlySync(), getBaseUrl(), areLocalNotificationsEnabled(), isBiometricEnabled(), restoreGpsTracking(), getWorkplace()]).then(([localOnly, url, alertsEnabled, biometric, gps, workplace]) => {
+      setLanOnly(localOnly);
+      setBaseUrl(url);
+      setNotificationsEnabled(alertsEnabled);
+      setBiometric(biometric);
+      setGpsEnabled(gps);
+      setWorkplaceSet(!!workplace);
+    });
+    refreshStatus().catch(() => undefined);
+  }, [refreshStatus]);
 
   const toggleGps = async (value: boolean) => {
     if (value) {
       const ok = await requestGpsPermission();
-      if (!ok) { Alert.alert('خطأ', 'لم يتم منح صلاحية GPS'); return; }
-      const bgOk = await requestBackgroundGpsPermission();
-      if (bgOk) startGpsTracking();
+      if (!ok) { Alert.alert('خطأ', 'لم يتم منح صلاحية الموقع'); return; }
+      const background = await requestBackgroundGpsPermission();
+      if (background) await startGpsTracking();
       setGpsEnabled(true);
     } else {
-      stopGpsTracking();
+      await stopGpsTracking();
       setGpsEnabled(false);
     }
   };
 
+  const toggleLanOnly = async (value: boolean) => {
+    await setLanOnlySync(value);
+    setLanOnly(value);
+    await refreshStatus();
+  };
+
+  const enableNotifications = async () => {
+    const granted = await initializeLocalNotifications();
+    setNotificationsEnabled(granted);
+    if (!granted) {
+      Alert.alert('التنبيهات غير مفعلة', 'اسمح للتطبيق بعرض الإشعارات من إعدادات الهاتف.');
+      return;
+    }
+    const count = await rescheduleOfflineReminders();
+    Alert.alert('تم تفعيل التنبيهات', `تم إعداد ${count} تنبيه من البيانات المحفوظة على الهاتف.`);
+  };
+
+  const toggleNotifications = async (value: boolean) => {
+    if (value) await enableNotifications();
+    else {
+      await disableLocalNotifications();
+      setNotificationsEnabled(false);
+    }
+  };
+
+  const toggleBiometric = async (value: boolean) => {
+    if (value) {
+      const available = await LocalAuthentication.hasHardwareAsync();
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!available || !enrolled) { Alert.alert('البصمة غير جاهزة', 'أضف بصمة أو قفل شاشة من إعدادات الهاتف أولاً.'); return; }
+      const result = await LocalAuthentication.authenticateAsync({ promptMessage: 'تفعيل دخول الراقي بالبصمة' });
+      if (!result.success) return;
+    }
+    await setBiometricEnabled(value);
+    setBiometric(value);
+  };
+
+  const saveWorkplace = async () => {
+    try {
+      const foreground = await requestGpsPermission();
+      if (!foreground) throw new Error('لم يتم منح صلاحية الموقع');
+      const background = await requestBackgroundGpsPermission();
+      if (!background) throw new Error('اختر السماح بالموقع دائماً لتفعيل تنبيه الوصول');
+      await setCurrentLocationAsWorkplace();
+      setWorkplaceSet(true);
+      Alert.alert('تم حفظ موقع العمل', 'سينبهك التطبيق عند الوصول لفتح التطبيق ومزامنة العمليات عبر الشبكة المحلية.');
+    } catch (error: any) { Alert.alert('تعذر حفظ الموقع', error?.message || 'تحقق من إعدادات GPS'); }
+  };
+
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>تتبع الموقع</Text>
-        <SettingRow label="تفعيل GPS" value={gpsEnabled} onChange={toggleGps} />
+        <View style={styles.titleRow}>
+          <Text style={styles.sectionTitle}>حالة المزامنة</Text>
+          <View style={[styles.badge, status.phase === 'synced' ? styles.badgeOk : styles.badgeWarn]}>
+            <Text style={styles.badgeText}>{PHASE_LABELS[status.phase]}</Text>
+          </View>
+        </View>
+        <InfoRow label="الخادم" value={baseUrl || '—'} />
+        <InfoRow label="نوع الاتصال" value={isLocalNetworkUrl(baseUrl) ? 'شبكة محلية' : 'خارجي'} />
+        <InfoRow
+          label="آخر مزامنة"
+          value={status.lastSyncAt ? new Date(status.lastSyncAt).toLocaleString('ar-YE') : 'لم تتم بعد'}
+        />
+        <InfoRow label="عمليات بانتظار الإرسال" value={String(status.pending)} />
+        <InfoRow label="عمليات تحتاج مراجعة" value={String(status.blocked)} danger={status.blocked > 0} />
+        {!!status.lastError && <Text style={styles.errorText}>{status.lastError}</Text>}
+        <TouchableOpacity
+          style={[styles.primaryBtn, status.phase === 'syncing' && styles.disabledBtn]}
+          onPress={triggerSync}
+          disabled={status.phase === 'syncing'}
+        >
+          {status.phase === 'syncing'
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={styles.primaryBtnText}>مزامنة الآن</Text>}
+        </TouchableOpacity>
+        {status.blocked > 0 && (
+          <TouchableOpacity style={styles.outlineBtn} onPress={retryBlocked}>
+            <Text style={styles.outlineBtnText}>إعادة محاولة العمليات المراجعة</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>المزامنة</Text>
-        <SettingRow label="مزامنة الخلفية" value={backgroundSync} onChange={setBackgroundSync} />
-        <Text style={styles.hint}>كل {SYNC_INTERVAL_MS / 1000} ثانية</Text>
+        <Text style={styles.sectionTitle}>الاتصال المحلي</Text>
+        <SettingRow label="المزامنة عبر الشبكة المحلية فقط" value={lanOnly} onChange={toggleLanOnly} />
+        <Text style={styles.hint}>
+          عند التفعيل لا يرسل التطبيق أي بيانات إلى عنوان خارجي. يعمل تلقائيًا كل {SYNC_INTERVAL_MS / 60_000} دقائق عند توفر الخادم المحلي.
+        </Text>
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>الحساب</Text>
+        <Text style={styles.sectionTitle}>التنبيهات</Text>
+        <SettingRow label="تنبيهات المهام والوعود" value={notificationsEnabled} onChange={toggleNotifications} />
+        <TouchableOpacity style={styles.outlineBtn} onPress={enableNotifications}>
+          <Text style={styles.outlineBtnText}>تحديث التنبيهات الآن</Text>
+        </TouchableOpacity>
+        <Text style={styles.hint}>تعمل التنبيهات من قاعدة الهاتف حتى بدون إنترنت.</Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>الموقع</Text>
+        <SettingRow label="تسجيل موقع الزيارة" value={gpsEnabled} onChange={toggleGps} />
+        <TouchableOpacity style={styles.outlineBtn} onPress={saveWorkplace}>
+          <Text style={styles.outlineBtnText}>{workplaceSet ? 'تحديث موقع العمل الحالي' : 'اعتماد موقعي الحالي كموقع العمل'}</Text>
+        </TouchableOpacity>
+        <Text style={styles.hint}>عند دخول نطاق موقع العمل سيظهر تنبيه للمزامنة مع الخادم المحلي.</Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>الدخول والحماية</Text>
+        <SettingRow label="فتح التطبيق بالبصمة" value={biometricEnabled} onChange={toggleBiometric} />
+        <Text style={styles.hint}>بعد تسجيل الدخول أول مرة، تفتح البيانات المحفوظة بالبصمة حتى دون إنترنت.</Text>
+      </View>
+
+      <View style={styles.section}>
+        <InfoRow label="إصدار التطبيق" value={APP_VERSION} />
         <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
           <Text style={styles.logoutText}>تسجيل خروج</Text>
         </TouchableOpacity>
       </View>
+    </ScrollView>
+  );
+}
+
+function SettingRow({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <View style={styles.row}>
+      <Text style={styles.label}>{label}</Text>
+      <Switch value={value} onValueChange={onChange} trackColor={{ false: '#d8dedb', true: '#0A8064' }} />
     </View>
   );
 }
 
-function SettingRow({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+function InfoRow({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
   return (
-    <View style={styles.row}>
-      <Text style={styles.label}>{label}</Text>
-      <Switch value={value} onValueChange={onChange} trackColor={{ false: '#ddd', true: '#1a73e8' }} />
+    <View style={styles.infoRow}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={[styles.infoValue, danger && styles.danger]} numberOfLines={2}>{value}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f4f8', padding: 16 },
-  section: { backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 16 },
-  sectionTitle: { fontSize: 18, fontWeight: '600', color: '#333', marginBottom: 12 },
+  container: { flex: 1, backgroundColor: '#F2F6F4' },
+  content: { padding: 16, paddingBottom: 40 },
+  section: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: '#E0E9E5' },
+  titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sectionTitle: { fontSize: 18, fontWeight: '700', color: '#113C33', marginBottom: 12 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
-  label: { fontSize: 16, color: '#333' },
-  hint: { fontSize: 12, color: '#999', marginTop: 4 },
-  logoutBtn: { padding: 14, alignItems: 'center', backgroundColor: '#fee', borderRadius: 10, marginTop: 8 },
-  logoutText: { color: '#ea4335', fontSize: 16, fontWeight: '600' },
+  label: { fontSize: 15, color: '#244B43', flex: 1, textAlign: 'right' },
+  hint: { fontSize: 12, color: '#667A74', marginTop: 8, lineHeight: 19, textAlign: 'right' },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#EEF3F1' },
+  infoLabel: { fontSize: 13, color: '#667A74' },
+  infoValue: { flex: 1, fontSize: 13, color: '#113C33', fontWeight: '600', textAlign: 'left' },
+  danger: { color: '#B42318' },
+  errorText: { color: '#B42318', backgroundColor: '#FEF3F2', padding: 10, borderRadius: 8, marginTop: 10, textAlign: 'right' },
+  badge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
+  badgeOk: { backgroundColor: '#DDF7EC' },
+  badgeWarn: { backgroundColor: '#FFF1D6' },
+  badgeText: { color: '#113C33', fontSize: 12, fontWeight: '700' },
+  primaryBtn: { backgroundColor: '#0A604D', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 14 },
+  primaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  disabledBtn: { opacity: 0.65 },
+  outlineBtn: { borderColor: '#0A604D', borderWidth: 1, borderRadius: 10, padding: 12, alignItems: 'center', marginTop: 10 },
+  outlineBtnText: { color: '#0A604D', fontWeight: '700' },
+  logoutBtn: { padding: 14, alignItems: 'center', backgroundColor: '#FEF3F2', borderRadius: 10, marginTop: 16 },
+  logoutText: { color: '#B42318', fontSize: 16, fontWeight: '700' },
 });

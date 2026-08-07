@@ -9,6 +9,7 @@ import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { AssignmentsService } from './assignments.service';
 import { BulkAssignmentDto } from './dto/bulk-assignment.dto';
 import { CreateAssignmentDto } from './dto/create-assignment.dto';
+import { SmartAssignmentDto } from './dto/smart-assignment.dto';
 
 @ApiTags('Assignments')
 @ApiBearerAuth('access-token')
@@ -66,5 +67,20 @@ export class AssignmentsController {
   @ApiOperation({ summary: 'Bulk assign/transfer selected customers to one target collector' })
   bulkExecute(@CurrentUser() user: AuthUser, @Body() dto: BulkAssignmentDto, @Req() req: Request) {
     return this.assignments.executeBulkAssign(user, dto, req);
+  }
+
+  @Post('smart/preview')
+  @HttpCode(200)
+  @RequirePermissions('customers.transfer')
+  @ApiOperation({ summary: 'Preview balanced assignment across active collectors using workload and region affinity' })
+  smartPreview(@CurrentUser() user: AuthUser, @Body() dto: SmartAssignmentDto) {
+    return this.assignments.previewSmartAssign(user, dto);
+  }
+
+  @Post('smart')
+  @RequirePermissions('customers.transfer')
+  @ApiOperation({ summary: 'Execute the reviewed smart balanced assignment plan' })
+  smartExecute(@CurrentUser() user: AuthUser, @Body() dto: SmartAssignmentDto, @Req() req: Request) {
+    return this.assignments.executeSmartAssign(user, dto, req);
   }
 }

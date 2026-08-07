@@ -19,8 +19,27 @@ export class AgingService {
   ) {}
 
   async report(actor: AuthUser, query: AgingQueryDto) {
-    if (query.asOf) return this.snapshotReport(actor.organizationId, query.asOf, query.currency, query.accountClass ?? 'customer');
-    return this.liveReport(actor.organizationId, new Date(), query.currency, query.accountClass ?? 'customer');
+    const report = query.asOf
+      ? await this.snapshotReport(actor.organizationId, query.asOf, query.currency, query.accountClass ?? 'customer')
+      : await this.liveReport(actor.organizationId, new Date(), query.currency, query.accountClass ?? 'customer');
+    if (!query.page && !query.bucket) return report;
+    const filtered = query.bucket
+      ? report.customers.filter((row) => Number(row.buckets[query.bucket!]) > 0.005)
+      : report.customers;
+    if (!query.page) return { ...report, customers: filtered, totalRows: filtered.length };
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 50;
+    const totalRows = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(totalRows / limit));
+    const safePage = Math.min(page, totalPages);
+    return {
+      ...report,
+      customers: filtered.slice((safePage - 1) * limit, safePage * limit),
+      page: safePage,
+      limit,
+      totalRows,
+      totalPages,
+    };
   }
 
   async createSnapshot(actor: AuthUser, req?: Request) {

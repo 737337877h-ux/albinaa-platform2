@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createCollection, fetchCollectionMethods, fetchCurrencies } from '../api/endpoints';
-import { enqueueMutation } from '../db/database';
+import { enqueueMutation, getReferenceOptions } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
@@ -22,12 +22,18 @@ export default function NewCollectionScreen({ route, navigation }: any) {
 
   const methodsQuery = useQuery({
     queryKey: ['collection-methods'],
-    queryFn: () => fetchCollectionMethods().then((r) => r.data || []),
+    queryFn: async () => {
+      try { return (await fetchCollectionMethods()).data || []; }
+      catch { return getReferenceOptions('collectionMethods'); }
+    },
   });
 
   const currenciesQuery = useQuery({
     queryKey: ['currencies'],
-    queryFn: () => fetchCurrencies().then((r) => r.data || []),
+    queryFn: async () => {
+      try { return (await fetchCurrencies()).data || []; }
+      catch { return getReferenceOptions('currencies'); }
+    },
   });
 
   const mutation = useMutation({

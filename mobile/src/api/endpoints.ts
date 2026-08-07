@@ -3,11 +3,19 @@ import { getClient } from './client';
 export interface SyncResponse {
   syncToken: string;
   serverTime: string;
+  snapshot: 'full';
+  schemaVersion: number;
   tasks: any[];
   customers: any[];
   followups: any[];
   promises: any[];
   collections: any[];
+  references: {
+    currencies: Currency[];
+    collectionMethods: NamedOption[];
+    followupTypes: NamedOption[];
+    followupResults: NamedOption[];
+  };
 }
 
 export interface GpsPoint {

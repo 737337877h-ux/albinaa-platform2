@@ -47,6 +47,7 @@ model Organization {
   customerAccountLinks CustomerAccountLink[]
   agingSnapshots       AgingSnapshot[]
   handoverVouchers     CollectionHandoverVoucher[]
+  messageCampaigns     MessageCampaign[]
 
   @@map("organizations")
 }
@@ -114,9 +115,11 @@ model User {
   tasksCreated              Task[]                       @relation("TaskCreator")
   reservationsCreated       Reservation[]                @relation("ReservationCreator")
   analyticalAccountsCreated AnalyticalAccount[]          @relation("AnalyticalAccountCreator")
+  messageCampaignsCreated   MessageCampaign[]            @relation("MessageCampaignCreator")
   attachments               Attachment[]
   gpsLogs                   GpsLog[]
   notifications             Notification[]
+  pushTokens                DevicePushToken[]
   auditLogs                 AuditLog[]
   authSessions              AuthSession[]
 
@@ -319,6 +322,7 @@ model Customer {
   primaryAccountLinks     CustomerAccountLink[]        @relation("PrimaryCustomerAccount")
   childAccountLink        CustomerAccountLink?         @relation("ChildCustomerAccount")
   agingSnapshots          AgingSnapshot[]
+  messageDispatches       MessageDispatch[]
 
   @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
   @@index([organizationId, nameNormalized], map: "idx_customers_name_norm")
@@ -453,19 +457,23 @@ model CustomerCreditLimit {
 }
 
 model PotentialDuplicateCustomer {
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customerAId  String    @map("customer_a_id") @db.Uuid
-  customerBId  String    @map("customer_b_id") @db.Uuid
-  matchReason  String    @map("match_reason")
-  reviewStatus String    @default("pending") @map("review_status")
-  reviewedBy   String?   @map("reviewed_by") @db.Uuid
-  reviewedAt   DateTime? @map("reviewed_at") @db.Timestamptz()
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerAId       String    @map("customer_a_id") @db.Uuid
+  customerBId       String    @map("customer_b_id") @db.Uuid
+  matchReason       String    @map("match_reason")
+  reviewStatus      String    @default("pending") @map("review_status")
+  reviewedBy        String?   @map("reviewed_by") @db.Uuid
+  reviewedAt        DateTime? @map("reviewed_at") @db.Timestamptz()
+  sourceImportJobId String?   @map("source_import_job_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
 
-  customerA Customer @relation("DupCustomerA", fields: [customerAId], references: [id])
-  customerB Customer @relation("DupCustomerB", fields: [customerBId], references: [id])
-  reviewer  User?    @relation("DuplicateReviewer", fields: [reviewedBy], references: [id])
+  customerA       Customer   @relation("DupCustomerA", fields: [customerAId], references: [id])
+  customerB       Customer   @relation("DupCustomerB", fields: [customerBId], references: [id])
+  reviewer        User?      @relation("DuplicateReviewer", fields: [reviewedBy], references: [id])
+  sourceImportJob ImportJob? @relation(fields: [sourceImportJobId], references: [id])
 
   @@unique([customerAId, customerBId], map: "uq_dup_pair")
+  @@index([sourceImportJobId], map: "idx_dup_source_import")
   @@map("potential_duplicate_customers")
 }
 
@@ -514,10 +522,11 @@ model ImportJob {
   reversedAt            DateTime? @map("reversed_at") @db.Timestamptz()
   reversalReason        String?   @map("reversal_reason")
 
-  organization Organization    @relation(fields: [organizationId], references: [id])
-  template     ImportTemplate? @relation(fields: [templateId], references: [id])
-  uploader     User            @relation(fields: [uploadedBy], references: [id])
-  reverser     User?           @relation("ImportJobReverser", fields: [reversedBy], references: [id])
+  organization   Organization                 @relation(fields: [organizationId], references: [id])
+  template       ImportTemplate?              @relation(fields: [templateId], references: [id])
+  uploader       User                         @relation(fields: [uploadedBy], references: [id])
+  reverser       User?                        @relation("ImportJobReverser", fields: [reversedBy], references: [id])
+  duplicatePairs PotentialDuplicateCustomer[]
 
   transactions        ImportedTransaction[]
   balancesUpdated     CustomerBalance[]
@@ -1053,6 +1062,50 @@ model Unit {
   @@map("units")
 }
 
+model MessageCampaign {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  createdBy      String   @map("created_by") @db.Uuid
+  name           String
+  channel        String
+  templateId     String   @map("template_id")
+  agingBucket    String   @map("aging_bucket")
+  currencyCode   String?  @map("currency_code")
+  status         String   @default("prepared")
+  provider       String   @default("none")
+  totalCount     Int      @default(0) @map("total_count")
+  readyCount     Int      @default(0) @map("ready_count")
+  skippedCount   Int      @default(0) @map("skipped_count")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  creator      User              @relation("MessageCampaignCreator", fields: [createdBy], references: [id])
+  dispatches   MessageDispatch[]
+
+  @@index([organizationId, createdAt], map: "idx_message_campaigns_org_created")
+  @@map("message_campaigns")
+}
+
+model MessageDispatch {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  campaignId        String    @map("campaign_id") @db.Uuid
+  customerId        String    @map("customer_id") @db.Uuid
+  destination       String?
+  renderedMessage   String    @map("rendered_message")
+  status            String    @default("prepared")
+  errorMessage      String?   @map("error_message")
+  providerMessageId String?   @map("provider_message_id")
+  sentAt            DateTime? @map("sent_at") @db.Timestamptz()
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  campaign MessageCampaign @relation(fields: [campaignId], references: [id])
+  customer Customer        @relation(fields: [customerId], references: [id])
+
+  @@unique([campaignId, customerId], map: "uq_message_dispatch_campaign_customer")
+  @@index([customerId, createdAt], map: "idx_message_dispatch_customer_created")
+  @@map("message_dispatches")
+}
+
 model ReservationItem {
   id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   reservationId String  @map("reservation_id") @db.Uuid
@@ -1127,6 +1180,21 @@ model Notification {
 
   @@index([userId, readAt], map: "idx_notifications_user")
   @@map("notifications")
+}
+
+model DevicePushToken {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  token      String   @unique
+  platform   String
+  deviceName String?  @map("device_name")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz()
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_device_push_tokens_user")
+  @@map("device_push_tokens")
 }
 
 model AccountingPeriod {

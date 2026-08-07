@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFollowup, fetchFollowupResults, fetchFollowupTypes } from '../api/endpoints';
-import { enqueueMutation } from '../db/database';
+import { enqueueMutation, getReferenceOptions } from '../db/database';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
 import CustomerPicker from '../components/customer-picker';
@@ -20,11 +20,17 @@ export default function NewFollowupScreen({ route, navigation }: any) {
 
   const typesQuery = useQuery({
     queryKey: ['followup-types'],
-    queryFn: () => fetchFollowupTypes().then((r) => r.data || []),
+    queryFn: async () => {
+      try { return (await fetchFollowupTypes()).data || []; }
+      catch { return getReferenceOptions('followupTypes'); }
+    },
   });
   const resultsQuery = useQuery({
     queryKey: ['followup-results'],
-    queryFn: () => fetchFollowupResults().then((r) => r.data || []),
+    queryFn: async () => {
+      try { return (await fetchFollowupResults()).data || []; }
+      catch { return getReferenceOptions('followupResults'); }
+    },
   });
 
   const mutation = useMutation({

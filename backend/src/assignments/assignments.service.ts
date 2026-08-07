@@ -8,6 +8,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { BulkAssignmentDto } from './dto/bulk-assignment.dto';
 import { CreateAssignmentDto } from './dto/create-assignment.dto';
+import { SmartAssignmentDto } from './dto/smart-assignment.dto';
 
 // Customer row shape used by bulk assignment planning: current (effectiveTo: null) assignment included.
 type CustomerWithCurrentAssignment = Prisma.CustomerGetPayload<{ include: { assignments: true } }>;
@@ -226,5 +227,94 @@ export class AssignmentsService {
     }
 
     return summary;
+  }
+
+  private async smartPlan(actor: AuthUser, dto: SmartAssignmentDto) {
+    const [collectors, customers, openTaskCounts] = await Promise.all([
+      this.prisma.collector.findMany({
+        where: { active: true, user: { organizationId: actor.organizationId } },
+        include: {
+          user: { select: { fullName: true } },
+          assignments: { where: { effectiveTo: null }, include: { customer: { select: { region: true } } } },
+        },
+        orderBy: { user: { fullName: 'asc' } },
+      }),
+      this.prisma.customer.findMany({
+        where: { id: { in: dto.customerIds }, organizationId: actor.organizationId, status: 'active' },
+        select: { id: true, name: true, region: true, assignments: { where: { effectiveTo: null }, take: 1 } },
+      }),
+      this.prisma.task.groupBy({
+        by: ['assignedTo'], where: { status: 'open', customer: { organizationId: actor.organizationId }, assignedTo: { not: null } }, _count: true,
+      }),
+    ]);
+    if (!collectors.length) throw new BadRequestException('لا يوجد محصلون نشطون للتوزيع');
+    const taskLoad = new Map(openTaskCounts.map((row) => [row.assignedTo!, row._count]));
+    const states = collectors.map((collector) => {
+      const regionCounts = new Map<string, number>();
+      for (const assignment of collector.assignments) if (assignment.customer.region) {
+        regionCounts.set(assignment.customer.region, (regionCounts.get(assignment.customer.region) ?? 0) + 1);
+      }
+      return {
+        id: collector.id, name: collector.user.fullName,
+        currentCustomers: collector.assignments.length, currentTasks: taskLoad.get(collector.id) ?? 0,
+        planned: 0, regionCounts,
+      };
+    });
+    const rows = [...customers]
+      .sort((a, b) => Number(!!a.assignments[0]) - Number(!!b.assignments[0]) || (a.region ?? '').localeCompare(b.region ?? ''))
+      .map((customer) => {
+        const ranked = states.map((state) => {
+          const affinity = customer.region ? (state.regionCounts.get(customer.region) ?? 0) : 0;
+          const load = state.currentCustomers + state.currentTasks * 0.35 + state.planned;
+          return { state, score: load - Math.min(affinity, 20) * 0.12 };
+        }).sort((a, b) => a.score - b.score || a.state.name.localeCompare(b.state.name));
+        const target = ranked[0].state;
+        target.planned += 1;
+        if (customer.region) target.regionCounts.set(customer.region, (target.regionCounts.get(customer.region) ?? 0) + 1);
+        return {
+          customerId: customer.id, customerName: customer.name, region: customer.region,
+          currentCollectorId: customer.assignments[0]?.collectorId ?? null,
+          collectorId: target.id, collectorName: target.name,
+        };
+      });
+    return {
+      selected: dto.customerIds.length, matched: rows.length, missing: dto.customerIds.length - rows.length,
+      changes: rows.filter((row) => row.currentCollectorId !== row.collectorId),
+      unchanged: rows.filter((row) => row.currentCollectorId === row.collectorId).length,
+      distribution: states.map((state) => ({
+        collectorId: state.id, collectorName: state.name, currentCustomers: state.currentCustomers,
+        currentTasks: state.currentTasks, planned: state.planned, projectedCustomers: state.currentCustomers + state.planned,
+      })),
+    };
+  }
+
+  async previewSmartAssign(actor: AuthUser, dto: SmartAssignmentDto) {
+    return this.smartPlan(actor, dto);
+  }
+
+  async executeSmartAssign(actor: AuthUser, dto: SmartAssignmentDto, req?: Request) {
+    const plan = await this.smartPlan(actor, dto);
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      for (const change of plan.changes) {
+        await tx.customerAssignment.updateMany({
+          where: { customerId: change.customerId, effectiveTo: null }, data: { effectiveTo: now },
+        });
+        await tx.customerAssignment.create({
+          data: {
+            customerId: change.customerId, collectorId: change.collectorId, effectiveFrom: now,
+            reason: dto.reason ?? 'إسناد جماعي ذكي حسب الحمل والمنطقة', assignedBy: actor.id,
+          },
+        });
+        await tx.task.updateMany({
+          where: { customerId: change.customerId, status: 'open' }, data: { assignedTo: change.collectorId },
+        });
+      }
+    });
+    await this.audit.log({
+      userId: actor.id, action: 'smart_bulk_assignment_executed', entityTable: 'customer_assignments',
+      newValue: { changes: plan.changes, distribution: plan.distribution }, reason: dto.reason, req,
+    });
+    return { ...plan, executed: plan.changes.length };
   }
 }

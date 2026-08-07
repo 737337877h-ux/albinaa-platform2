@@ -69,6 +69,10 @@ interface KpiResponse {
   tasksToday: { total: number; assigned: number; unassigned: number };
   topReasons: { taskType: string; count: number }[];
   debt120Plus: { count: number; totalByCurrency: Record<string, number> };
+  concentrationByCurrency: Record<string, {
+    totalDebt: number; top10Debt: number; percentage: number;
+    topCustomers: { customerId: string; customerName: string; customerCode: string | null; amount: number }[];
+  }>;
   highRiskCustomers: {
     customerId: string; customerCode: string | null; customerName: string;
     score: number; riskLevel: string;
@@ -227,7 +231,7 @@ export default function DashboardPage() {
             skeletonClassName="h-36"
           >
             {summary.data && (
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                 <Link href="/customers">
                   <Card className="p-4 transition-colors hover:bg-pine-50/40 dark:hover:bg-white/5">
                     <p className="text-xs text-concrete-500">إجمالي العملاء</p>
@@ -483,6 +487,21 @@ export default function DashboardPage() {
                       </li>
                     ))}
                   </ul>
+                </Card>
+                <Card className="p-4">
+                  <p className="text-xs text-concrete-500">تركيز المخاطر — أعلى 10 عملاء</p>
+                  <div className="mt-2 space-y-2">
+                    {Object.entries(kpis.data.concentrationByCurrency ?? {}).map(([currency, value]) => (
+                      <div key={currency}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold">{currency}</span>
+                          <span className="tnum text-lg font-extrabold text-hazard-700 dark:text-hazard-400">{value.percentage.toFixed(1)}%</span>
+                        </div>
+                        <p className="tnum text-[11px] text-concrete-500" dir="ltr">{fmtMoney(value.top10Debt)} / {fmtMoney(value.totalDebt)}</p>
+                      </div>
+                    ))}
+                    {Object.keys(kpis.data.concentrationByCurrency ?? {}).length === 0 && <p className="text-xs text-concrete-500">لا توجد مديونية موجبة.</p>}
+                  </div>
                 </Card>
               </div>
 

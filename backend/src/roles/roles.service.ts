@@ -70,13 +70,15 @@ export class RolesService {
       data: {
         organizationId: actor.organizationId,
         name: dto.name,
-        isSystem: dto.isSystem ?? false,
+        // User-created roles must never be promoted to protected system roles
+        // through the public API.
+        isSystem: false,
       },
       select: { id: true, name: true, isSystem: true },
     });
     await this.audit.log({
       userId: actor.id, action: 'role_created', entityTable: 'roles', entityId: role.id,
-      newValue: { name: dto.name, isSystem: dto.isSystem ?? false }, req,
+      newValue: { name: dto.name, isSystem: false }, req,
     });
     return role;
   }

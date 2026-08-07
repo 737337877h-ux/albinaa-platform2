@@ -146,8 +146,11 @@ describe('M5 Review Fixes (e2e)', () => {
       const task = await prisma.task.findFirst({ where: { sourcePromiseId: res.body.id } });
       expect(task).not.toBeNull();
 
-      // فحص شامل: كل وعد في القاعدة له مهمة مصدرها هو (لا حالة جزئية إطلاقًا)
-      const promises = await prisma.paymentPromise.findMany({ select: { id: true } });
+      // افحص وعود هذا السيناريو؛ ملفات E2E أخرى قد تنشئ بيانات تحليلية مباشرة
+      // لاختبار التقارير ولا ينبغي أن تغيّر نتيجة اختبار ذرية مسار الـAPI.
+      const promises = await prisma.paymentPromise.findMany({
+        where: { customerId: assignedCustomerId }, select: { id: true },
+      });
       for (const p of promises) {
         const t = await prisma.task.count({ where: { sourcePromiseId: p.id } });
         expect(t).toBeGreaterThanOrEqual(1);

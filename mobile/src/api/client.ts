@@ -4,11 +4,17 @@ import { getAccessToken, getRefreshToken, setTokens, clearTokens } from '../util
 
 let client: AxiosInstance | null = null;
 let isRefreshing = false;
-let pendingRequests: Array<(token: string) => void> = [];
+let pendingRequests: Array<{
+  resolve: (token: string) => void;
+  reject: (error: unknown) => void;
+}> = [];
 
 async function buildClient(): Promise<AxiosInstance> {
   const baseURL = await getBaseUrl();
-  const c = axios.create({ baseURL, timeout: 15_000 });
+  // React Native's legacy XHR adapter can report a generic Network Error for
+  // reachable clear-text LAN hosts. The fetch adapter uses the same native
+  // transport as the successful health probe and works consistently on Android.
+  const c = axios.create({ baseURL, timeout: 15_000, adapter: 'fetch' });
 
   c.interceptors.request.use(async (config) => {
     const token = await getAccessToken();
@@ -24,25 +30,30 @@ async function buildClient(): Promise<AxiosInstance> {
       req._retry = true;
 
       if (isRefreshing) {
-        return new Promise((resolve) => pendingRequests.push((token) => {
-          req.headers.Authorization = `Bearer ${token}`;
-          resolve(c(req));
-        }));
+        return new Promise<string>((resolve, reject) => pendingRequests.push({ resolve, reject }))
+          .then((token) => {
+            req.headers.Authorization = `Bearer ${token}`;
+            return c(req);
+          });
       }
 
       isRefreshing = true;
       try {
         const refreshToken = await getRefreshToken();
         if (!refreshToken) throw new Error('No refresh token');
-        const { data } = await axios.post(`${baseURL}/auth/refresh`, { refreshToken });
+        const { data } = await axios.post(`${baseURL}/auth/refresh`, { refreshToken }, { adapter: 'fetch' });
         await setTokens(data.accessToken, data.refreshToken);
-        pendingRequests.forEach((cb) => cb(data.accessToken));
+        pendingRequests.forEach((pending) => pending.resolve(data.accessToken));
         pendingRequests = [];
         req.headers.Authorization = `Bearer ${data.accessToken}`;
         return c(req);
       } catch (refreshError) {
-        await clearTokens();
+        pendingRequests.forEach((pending) => pending.reject(refreshError));
         pendingRequests = [];
+        const status = (refreshError as any)?.response?.status;
+        // A disconnected LAN is not a logout. Clear credentials only when the
+        // server explicitly rejects the refresh token.
+        if ([400, 401, 403].includes(status)) await clearTokens();
         throw refreshError;
       } finally {
         isRefreshing = false;

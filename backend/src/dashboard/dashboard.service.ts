@@ -3,6 +3,7 @@ import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { priorityOfTaskType } from '../tasks/tasks.service';
 import { orgDateOnly, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
+import { AgingService } from '../aging/aging.service';
 
 /**
  * Dashboard API — المؤشرات الأساسية المتاحة من بيانات المرحلة الحالية.
@@ -14,7 +15,7 @@ import { orgDateOnly, startOfNextOrgDay, startOfOrgDay } from '../common/org-tim
  */
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly agingService: AgingService) {}
 
   async navCounts(user: AuthUser) {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -231,7 +232,7 @@ export class DashboardService {
     const today = startOfOrgDay(todayDate);
     const tomorrow = startOfNextOrgDay(todayDate);
 
-    const [totalCustomers, activeCustomers, balances, scores, todayTasks, aging] = await Promise.all([
+    const [totalCustomers, activeCustomers, balances, scores, todayTasks, agingReport] = await Promise.all([
       this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' }, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
       this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
       this.prisma.customerBalance.findMany({
@@ -239,7 +240,7 @@ export class DashboardService {
         select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
       }),
       this.prisma.customerScore.findMany({
-        where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
+        where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
         orderBy: { computedAt: 'desc' },
         select: { customerId: true, score: true, riskLevel: true },
       }),
@@ -250,10 +251,7 @@ export class DashboardService {
           expectedAmount: true, expectedCurrency: true,
         },
       }),
-      this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] }, bucket_120_plus: { gt: 0 }, reversedAt: null },
-        select: { customerId: true, currencyCode: true, totalDue: true },
-      }),
+      this.agingService.report(user, { accountClass: 'customer' }),
     ]);
 
     const operationalBalances = await Promise.all(balances.map(async (balance) => {
@@ -300,15 +298,46 @@ export class DashboardService {
 
     const debt120TotalByCurrency: Record<string, number> = {};
     const debt120Customers = new Set<string>();
-    for (const a of aging) {
-      debt120Customers.add(a.customerId);
-      debt120TotalByCurrency[a.currencyCode] = (debt120TotalByCurrency[a.currencyCode] ?? 0) + Number(a.totalDue);
+    for (const a of agingReport.customers) {
+      const amount120 = Number(a.buckets.bucket_120_plus ?? 0);
+      if (amount120 <= 0.005) continue;
+      debt120Customers.add(String(a.customerId));
+      debt120TotalByCurrency[a.currency] = (debt120TotalByCurrency[a.currency] ?? 0) + amount120;
     }
     const debt120Plus = { count: debt120Customers.size, totalByCurrency: debt120TotalByCurrency };
+
+    const concentrationByCurrency: Record<string, {
+      totalDebt: number;
+      top10Debt: number;
+      percentage: number;
+      topCustomers: Array<{ customerId: string; customerName: string; customerCode: string | null; amount: number }>;
+    }> = {};
+    const agingByCurrency = new Map<string, typeof agingReport.customers>();
+    for (const row of agingReport.customers) {
+      agingByCurrency.set(row.currency, [...(agingByCurrency.get(row.currency) ?? []), row]);
+    }
+    for (const [currency, rows] of agingByCurrency) {
+      const ranked = [...rows].sort((a, b) => Number(b.totalDue) - Number(a.totalDue));
+      const totalDebt = ranked.reduce((sum, row) => sum + Number(row.totalDue), 0);
+      const top = ranked.slice(0, 10);
+      const top10Debt = top.reduce((sum, row) => sum + Number(row.totalDue), 0);
+      concentrationByCurrency[currency] = {
+        totalDebt,
+        top10Debt,
+        percentage: totalDebt > 0 ? (top10Debt / totalDebt) * 100 : 0,
+        topCustomers: top.map((row) => ({
+          customerId: String(row.customerId),
+          customerName: String(row.customerName),
+          customerCode: row.customerCode == null ? null : String(row.customerCode),
+          amount: Number(row.totalDue),
+        })),
+      };
+    }
 
     const highRisk = await this.prisma.customer.findMany({
       where: {
         organizationId: orgId,
+        status: 'active',
         OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
         scores: { some: { riskLevel: { in: ['high', 'critical'] } } },
       },
@@ -394,6 +423,7 @@ export class DashboardService {
       tasksToday,
       topReasons,
       debt120Plus,
+      concentrationByCurrency,
       highRiskCustomers,
       topPriorityTasks,
       collectorPerformanceToday,
