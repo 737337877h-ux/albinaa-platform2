@@ -241,33 +241,64 @@ export class MobileService {
 
   async findCustomers(user: AuthUser) {
     if (user.permissions.includes('customers.read_all')) {
-      const customers = await this.prisma.customer.findMany({
-        where: { organizationId: user.organizationId },
-        include: {
-          balances: { select: { currencyCode: true, accountingBalance: true } },
-        },
-        orderBy: { name: 'asc' },
-      });
-      return customers.map((c) => this.shapeCustomer(c));
+      return this.findActiveCustomerSnapshot({ organizationId: user.organizationId });
     }
 
     const collector = await this.prisma.collector.findUnique({ where: { userId: user.id } });
     if (!collector) return [];
 
+    return this.findActiveCustomerSnapshot({
+      organizationId: user.organizationId,
+      assignments: { some: { collectorId: collector.id, effectiveTo: null } },
+    });
+  }
+
+  private async findActiveCustomerSnapshot(where: any) {
     const customers = await this.prisma.customer.findMany({
-      where: {
-        organizationId: user.organizationId,
-        assignments: { some: { collectorId: collector.id, effectiveTo: null } },
-      },
+      where: { ...where, status: 'active' },
       include: {
-        balances: { select: { currencyCode: true, accountingBalance: true } },
+        balances: {
+          select: {
+            currencyCode: true,
+            accountingBalance: true,
+            lastImportJob: { select: { importedAt: true } },
+          },
+        },
       },
       orderBy: { name: 'asc' },
     });
-    return customers.map((c) => this.shapeCustomer(c));
+
+    if (customers.length === 0) return [];
+
+    const balanceCutoffs = new Map<string, number>();
+    for (const customer of customers) {
+      for (const balance of customer.balances) {
+        const key = `${customer.id}:${balance.currencyCode}`;
+        balanceCutoffs.set(key, balance.lastImportJob?.importedAt?.getTime() ?? Number.NEGATIVE_INFINITY);
+      }
+    }
+
+    const ledgerEntries = await this.prisma.operationalLedger.findMany({
+      where: { customerId: { in: customers.map((customer) => customer.id) } },
+      select: {
+        customerId: true,
+        currencyCode: true,
+        amountSigned: true,
+        createdAt: true,
+      },
+    });
+    const ledgerDeltas = new Map<string, number>();
+    for (const entry of ledgerEntries) {
+      const key = `${entry.customerId}:${entry.currencyCode}`;
+      const cutoff = balanceCutoffs.get(key);
+      if (cutoff == null || entry.createdAt.getTime() <= cutoff) continue;
+      ledgerDeltas.set(key, (ledgerDeltas.get(key) ?? 0) + Number(entry.amountSigned));
+    }
+
+    return customers.map((customer) => this.shapeCustomer(customer, ledgerDeltas));
   }
 
-  private shapeCustomer(c: any) {
+  private shapeCustomer(c: any, ledgerDeltas: Map<string, number> = new Map()) {
     return {
       id: c.id,
       fullName: c.name,
@@ -282,7 +313,7 @@ export class MobileService {
       geoLng: c.geoLng == null ? null : Number(c.geoLng),
       balances: c.balances.map((b: any) => ({
         currency: b.currencyCode,
-        balance: Number(b.accountingBalance),
+        balance: Number(b.accountingBalance) + (ledgerDeltas.get(`${c.id}:${b.currencyCode}`) ?? 0),
       })),
     };
   }
