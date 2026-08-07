@@ -8,7 +8,7 @@ import { useAuth } from '../store/auth-context';
 import { useSync } from '../store/sync-context';
 import { getAll } from '../db/database';
 import { colors, radius, shadow } from '../theme';
-import { formatBalance, parseBalances, totalAbsoluteBalance } from '../utils/customer';
+import { formatBalance, parseBalances, totalAbsoluteBalance, totalsByCurrency } from '../utils/customer';
 import brandImage from '../../assets/alraqi-brand.png';
 
 export default function DashboardScreen({ navigation }: any) {
@@ -30,7 +30,9 @@ export default function DashboardScreen({ navigation }: any) {
   const todayTasks = data.tasks.filter((task) => String(task.dueDate || '').slice(0, 10) === today && task.status !== 'completed');
   const overdue = data.tasks.filter((task) => task.dueDate && String(task.dueDate).slice(0, 10) < today && task.status !== 'completed');
   const todayCollections = data.collections.filter((item) => item.collectedAt && localDateKey(new Date(item.collectedAt)) === today);
-  const customerTotals = totalsByCurrency(customerAccounts);
+  // Match the web dashboard definition of debt: positive debtor balances only.
+  // Customer credit balances are reported separately and do not reduce debt.
+  const customerTotals = totalsByCurrency(customerAccounts, true);
   const advanceTotals = totalsByCurrency(advances);
   const priorities = [...customerAccounts, ...advances]
     .filter((account) => totalAbsoluteBalance(account.balances) > 0)
@@ -127,15 +129,6 @@ function BalanceCompact({ balances }: { balances: unknown }) {
   const value = parseBalances(balances).sort((a, b) => Math.abs(Number(b.balance || 0)) - Math.abs(Number(a.balance || 0)))[0];
   if (!value) return <Text style={styles.net}>صافي</Text>;
   return <View style={styles.compact}><Text style={styles.compactAmount}>{formatBalance(Number(value.balance ?? value.accountingBalance ?? 0))}</Text><Text style={styles.compactCurrency}>{value.currency || value.currencyCode}</Text></View>;
-}
-
-function totalsByCurrency(accounts: any[]): Record<string, number> {
-  const totals: Record<string, number> = {};
-  for (const account of accounts) for (const balance of parseBalances(account.balances)) {
-    const currency = balance.currency || balance.currencyCode || '—';
-    totals[currency] = (totals[currency] || 0) + Number(balance.balance ?? balance.accountingBalance ?? 0);
-  }
-  return totals;
 }
 
 function localDateKey(value: Date): string {
