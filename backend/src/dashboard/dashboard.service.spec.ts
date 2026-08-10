@@ -2,7 +2,12 @@ import { findComparablePreviousImport, summarizeDebtChange } from './dashboard.s
 
 const importedAt = new Date('2026-08-10T00:00:00Z');
 const snap = (customerId: string, currencyCode: string, balance: number) =>
-  ({ customerId, currencyCode, balance });
+  ({
+    customerId,
+    currencyCode,
+    balance,
+    customer: { id: customerId, name: `Customer ${customerId}`, externalCustomerCode: `CODE-${customerId}` },
+  });
 
 describe('dashboard debt change comparison', () => {
   it('skips an unrelated advances-sized import and selects the comparable customer portfolio', () => {
@@ -34,8 +39,13 @@ describe('dashboard debt change comparison', () => {
       positiveIncreases: 20,
       decreases: 50,
       accounts: 1,
+      affectedCount: 2,
       newDebtors: 0,
     });
+    expect(result.YER.affectedAccounts).toEqual([
+      expect.objectContaining({ customerId: 'b', customerCode: 'CODE-b', change: -50, direction: 'decrease' }),
+      expect.objectContaining({ customerId: 'a', customerName: 'Customer a', change: 20, direction: 'increase' }),
+    ]);
     expect(result.SAR).toMatchObject({ netChange: -10, positiveIncreases: 0, decreases: 10 });
     expect(result.USD).toMatchObject({ netChange: 800, positiveIncreases: 800, newDebtors: 1 });
   });

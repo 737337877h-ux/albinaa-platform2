@@ -9,6 +9,22 @@ type DebtSnapshot = {
   customerId: string;
   currencyCode: string;
   balance: unknown;
+  customer?: {
+    id: string;
+    name: string;
+    externalCustomerCode: string;
+  };
+};
+
+type DebtChangeAccount = {
+  customerId: string;
+  customerName: string;
+  customerCode: string;
+  currencyCode: string;
+  previousBalance: number;
+  currentBalance: number;
+  change: number;
+  direction: 'increase' | 'decrease';
 };
 
 type SnapshotImport = {
@@ -46,10 +62,10 @@ export function findComparablePreviousImport(
 }
 
 export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapshot[]) {
-  const latestMap = new Map(latest.map((snapshot) => [snapshotKey(snapshot), Number(snapshot.balance)]));
-  const previousMap = new Map(previous.map((snapshot) => [snapshotKey(snapshot), Number(snapshot.balance)]));
-  const currencyOf = new Map<string, string>();
-  for (const snapshot of [...previous, ...latest]) currencyOf.set(snapshotKey(snapshot), snapshot.currencyCode);
+  const latestMap = new Map<string, DebtSnapshot>();
+  const previousMap = new Map<string, DebtSnapshot>();
+  for (const snapshot of latest) latestMap.set(snapshotKey(snapshot), snapshot);
+  for (const snapshot of previous) previousMap.set(snapshotKey(snapshot), snapshot);
 
   const perCurrency: Record<string, {
     amount: number;
@@ -57,14 +73,19 @@ export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapsh
     positiveIncreases: number;
     decreases: number;
     accounts: number;
+    affectedCount: number;
     newDebtors: number;
+    affectedAccounts: DebtChangeAccount[];
   }> = {};
 
   for (const key of new Set([...latestMap.keys(), ...previousMap.keys()])) {
-    const current = latestMap.get(key) ?? 0;
-    const prior = previousMap.get(key) ?? 0;
+    const latestSnapshot = latestMap.get(key);
+    const previousSnapshot = previousMap.get(key);
+    const current = Number(latestSnapshot?.balance ?? 0);
+    const prior = Number(previousSnapshot?.balance ?? 0);
     const difference = current - prior;
-    const currency = currencyOf.get(key);
+    const snapshot = latestSnapshot ?? previousSnapshot;
+    const currency = snapshot?.currencyCode;
     if (!currency) continue;
     const row = (perCurrency[currency] ??= {
       amount: 0,
@@ -72,7 +93,9 @@ export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapsh
       positiveIncreases: 0,
       decreases: 0,
       accounts: 0,
+      affectedCount: 0,
       newDebtors: 0,
+      affectedAccounts: [],
     });
     row.netChange += difference;
     row.amount = row.netChange;
@@ -82,7 +105,24 @@ export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapsh
       if (prior <= 0 && current > 0) row.newDebtors += 1;
     } else if (difference < -0.005) {
       row.decreases += -difference;
+    } else {
+      continue;
     }
+    row.affectedCount += 1;
+    row.affectedAccounts.push({
+      customerId: snapshot.customer?.id ?? snapshot.customerId,
+      customerName: snapshot.customer?.name ?? 'حساب غير مسمى',
+      customerCode: snapshot.customer?.externalCustomerCode ?? snapshot.customerId,
+      currencyCode: currency,
+      previousBalance: prior,
+      currentBalance: current,
+      change: difference,
+      direction: difference > 0 ? 'increase' : 'decrease',
+    });
+  }
+
+  for (const row of Object.values(perCurrency)) {
+    row.affectedAccounts.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
   }
 
   return perCurrency;
@@ -230,7 +270,12 @@ export class DashboardService {
             },
           },
           orderBy: { snapshotAt: 'asc' },
-          select: { customerId: true, currencyCode: true, balance: true },
+          select: {
+            customerId: true,
+            currencyCode: true,
+            balance: true,
+            customer: { select: { id: true, name: true, externalCustomerCode: true } },
+          },
         },
       },
     });
