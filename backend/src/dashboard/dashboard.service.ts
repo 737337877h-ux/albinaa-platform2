@@ -5,11 +5,94 @@ import { priorityOfTaskType } from '../tasks/tasks.service';
 import { orgDateOnly, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
 import { AgingService } from '../aging/aging.service';
 
+type DebtSnapshot = {
+  customerId: string;
+  currencyCode: string;
+  balance: unknown;
+};
+
+type SnapshotImport = {
+  id: string;
+  importedAt: Date;
+  fileName: string;
+  snapshots: DebtSnapshot[];
+};
+
+const snapshotKey = (snapshot: Pick<DebtSnapshot, 'customerId' | 'currencyCode'>) =>
+  `${snapshot.customerId}|${snapshot.currencyCode}`;
+
+/**
+ * Prevents comparing a full customer import with an advances import or a job
+ * that has no balance snapshots. Comparable imports must cover at least half
+ * of the larger customer portfolio.
+ */
+export function findComparablePreviousImport(
+  latest: SnapshotImport,
+  candidates: SnapshotImport[],
+): SnapshotImport | null {
+  const latestKeys = new Set(latest.snapshots.map(snapshotKey));
+  if (latestKeys.size === 0) return null;
+
+  for (const candidate of candidates) {
+    const candidateKeys = new Set(candidate.snapshots.map(snapshotKey));
+    if (candidateKeys.size === 0) continue;
+    let overlap = 0;
+    for (const key of candidateKeys) {
+      if (latestKeys.has(key)) overlap += 1;
+    }
+    if (overlap / Math.max(latestKeys.size, candidateKeys.size) >= 0.5) return candidate;
+  }
+  return null;
+}
+
+export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapshot[]) {
+  const latestMap = new Map(latest.map((snapshot) => [snapshotKey(snapshot), Number(snapshot.balance)]));
+  const previousMap = new Map(previous.map((snapshot) => [snapshotKey(snapshot), Number(snapshot.balance)]));
+  const currencyOf = new Map<string, string>();
+  for (const snapshot of [...previous, ...latest]) currencyOf.set(snapshotKey(snapshot), snapshot.currencyCode);
+
+  const perCurrency: Record<string, {
+    amount: number;
+    netChange: number;
+    positiveIncreases: number;
+    decreases: number;
+    accounts: number;
+    newDebtors: number;
+  }> = {};
+
+  for (const key of new Set([...latestMap.keys(), ...previousMap.keys()])) {
+    const current = latestMap.get(key) ?? 0;
+    const prior = previousMap.get(key) ?? 0;
+    const difference = current - prior;
+    const currency = currencyOf.get(key);
+    if (!currency) continue;
+    const row = (perCurrency[currency] ??= {
+      amount: 0,
+      netChange: 0,
+      positiveIncreases: 0,
+      decreases: 0,
+      accounts: 0,
+      newDebtors: 0,
+    });
+    row.netChange += difference;
+    row.amount = row.netChange;
+    if (difference > 0.005) {
+      row.positiveIncreases += difference;
+      row.accounts += 1;
+      if (prior <= 0 && current > 0) row.newDebtors += 1;
+    } else if (difference < -0.005) {
+      row.decreases += -difference;
+    }
+  }
+
+  return perCurrency;
+}
+
 /**
  * Dashboard API — المؤشرات الأساسية المتاحة من بيانات المرحلة الحالية.
  * ملاحظات منهجية موثقة (من مرحلة التحقق):
  * - كل المؤشرات المالية مفصولة حسب العملة — لا جمع مخلوطًا بين عملات.
- * - "المديونية الجديدة" = الزيادات الموجبة بين آخر استيرادين (Snapshots).
+ * - تغير المديونية = صافي الفرق بين آخر استيرادين متجانسين، مع فصل الزيادات عن الانخفاضات.
  * - أعمار الديون "تقديرية" حصريًا (بحسب أقدم حركة متاحة، لا تواريخ استحقاق) —
  *   تُعرض بعلامة estimated=true ولا تُقدَّم كعمر محاسبي مؤكد.
  */
@@ -116,59 +199,67 @@ export class DashboardService {
     };
   }
 
-  /** المديونية الجديدة بين آخر استيرادين: زيادات موجبة + عملاء ظهروا مدينين لأول مرة. */
+  /** صافي تغير المديونية بين آخر استيرادين متجانسين، مع تفاصيل الزيادات والانخفاضات. */
   private async newDebtBetweenLastTwoImports(orgId: string) {
-    const lastTwo = await this.prisma.importJob.findMany({
-      where: { organizationId: orgId, status: 'completed' },
-      orderBy: { importedAt: 'desc' },
-      take: 2,
-      select: { id: true, importedAt: true },
-    });
-    if (lastTwo.length === 0) return null;
-
-    const [latest, previous] = lastTwo;
-    const latestSnaps = await this.prisma.balanceSnapshot.findMany({
+    const recentImports = await this.prisma.importJob.findMany({
       where: {
-        importJobId: latest.id,
-        customer: { status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
-      },
-      select: { customerId: true, currencyCode: true, balance: true },
-    });
-    const prevMap = new Map<string, number>();
-    if (previous) {
-      const prevSnaps = await this.prisma.balanceSnapshot.findMany({
-        where: {
-          importJobId: previous.id,
-          customer: { status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        organizationId: orgId,
+        status: 'completed',
+        snapshots: {
+          some: {
+            reversedAt: null,
+            customer: {
+              status: 'active',
+              OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+            },
+          },
         },
-        select: { customerId: true, currencyCode: true, balance: true },
-      });
-      for (const s of prevSnaps) {
-        prevMap.set(`${s.customerId}|${s.currencyCode}`, Number(s.balance));
-      }
+      },
+      orderBy: { importedAt: 'desc' },
+      take: 12,
+      select: {
+        id: true,
+        importedAt: true,
+        fileName: true,
+        snapshots: {
+          where: {
+            reversedAt: null,
+            customer: {
+              status: 'active',
+              OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+            },
+          },
+          orderBy: { snapshotAt: 'asc' },
+          select: { customerId: true, currencyCode: true, balance: true },
+        },
+      },
+    });
+    if (recentImports.length === 0) return null;
+
+    const [latest, ...candidates] = recentImports;
+    const previous = findComparablePreviousImport(latest, candidates);
+    if (!previous) {
+      return {
+        betweenImports: { latest: latest.importedAt, previous: null },
+        comparison: { latestFile: latest.fileName, previousFile: null, comparable: false },
+        perCurrency: {},
+        note: 'لا يوجد استيراد عملاء سابق متجانس للمقارنة؛ لم تُعتبر الأرصدة الحالية مديونية جديدة.',
+      };
     }
 
-    const perCurrency: Record<string, { amount: number; accounts: number; newDebtors: number }> = {};
-    for (const s of latestSnaps) {
-      const cur = Number(s.balance);
-      const prev = prevMap.get(`${s.customerId}|${s.currencyCode}`);
-      const increase = prev === undefined ? (cur > 0 ? cur : 0) : Math.max(cur - prev, 0);
-      if (increase > 0) {
-        const c = (perCurrency[s.currencyCode] ??= { amount: 0, accounts: 0, newDebtors: 0 });
-        c.amount += increase;
-        c.accounts += 1;
-        if (prev === undefined || prev <= 0) c.newDebtors += 1;
-      }
-    }
+    const perCurrency = summarizeDebtChange(latest.snapshots, previous.snapshots);
     return {
       betweenImports: {
         latest: latest.importedAt,
-        previous: previous?.importedAt ?? null,
+        previous: previous.importedAt,
+      },
+      comparison: {
+        latestFile: latest.fileName,
+        previousFile: previous.fileName,
+        comparable: true,
       },
       perCurrency,
-      note: previous
-        ? null
-        : 'استيراد واحد فقط حتى الآن — كل رصيد مدين يُعد مديونية جديدة',
+      note: 'صافي التغير هو المؤشر الرئيسي؛ الزيادات والانخفاضات معروضة منفصلة ولا تُخلط ملفات العملاء بالسلف.',
     };
   }
 

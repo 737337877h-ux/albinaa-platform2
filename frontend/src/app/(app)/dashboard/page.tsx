@@ -24,7 +24,17 @@ interface DashboardSummary {
   methodology?: { debtScope: string };
   byCurrency: Record<string, { debtors: number; debtTotal: number; creditors: number; creditTotal: number; zero: number }>;
   lastImport: { id: string; fileName: string; importedAt: string } | null;
-  newDebt: { perCurrency?: Record<string, { amount: number; accounts: number; newDebtors: number }> } | null;
+  newDebt: {
+    perCurrency?: Record<string, {
+      amount: number;
+      netChange?: number;
+      positiveIncreases?: number;
+      decreases?: number;
+      accounts: number;
+      newDebtors: number;
+    }>;
+    note?: string | null;
+  } | null;
 }
 interface CollectorSummary {
   assignedCustomers: number;
@@ -272,9 +282,23 @@ export default function DashboardPage() {
                 ))}
                 {summary.data.newDebt?.perCurrency && Object.keys(summary.data.newDebt.perCurrency).length > 0 && (
                   <Card className="p-4">
-                    <p className="text-xs text-concrete-500">مديونية جديدة (بين آخر استيرادين)</p>
+                    <p className="text-xs text-concrete-500">صافي تغير المديونية (بين استيرادين متجانسين)</p>
                     {Object.entries(summary.data.newDebt.perCurrency).map(([ccy, v]) => (
-                      <p key={ccy} className="tnum mt-1 text-sm font-bold" dir="ltr">{fmtMoney(v.amount)} {ccy}</p>
+                      <div key={ccy} className="mt-2 rounded-lg border border-concrete-100 p-2 dark:border-white/10">
+                        <div className="flex items-center justify-between gap-3">
+                          <Badge tone="neutral">{ccy}</Badge>
+                          <p
+                            className={`tnum text-sm font-bold ${(v.netChange ?? v.amount) >= 0 ? 'text-debt-600 dark:text-debt-400' : 'text-credit-600 dark:text-credit-400'}`}
+                            dir="ltr"
+                          >
+                            {fmtMoney(v.netChange ?? v.amount)} {ccy}
+                          </p>
+                        </div>
+                        <div className="mt-1 flex flex-wrap justify-between gap-x-3 text-[11px] text-concrete-500">
+                          <span dir="ltr">الزيادات: {fmtMoney(v.positiveIncreases ?? 0)}</span>
+                          <span dir="ltr">الانخفاضات: {fmtMoney(v.decreases ?? 0)}</span>
+                        </div>
+                      </div>
                     ))}
                   </Card>
                 )}
