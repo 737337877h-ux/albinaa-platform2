@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { getAll } from '../db/database';
+import { colors, radius, shadow } from '../theme';
 
 export default function CollectionsListScreen({ navigation }: any) {
   const [localCollections, setLocalCollections] = useState<any[]>([]);
@@ -95,20 +96,20 @@ function CollectionItem({ item, navigation }: { item: any; navigation: any }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f4f8' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#34a853' },
-  title: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  subtitle: { fontSize: 12, color: '#fff', marginTop: 4, opacity: 0.9 },
-  addBtn: { backgroundColor: 'rgba(255,255,255,0.2)', padding: 10, borderRadius: 8 },
-  addBtnText: { color: '#fff', fontWeight: '600' },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#333', padding: 16, paddingBottom: 8 },
-  item: { backgroundColor: '#fff', marginHorizontal: 16, marginBottom: 8, padding: 14, borderRadius: 10 },
+  container: { flex: 1, backgroundColor: colors.background },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 18, backgroundColor: colors.primary, borderBottomWidth: 2, borderBottomColor: colors.gold },
+  title: { fontSize: 21, fontWeight: '900', color: colors.background },
+  subtitle: { fontSize: 12, color: colors.background, marginTop: 4, opacity: 0.85 },
+  addBtn: { backgroundColor: colors.gold, paddingVertical: 10, paddingHorizontal: 14, borderRadius: radius.pill },
+  addBtnText: { color: colors.primary, fontWeight: '900' },
+  sectionTitle: { fontSize: 16, fontWeight: '900', color: colors.ink, padding: 16, paddingBottom: 8, textAlign: 'right' },
+  item: { backgroundColor: colors.surface, marginHorizontal: 16, marginBottom: 10, padding: 15, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, ...shadow },
   itemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  itemTitle: { fontSize: 16, color: '#333', fontWeight: '600', flex: 1 },
-  itemAmount: { fontSize: 16, color: '#34a853', fontWeight: 'bold' },
+  itemTitle: { fontSize: 16, color: colors.ink, fontWeight: '800', flex: 1, textAlign: 'right' },
+  itemAmount: { fontSize: 16, color: colors.goldDark, fontWeight: '900' },
   itemRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
-  itemDate: { fontSize: 12, color: '#999' },
-  itemMethod: { fontSize: 12, color: '#666' },
-  itemNotes: { fontSize: 13, color: '#444', marginTop: 6, fontStyle: 'italic' },
-  empty: { textAlign: 'center', color: '#999', padding: 30 },
+  itemDate: { fontSize: 12, color: colors.muted },
+  itemMethod: { fontSize: 12, color: colors.muted },
+  itemNotes: { fontSize: 13, color: colors.ink, marginTop: 6, fontStyle: 'italic', textAlign: 'right' },
+  empty: { textAlign: 'center', color: colors.muted, padding: 30 },
 });

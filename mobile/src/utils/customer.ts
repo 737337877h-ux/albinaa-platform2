@@ -13,6 +13,20 @@ export function totalAbsoluteBalance(value: unknown): number {
   return parseBalances(value).reduce((sum, item) => sum + Math.abs(Number(item.balance ?? item.accountingBalance ?? 0)), 0);
 }
 
+/** Total debtor exposure only. Credit and settled balances never contribute. */
+export function totalDebtorBalance(value: unknown): number {
+  return parseBalances(value).reduce((sum, item) => {
+    const amount = Number(item.balance ?? item.accountingBalance ?? 0);
+    return amount > 0.001 ? sum + amount : sum;
+  }, 0);
+}
+
+export function largestDebtorBalance(value: unknown): BalanceValue | null {
+  return parseBalances(value)
+    .filter((item) => Number(item.balance ?? item.accountingBalance ?? 0) > 0.001)
+    .sort((a, b) => Number(b.balance ?? b.accountingBalance ?? 0) - Number(a.balance ?? a.accountingBalance ?? 0))[0] ?? null;
+}
+
 export function totalsByCurrency(accounts: any[], debtOnly = false): Record<string, number> {
   const totals: Record<string, number> = {};
   for (const account of accounts) {

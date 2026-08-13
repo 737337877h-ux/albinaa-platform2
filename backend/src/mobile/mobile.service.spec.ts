@@ -9,7 +9,7 @@ describe('MobileService customer snapshot', () => {
 
   function createService() {
     const prisma = {
-      customer: { findMany: jest.fn() },
+      customer: { findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
       collector: { findUnique: jest.fn() },
       operationalLedger: { findMany: jest.fn() },
     };
@@ -32,6 +32,7 @@ describe('MobileService customer snapshot', () => {
         address: null,
         geoLat: null,
         geoLng: null,
+        assignments: [{ collector: { user: { fullName: 'المحصّل الأول' } } }],
         balances: [{ currencyCode: 'YER', accountingBalance: 1_000, lastImportJob: { importedAt } }],
       },
     ]);
@@ -47,6 +48,7 @@ describe('MobileService customer snapshot', () => {
     }));
     expect(result).toHaveLength(1);
     expect(result[0].balances).toEqual([{ currency: 'YER', balance: 900 }]);
+    expect(result[0].assignedCollectorName).toBe('المحصّل الأول');
   });
 
   it('keeps collector assignment scope while excluding merged accounts', async () => {
@@ -64,5 +66,31 @@ describe('MobileService customer snapshot', () => {
       },
     }));
     expect(prisma.operationalLedger.findMany).not.toHaveBeenCalled();
+  });
+
+  it('allows a collector to update contact fields for an actively assigned customer', async () => {
+    const { prisma, service } = createService();
+    prisma.collector.findUnique.mockResolvedValue({ id: 'collector-1' });
+    prisma.customer.findFirst.mockResolvedValue({ id: 'customer-1' });
+    prisma.customer.update.mockResolvedValue({ id: 'customer-1' });
+
+    const result = await service.updateCustomerField(
+      { ...user, permissions: [] },
+      'customer-1',
+      { phonePrimary: '777123456' },
+    );
+
+    expect(prisma.customer.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: 'customer-1',
+        organizationId: 'org-1',
+        assignments: { some: { collectorId: 'collector-1', effectiveTo: null } },
+      }),
+    }));
+    expect(prisma.customer.update).toHaveBeenCalledWith({
+      where: { id: 'customer-1' },
+      data: { phonePrimary: '777123456' },
+    });
+    expect(result).toEqual({ id: 'customer-1', updated: true });
   });
 });

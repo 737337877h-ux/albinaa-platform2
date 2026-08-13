@@ -174,7 +174,7 @@ async function main() {
       'reservations.deliver', 'reservations.extend',
     ],
     'المحاسب': [
-      'customers.read', 'customers.read_all', 'balances.read', 'collections.approve', 'imports.run',
+      'customers.read', 'customers.read_all', 'customers.transfer', 'balances.read', 'collections.approve', 'imports.run',
       'imports.read', 'imports.reverse', 'reconciliation.review', 'reports.read', 'reports.export', 'risk.read',
       'reservations.read',
     ],

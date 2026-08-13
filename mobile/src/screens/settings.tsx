@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View,
+  ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { useAuth } from '../store/auth-context';
 import { useSync } from '../store/sync-context';
 import {
-  getBaseUrl, getLanOnlySync, isLocalNetworkUrl, setLanOnlySync,
+  getBaseUrl, getLanOnlySync, isLocalNetworkUrl, isValidBaseUrl, pingServer,
+  setLanOnlySync, setStoredBaseUrl,
 } from '../config/api';
+import { resetClient } from '../api/client';
 import {
   getWorkplace, requestGpsPermission, requestBackgroundGpsPermission, restoreGpsTracking,
   setCurrentLocationAsWorkplace, startGpsTracking, stopGpsTracking,
@@ -16,15 +18,17 @@ import { isBiometricEnabled, setBiometricEnabled } from '../utils/secure-storage
 import { APP_VERSION, SYNC_INTERVAL_MS } from '../utils/constants';
 import {
   areLocalNotificationsEnabled, disableLocalNotifications,
-  initializeLocalNotifications, rescheduleOfflineReminders,
+  getNotificationSoundPreference, initializeLocalNotifications, NotificationSoundPreference,
+  rescheduleOfflineReminders, setNotificationSoundPreference,
 } from '../utils/local-notifications';
+import { colors, radius, shadow } from '../theme';
 
 const PHASE_LABELS = {
   idle: 'جاهز', syncing: 'جارٍ المزامنة', synced: 'تمت المزامنة', offline: 'دون اتصال', error: 'تحتاج مراجعة',
 };
 
 export default function SettingsScreen() {
-  const { logout } = useAuth();
+  const { user, login, logout } = useAuth();
   const { status, triggerSync, retryBlocked, refreshStatus } = useSync();
   const [gpsEnabled, setGpsEnabled] = useState(false);
   const [lanOnly, setLanOnly] = useState(true);
@@ -32,18 +36,56 @@ export default function SettingsScreen() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [biometricEnabled, setBiometric] = useState(false);
   const [workplaceSet, setWorkplaceSet] = useState(false);
+  const [notificationSound, setNotificationSound] = useState<NotificationSoundPreference>('news');
+  const [accountModal, setAccountModal] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [serverDraft, setServerDraft] = useState('');
+  const [usernameDraft, setUsernameDraft] = useState('');
+  const [passwordDraft, setPasswordDraft] = useState('');
 
   useEffect(() => {
-    Promise.all([getLanOnlySync(), getBaseUrl(), areLocalNotificationsEnabled(), isBiometricEnabled(), restoreGpsTracking(), getWorkplace()]).then(([localOnly, url, alertsEnabled, biometric, gps, workplace]) => {
+    Promise.all([getLanOnlySync(), getBaseUrl(), areLocalNotificationsEnabled(), isBiometricEnabled(), restoreGpsTracking(), getWorkplace(), getNotificationSoundPreference()]).then(([localOnly, url, alertsEnabled, biometric, gps, workplace, sound]) => {
       setLanOnly(localOnly);
       setBaseUrl(url);
       setNotificationsEnabled(alertsEnabled);
       setBiometric(biometric);
       setGpsEnabled(gps);
       setWorkplaceSet(!!workplace);
+      setNotificationSound(sound);
+      setServerDraft(url);
     });
+    setUsernameDraft(user?.username || '');
     refreshStatus().catch(() => undefined);
-  }, [refreshStatus]);
+  }, [refreshStatus, user?.username]);
+
+  const switchAccountOrServer = async () => {
+    const nextServer = serverDraft.trim().replace(/\/+$/, '');
+    if (!isValidBaseUrl(nextServer) || !usernameDraft.trim() || !passwordDraft) {
+      Alert.alert('بيانات ناقصة', 'أدخل عنوان خادم صحيحًا واسم المستخدم وكلمة المرور.');
+      return;
+    }
+    setSwitching(true);
+    const previousServer = baseUrl;
+    try {
+      const health = await pingServer(nextServer, 7000);
+      if (!health.ok) throw new Error(health.error || 'تعذر الوصول إلى الخادم');
+      await setStoredBaseUrl(nextServer);
+      await resetClient();
+      await login(usernameDraft.trim(), passwordDraft);
+      setBaseUrl(nextServer);
+      setPasswordDraft('');
+      setAccountModal(false);
+      await refreshStatus();
+      triggerSync().catch(() => undefined);
+      Alert.alert('تم التبديل', 'تم فتح الحساب الجديد، وسيعمل دون اتصال بعد اكتمال المزامنة الأولى.');
+    } catch (error: any) {
+      await setStoredBaseUrl(previousServer);
+      await resetClient();
+      Alert.alert('تعذر التبديل', error?.response?.data?.message || error?.message || 'تحقق من البيانات والاتصال');
+    } finally {
+      setSwitching(false);
+    }
+  };
 
   const toggleGps = async (value: boolean) => {
     if (value) {
@@ -81,6 +123,12 @@ export default function SettingsScreen() {
       await disableLocalNotifications();
       setNotificationsEnabled(false);
     }
+  };
+
+  const chooseNotificationSound = async (value: NotificationSoundPreference) => {
+    await setNotificationSoundPreference(value);
+    setNotificationSound(value);
+    if (notificationsEnabled) await rescheduleOfflineReminders();
   };
 
   const toggleBiometric = async (value: boolean) => {
@@ -143,15 +191,25 @@ export default function SettingsScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>الاتصال المحلي</Text>
+        <InfoRow label="المستخدم الحالي" value={user ? `${user.fullName} (@${user.username})` : '—'} />
         <SettingRow label="المزامنة عبر الشبكة المحلية فقط" value={lanOnly} onChange={toggleLanOnly} />
         <Text style={styles.hint}>
           عند التفعيل لا يرسل التطبيق أي بيانات إلى عنوان خارجي. يعمل تلقائيًا كل {SYNC_INTERVAL_MS / 60_000} دقائق عند توفر الخادم المحلي.
         </Text>
+        <TouchableOpacity style={styles.outlineBtn} onPress={() => setAccountModal(true)}>
+          <Text style={styles.outlineBtnText}>تبديل المستخدم أو الخادم</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>التنبيهات</Text>
         <SettingRow label="تنبيهات المهام والوعود" value={notificationsEnabled} onChange={toggleNotifications} />
+        <Text style={styles.fieldLabel}>نغمة الإشعار</Text>
+        <View style={styles.soundChoices}>
+          <SoundChoice label="وميض الأخبار" active={notificationSound === 'news'} onPress={() => chooseNotificationSound('news')} />
+          <SoundChoice label="الافتراضية" active={notificationSound === 'default'} onPress={() => chooseNotificationSound('default')} />
+          <SoundChoice label="صامت" active={notificationSound === 'silent'} onPress={() => chooseNotificationSound('silent')} />
+        </View>
         <TouchableOpacity style={styles.outlineBtn} onPress={enableNotifications}>
           <Text style={styles.outlineBtnText}>تحديث التنبيهات الآن</Text>
         </TouchableOpacity>
@@ -179,6 +237,33 @@ export default function SettingsScreen() {
           <Text style={styles.logoutText}>تسجيل خروج</Text>
         </TouchableOpacity>
       </View>
+
+      <Modal visible={accountModal} transparent animationType="slide" onRequestClose={() => setAccountModal(false)}>
+        <KeyboardAvoidingView style={styles.modalShade} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView
+            contentContainerStyle={styles.modalScroll}
+            keyboardShouldPersistTaps="handled"
+            bounces={false}
+          >
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setAccountModal(false)}><Text style={styles.modalClose}>إغلاق</Text></TouchableOpacity>
+              <Text style={styles.modalTitle}>تبديل الحساب والخادم</Text>
+            </View>
+            <Text style={styles.fieldLabel}>عنوان الخادم</Text>
+            <TextInput style={styles.input} value={serverDraft} onChangeText={setServerDraft} autoCapitalize="none" keyboardType="url" textAlign="left" />
+            <Text style={styles.fieldLabel}>اسم المستخدم</Text>
+            <TextInput style={styles.input} value={usernameDraft} onChangeText={setUsernameDraft} autoCapitalize="none" textAlign="left" />
+            <Text style={styles.fieldLabel}>كلمة المرور</Text>
+            <TextInput style={styles.input} value={passwordDraft} onChangeText={setPasswordDraft} secureTextEntry textAlign="left" />
+            <Text style={styles.hint}>يجب الاتصال بالخادم مرة واحدة عند إضافة هذا الحساب. بعد المزامنة الأولى تبقى بياناته منفصلة وآمنة للعمل دون إنترنت.</Text>
+            <TouchableOpacity style={[styles.primaryBtn, switching && styles.disabledBtn]} disabled={switching} onPress={switchAccountOrServer}>
+              {switching ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>اختبار الاتصال والتبديل</Text>}
+            </TouchableOpacity>
+          </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
     </ScrollView>
   );
 }
@@ -187,7 +272,7 @@ function SettingRow({ label, value, onChange }: { label: string; value: boolean;
   return (
     <View style={styles.row}>
       <Text style={styles.label}>{label}</Text>
-      <Switch value={value} onValueChange={onChange} trackColor={{ false: '#d8dedb', true: '#0A8064' }} />
+      <Switch value={value} onValueChange={onChange} trackColor={{ false: colors.warmGray, true: colors.gold }} thumbColor={value ? colors.primary : colors.background} />
     </View>
   );
 }
@@ -201,29 +286,46 @@ function InfoRow({ label, value, danger = false }: { label: string; value: strin
   );
 }
 
+function SoundChoice({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return <TouchableOpacity style={[styles.soundChoice, active && styles.soundChoiceActive]} onPress={onPress}><Text style={[styles.soundChoiceText, active && styles.soundChoiceTextActive]}>{label}</Text></TouchableOpacity>;
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F6F4' },
+  container: { flex: 1, backgroundColor: colors.background },
   content: { padding: 16, paddingBottom: 40 },
-  section: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: '#E0E9E5' },
+  section: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: colors.line, ...shadow },
   titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: '#113C33', marginBottom: 12 },
+  sectionTitle: { fontSize: 18, fontWeight: '900', color: colors.primary, marginBottom: 12 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
-  label: { fontSize: 15, color: '#244B43', flex: 1, textAlign: 'right' },
-  hint: { fontSize: 12, color: '#667A74', marginTop: 8, lineHeight: 19, textAlign: 'right' },
-  infoRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#EEF3F1' },
-  infoLabel: { fontSize: 13, color: '#667A74' },
-  infoValue: { flex: 1, fontSize: 13, color: '#113C33', fontWeight: '600', textAlign: 'left' },
+  label: { fontSize: 15, color: colors.ink, flex: 1, textAlign: 'right' },
+  hint: { fontSize: 12, color: colors.muted, marginTop: 8, lineHeight: 19, textAlign: 'right' },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: colors.line },
+  infoLabel: { fontSize: 13, color: colors.muted },
+  infoValue: { flex: 1, fontSize: 13, color: colors.ink, fontWeight: '700', textAlign: 'left' },
   danger: { color: '#B42318' },
   errorText: { color: '#B42318', backgroundColor: '#FEF3F2', padding: 10, borderRadius: 8, marginTop: 10, textAlign: 'right' },
   badge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
   badgeOk: { backgroundColor: '#DDF7EC' },
   badgeWarn: { backgroundColor: '#FFF1D6' },
-  badgeText: { color: '#113C33', fontSize: 12, fontWeight: '700' },
-  primaryBtn: { backgroundColor: '#0A604D', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 14 },
-  primaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  badgeText: { color: colors.ink, fontSize: 12, fontWeight: '800' },
+  primaryBtn: { backgroundColor: colors.gold, borderRadius: radius.md, padding: 14, alignItems: 'center', marginTop: 14 },
+  primaryBtnText: { color: colors.primary, fontSize: 15, fontWeight: '900' },
   disabledBtn: { opacity: 0.65 },
-  outlineBtn: { borderColor: '#0A604D', borderWidth: 1, borderRadius: 10, padding: 12, alignItems: 'center', marginTop: 10 },
-  outlineBtnText: { color: '#0A604D', fontWeight: '700' },
+  outlineBtn: { borderColor: colors.goldDark, borderWidth: 1, borderRadius: radius.md, padding: 12, alignItems: 'center', marginTop: 10 },
+  outlineBtnText: { color: colors.primary, fontWeight: '900' },
   logoutBtn: { padding: 14, alignItems: 'center', backgroundColor: '#FEF3F2', borderRadius: 10, marginTop: 16 },
   logoutText: { color: '#B42318', fontSize: 16, fontWeight: '700' },
+  modalShade: { flex: 1, backgroundColor: 'rgba(0,40,34,.7)' },
+  modalScroll: { flexGrow: 1, justifyContent: 'center', padding: 18 },
+  modalCard: { backgroundColor: colors.surface, padding: 18, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.goldDark, ...shadow },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  modalTitle: { color: colors.primary, fontSize: 19, fontWeight: '900' },
+  modalClose: { color: colors.goldDark, fontWeight: '900' },
+  fieldLabel: { color: colors.ink, fontSize: 13, fontWeight: '800', textAlign: 'right', marginTop: 8, marginBottom: 5 },
+  input: { borderWidth: 1, borderColor: colors.line, backgroundColor: colors.background, borderRadius: radius.sm, paddingHorizontal: 12, height: 48, color: colors.ink },
+  soundChoices: { flexDirection: 'row-reverse', gap: 6, marginTop: 3 },
+  soundChoice: { flex: 1, paddingVertical: 9, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.line, alignItems: 'center' },
+  soundChoiceActive: { backgroundColor: colors.gold, borderColor: colors.goldDark },
+  soundChoiceText: { color: colors.muted, fontSize: 11, fontWeight: '700' },
+  soundChoiceTextActive: { color: colors.primary, fontWeight: '900' },
 });

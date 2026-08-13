@@ -30,24 +30,25 @@ model Organization {
   name      String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  branches             Branch[]
-  users                User[]
-  roles                Role[]
-  documentTypes        DocumentType[]
-  customers            Customer[]
-  importTemplates      ImportTemplate[]
-  importJobs           ImportJob[]
-  collectionMethods    CollectionMethod[]
-  followupTypes        FollowupType[]
-  followupResults      FollowupResult[]
-  systemSettings       SystemSetting[]
-  analyticalAccounts   AnalyticalAccount[]
-  customerAliases      CustomerAlias[]
-  customerMerges       CustomerMerge[]
-  customerAccountLinks CustomerAccountLink[]
-  agingSnapshots       AgingSnapshot[]
-  handoverVouchers     CollectionHandoverVoucher[]
-  messageCampaigns     MessageCampaign[]
+  branches                 Branch[]
+  users                    User[]
+  roles                    Role[]
+  documentTypes            DocumentType[]
+  customers                Customer[]
+  importTemplates          ImportTemplate[]
+  importJobs               ImportJob[]
+  collectionMethods        CollectionMethod[]
+  followupTypes            FollowupType[]
+  followupResults          FollowupResult[]
+  systemSettings           SystemSetting[]
+  analyticalAccounts       AnalyticalAccount[]
+  customerAliases          CustomerAlias[]
+  customerMerges           CustomerMerge[]
+  customerAccountLinks     CustomerAccountLink[]
+  agingSnapshots           AgingSnapshot[]
+  handoverVouchers         CollectionHandoverVoucher[]
+  messageCampaigns         MessageCampaign[]
+  assignmentChangeRequests AssignmentChangeRequest[]
 
   @@map("organizations")
 }
@@ -90,38 +91,40 @@ model User {
   organization Organization @relation(fields: [organizationId], references: [id])
   branch       Branch?      @relation(fields: [branchId], references: [id])
 
-  collector                 Collector?
-  userRoles                 UserRole[]                   @relation("UserOwnRoles")
-  rolesGranted              UserRole[]                   @relation("RoleGranter")
-  assignmentsMade           CustomerAssignment[]         @relation("AssignmentMaker")
-  creditDecisions           CustomerCreditPolicy[]       @relation("CreditDecider")
-  creditLimitApprovals      CustomerCreditLimit[]        @relation("CreditLimitApprover")
-  collectorTargetsSet       CollectorTarget[]            @relation("CollectorTargetSetter")
-  duplicateReviews          PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
-  customerMergesCreated     CustomerMerge[]              @relation("CustomerMergeCreator")
-  customerMergesReversed    CustomerMerge[]              @relation("CustomerMergeReverser")
-  importTemplates           ImportTemplate[]
-  importJobs                ImportJob[]
-  importJobsReversed        ImportJob[]                  @relation("ImportJobReverser")
-  ledgerEntries             OperationalLedger[]
-  reconciliationsDone       BalanceReconciliation[]      @relation("ReconReviewer")
-  cashReceived              CashHandover[]
-  handoverVouchersCreated   CollectionHandoverVoucher[]  @relation("HandoverVoucherCreator")
-  handoverVouchersMatched   CollectionHandoverVoucher[]  @relation("HandoverVoucherMatcher")
-  handoverVouchersApproved  CollectionHandoverVoucher[]  @relation("HandoverVoucherApprover")
-  reversalRequestsMade      CollectionReversalRequest[]  @relation("CollectionReversalRequester")
-  reversalRequestsReviewed  CollectionReversalRequest[]  @relation("CollectionReversalReviewer")
-  followups                 Followup[]
-  tasksCreated              Task[]                       @relation("TaskCreator")
-  reservationsCreated       Reservation[]                @relation("ReservationCreator")
-  analyticalAccountsCreated AnalyticalAccount[]          @relation("AnalyticalAccountCreator")
-  messageCampaignsCreated   MessageCampaign[]            @relation("MessageCampaignCreator")
-  attachments               Attachment[]
-  gpsLogs                   GpsLog[]
-  notifications             Notification[]
-  pushTokens                DevicePushToken[]
-  auditLogs                 AuditLog[]
-  authSessions              AuthSession[]
+  collector                        Collector?
+  userRoles                        UserRole[]                   @relation("UserOwnRoles")
+  rolesGranted                     UserRole[]                   @relation("RoleGranter")
+  assignmentsMade                  CustomerAssignment[]         @relation("AssignmentMaker")
+  creditDecisions                  CustomerCreditPolicy[]       @relation("CreditDecider")
+  creditLimitApprovals             CustomerCreditLimit[]        @relation("CreditLimitApprover")
+  collectorTargetsSet              CollectorTarget[]            @relation("CollectorTargetSetter")
+  duplicateReviews                 PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
+  customerMergesCreated            CustomerMerge[]              @relation("CustomerMergeCreator")
+  customerMergesReversed           CustomerMerge[]              @relation("CustomerMergeReverser")
+  importTemplates                  ImportTemplate[]
+  importJobs                       ImportJob[]
+  importJobsReversed               ImportJob[]                  @relation("ImportJobReverser")
+  ledgerEntries                    OperationalLedger[]
+  reconciliationsDone              BalanceReconciliation[]      @relation("ReconReviewer")
+  cashReceived                     CashHandover[]
+  handoverVouchersCreated          CollectionHandoverVoucher[]  @relation("HandoverVoucherCreator")
+  handoverVouchersMatched          CollectionHandoverVoucher[]  @relation("HandoverVoucherMatcher")
+  handoverVouchersApproved         CollectionHandoverVoucher[]  @relation("HandoverVoucherApprover")
+  reversalRequestsMade             CollectionReversalRequest[]  @relation("CollectionReversalRequester")
+  reversalRequestsReviewed         CollectionReversalRequest[]  @relation("CollectionReversalReviewer")
+  followups                        Followup[]
+  tasksCreated                     Task[]                       @relation("TaskCreator")
+  reservationsCreated              Reservation[]                @relation("ReservationCreator")
+  analyticalAccountsCreated        AnalyticalAccount[]          @relation("AnalyticalAccountCreator")
+  messageCampaignsCreated          MessageCampaign[]            @relation("MessageCampaignCreator")
+  attachments                      Attachment[]
+  gpsLogs                          GpsLog[]
+  notifications                    Notification[]
+  pushTokens                       DevicePushToken[]
+  auditLogs                        AuditLog[]
+  authSessions                     AuthSession[]
+  assignmentChangeRequestsMade     AssignmentChangeRequest[]    @relation("AssignmentChangeRequester")
+  assignmentChangeRequestsReviewed AssignmentChangeRequest[]    @relation("AssignmentChangeReviewer")
 
   @@unique([organizationId, username], map: "uq_users_org_username")
   @@map("users")
@@ -185,12 +188,14 @@ model Collector {
   user   User    @relation(fields: [userId], references: [id])
   branch Branch? @relation(fields: [branchId], references: [id])
 
-  assignments      CustomerAssignment[]
-  collections      Collection[]
-  paymentPromises  PaymentPromise[]
-  tasks            Task[]
-  targets          CollectorTarget[]
-  handoverVouchers CollectionHandoverVoucher[]
+  assignments                         CustomerAssignment[]
+  collections                         Collection[]
+  paymentPromises                     PaymentPromise[]
+  tasks                               Task[]
+  targets                             CollectorTarget[]
+  handoverVouchers                    CollectionHandoverVoucher[]
+  assignmentChangeRequestsCurrent     AssignmentChangeRequest[]   @relation("AssignmentChangeCurrentCollector")
+  assignmentChangeRequestsReplacement AssignmentChangeRequest[]   @relation("AssignmentChangeReplacementCollector")
 
   @@map("collectors")
 }
@@ -297,32 +302,33 @@ model Customer {
   mergedInto    Customer?    @relation("CustomerMergeTarget", fields: [mergedIntoId], references: [id])
   mergedSources Customer[]   @relation("CustomerMergeTarget")
 
-  balances                CustomerBalance[]
-  creditPolicy            CustomerCreditPolicy?
-  creditLimits            CustomerCreditLimit[]
-  assignments             CustomerAssignment[]
-  importedTxns            ImportedTransaction[]
-  balanceSnapshots        BalanceSnapshot[]
-  ledgerEntries           OperationalLedger[]
-  reconciliations         BalanceReconciliation[]
-  followups               Followup[]
-  promises                PaymentPromise[]
-  collections             Collection[]
-  reservations            Reservation[]
-  tasks                   Task[]
-  scores                  CustomerScore[]
-  duplicatesAsA           PotentialDuplicateCustomer[] @relation("DupCustomerA")
-  duplicatesAsB           PotentialDuplicateCustomer[] @relation("DupCustomerB")
-  agingRows               DebtAgingSummary[]
-  agingDocuments          DebtAgingDetail[]
-  aliases                 CustomerAlias[]              @relation("CustomerAliasTarget")
-  aliasesFromMerge        CustomerAlias[]              @relation("CustomerAliasSource")
-  mergeOperationsAsMaster CustomerMerge[]              @relation("CustomerMergeMaster")
-  mergeOperationsAsSource CustomerMerge[]              @relation("CustomerMergeSource")
-  primaryAccountLinks     CustomerAccountLink[]        @relation("PrimaryCustomerAccount")
-  childAccountLink        CustomerAccountLink?         @relation("ChildCustomerAccount")
-  agingSnapshots          AgingSnapshot[]
-  messageDispatches       MessageDispatch[]
+  balances                 CustomerBalance[]
+  creditPolicy             CustomerCreditPolicy?
+  creditLimits             CustomerCreditLimit[]
+  assignments              CustomerAssignment[]
+  importedTxns             ImportedTransaction[]
+  balanceSnapshots         BalanceSnapshot[]
+  ledgerEntries            OperationalLedger[]
+  reconciliations          BalanceReconciliation[]
+  followups                Followup[]
+  promises                 PaymentPromise[]
+  collections              Collection[]
+  reservations             Reservation[]
+  tasks                    Task[]
+  scores                   CustomerScore[]
+  duplicatesAsA            PotentialDuplicateCustomer[] @relation("DupCustomerA")
+  duplicatesAsB            PotentialDuplicateCustomer[] @relation("DupCustomerB")
+  agingRows                DebtAgingSummary[]
+  agingDocuments           DebtAgingDetail[]
+  aliases                  CustomerAlias[]              @relation("CustomerAliasTarget")
+  aliasesFromMerge         CustomerAlias[]              @relation("CustomerAliasSource")
+  mergeOperationsAsMaster  CustomerMerge[]              @relation("CustomerMergeMaster")
+  mergeOperationsAsSource  CustomerMerge[]              @relation("CustomerMergeSource")
+  primaryAccountLinks      CustomerAccountLink[]        @relation("PrimaryCustomerAccount")
+  childAccountLink         CustomerAccountLink?         @relation("ChildCustomerAccount")
+  agingSnapshots           AgingSnapshot[]
+  messageDispatches        MessageDispatch[]
+  assignmentChangeRequests AssignmentChangeRequest[]
 
   @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
   @@index([organizationId, nameNormalized], map: "idx_customers_name_norm")
@@ -416,6 +422,34 @@ model CustomerAssignment {
   // معرّف في migration SQL — يضمن إسنادًا حاليًا واحدًا فقط لكل عميل.
   @@index([collectorId, effectiveFrom], map: "idx_assignments_collector")
   @@map("customer_assignments")
+}
+
+/// Collector-originated request to correct an assignment. Approval is
+/// intentionally separate from the request so reassignment remains audited.
+model AssignmentChangeRequest {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId       String    @map("organization_id") @db.Uuid
+  customerId           String    @map("customer_id") @db.Uuid
+  requestedBy          String    @map("requested_by") @db.Uuid
+  currentCollectorId   String?   @map("current_collector_id") @db.Uuid
+  requestedCollectorId String?   @map("requested_collector_id") @db.Uuid
+  reason               String
+  status               String    @default("pending")
+  reviewedBy           String?   @map("reviewed_by") @db.Uuid
+  reviewNote           String?   @map("review_note")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reviewedAt           DateTime? @map("reviewed_at") @db.Timestamptz()
+
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  customer           Customer     @relation(fields: [customerId], references: [id])
+  requester          User         @relation("AssignmentChangeRequester", fields: [requestedBy], references: [id])
+  currentCollector   Collector?   @relation("AssignmentChangeCurrentCollector", fields: [currentCollectorId], references: [id])
+  requestedCollector Collector?   @relation("AssignmentChangeReplacementCollector", fields: [requestedCollectorId], references: [id])
+  reviewer           User?        @relation("AssignmentChangeReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([organizationId, status, createdAt], map: "idx_assignment_change_requests_status")
+  @@index([customerId, status], map: "idx_assignment_change_requests_customer")
+  @@map("assignment_change_requests")
 }
 
 model CustomerCreditPolicy {

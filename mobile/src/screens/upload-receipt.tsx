@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Alert, Image } from 'react-na
 import { useMutation } from '@tanstack/react-query';
 import { uploadReceipt } from '../api/endpoints';
 import { pickFromCamera, pickFromGallery } from '../utils/image';
+import { colors, radius, shadow } from '../theme';
 
 export default function UploadReceiptScreen({ route, navigation }: any) {
   const collectionId = route.params?.collectionId || '';
@@ -67,16 +68,16 @@ export default function UploadReceiptScreen({ route, navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f4f8', padding: 20 },
-  title: { fontSize: 20, fontWeight: 'bold', color: '#333', textAlign: 'center', marginBottom: 24 },
-  preview: { width: '100%', height: 300, borderRadius: 12, marginBottom: 16 },
-  placeholder: { width: '100%', height: 300, borderRadius: 12, backgroundColor: '#e0e0e0', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  placeholderText: { color: '#999', fontSize: 16 },
+  container: { flex: 1, backgroundColor: colors.background, padding: 20 },
+  title: { fontSize: 20, fontWeight: '900', color: colors.primary, textAlign: 'center', marginBottom: 24 },
+  preview: { width: '100%', height: 300, borderRadius: radius.md, marginBottom: 16 },
+  placeholder: { width: '100%', height: 300, borderRadius: radius.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, justifyContent: 'center', alignItems: 'center', marginBottom: 16, ...shadow },
+  placeholderText: { color: colors.muted, fontSize: 16 },
   buttons: { flexDirection: 'row', gap: 12, marginBottom: 24 },
-  cameraBtn: { flex: 1, backgroundColor: '#1a73e8', padding: 16, borderRadius: 12, alignItems: 'center' },
-  galleryBtn: { flex: 1, backgroundColor: '#34a853', padding: 16, borderRadius: 12, alignItems: 'center' },
-  btnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  uploadBtn: { backgroundColor: '#ea4335', padding: 18, borderRadius: 12, alignItems: 'center' },
+  cameraBtn: { flex: 1, backgroundColor: colors.primary, padding: 16, borderRadius: radius.md, alignItems: 'center' },
+  galleryBtn: { flex: 1, backgroundColor: colors.gold, padding: 16, borderRadius: radius.md, alignItems: 'center' },
+  btnText: { color: colors.surface, fontSize: 16, fontWeight: '800' },
+  uploadBtn: { backgroundColor: colors.gold, padding: 18, borderRadius: radius.md, alignItems: 'center', ...shadow },
   disabled: { opacity: 0.6 },
-  uploadText: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  uploadText: { color: colors.primary, fontSize: 18, fontWeight: '900' },
 });

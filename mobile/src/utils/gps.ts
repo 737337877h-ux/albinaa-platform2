@@ -3,6 +3,7 @@ import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import * as Notifications from 'expo-notifications';
 import { saveGpsPoint } from '../db/database';
+import { getNotificationSoundPreference } from './local-notifications';
 
 const GEOFENCE_TASK = 'alraqi-workplace-geofence';
 const TRACKING_KEY = 'alraqi.gps_enabled';
@@ -13,12 +14,13 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
   if (error || !data) return;
   const event = data as { eventType: Location.GeofencingEventType; region: Location.LocationRegion };
   if (event.eventType === Location.GeofencingEventType.Enter) {
+    const soundPreference = await getNotificationSoundPreference();
     await Notifications.scheduleNotificationAsync({
       content: {
         title: 'وصلت إلى موقع العمل',
         body: 'الخادم المحلي قريب. افتح تطبيق الراقي لمزامنة العمليات المحفوظة.',
         data: { route: 'Settings', action: 'sync' },
-        sound: true,
+        sound: soundPreference === 'news' ? 'news_flash.mp3' : soundPreference === 'default' ? 'default' : undefined,
       },
       trigger: null,
     });

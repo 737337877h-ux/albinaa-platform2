@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { orgDateOnly } from '../common/org-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateFollowupDto } from './dto/create-followup.dto';
 import { CreateContactEventDto } from './dto/create-contact-event.dto';
@@ -17,6 +18,15 @@ export class FollowupsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
   ) {}
+
+  private isPaidResult(name: string): boolean {
+    const normalized = name
+      .trim()
+      .toLowerCase()
+      .replace(/[\u064b-\u065f\u0670]/g, '')
+      .replace(/\s+/g, ' ');
+    return normalized === 'تم السداد' || normalized === 'سدد بالكامل';
+  }
 
   /** نطاق الرؤية: بلا customers.read_all → متابعات عملائه المسندين فقط. */
   private async scope(user: AuthUser): Promise<Prisma.FollowupWhereInput> {
@@ -63,22 +73,62 @@ export class FollowupsService {
     ]);
     if (!type) throw new BadRequestException('نوع المتابعة غير موجود أو معطل');
     if (!result) throw new BadRequestException('نتيجة المتابعة غير موجودة أو معطلة');
+    if (!this.isPaidResult(result.name) && !dto.nextFollowupDate) {
+      throw new BadRequestException('موعد المتابعة القادمة مطلوب لكل نتيجة عدا "تم السداد"');
+    }
 
-    const followup = await this.prisma.followup.create({
-      data: {
-        customerId: dto.customerId,
-        userId: actor.id,
-        typeId: dto.typeId,
-        resultId: dto.resultId,
-        followupAt: dto.followupAt ? new Date(dto.followupAt) : new Date(),
-        notes: dto.notes,
-        nextFollowupDate: dto.nextFollowupDate ? new Date(dto.nextFollowupDate) : null,
-        expectedAmount: dto.expectedAmount,
-        expectedCurrency: dto.expectedCurrency,
-        visitLat: dto.visitLat,
-        visitLng: dto.visitLng,
-      },
-      include: { type: true, result: true },
+    const ownCollector = await this.prisma.collector.findUnique({ where: { userId: actor.id } });
+    const currentAssignment = await this.prisma.customerAssignment.findFirst({
+      where: { customerId: dto.customerId, effectiveTo: null },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    const collectorId = ownCollector?.id ?? currentAssignment?.collectorId ?? null;
+    const today = new Date(`${orgDateOnly()}T00:00:00.000Z`);
+    const nextFollowupDate = dto.nextFollowupDate ? new Date(dto.nextFollowupDate) : null;
+
+    const followup = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.followup.create({
+        data: {
+          customerId: dto.customerId,
+          userId: actor.id,
+          typeId: dto.typeId,
+          resultId: dto.resultId,
+          followupAt: dto.followupAt ? new Date(dto.followupAt) : new Date(),
+          notes: dto.notes,
+          nextFollowupDate,
+          expectedAmount: dto.expectedAmount,
+          expectedCurrency: dto.expectedCurrency,
+          visitLat: dto.visitLat,
+          visitLng: dto.visitLng,
+        },
+        include: { type: true, result: true },
+      });
+      await tx.task.updateMany({
+        where: {
+          customerId: dto.customerId, status: 'open', dueDate: { lte: today },
+          ...(collectorId ? { assignedTo: collectorId } : {}),
+        },
+        data: { status: 'done' },
+      });
+      if (!this.isPaidResult(result.name) && nextFollowupDate) {
+        const duplicate = await tx.task.findFirst({
+          where: {
+            customerId: dto.customerId, assignedTo: collectorId, status: 'open',
+            taskType: 'followup_due', dueDate: nextFollowupDate,
+          },
+        });
+        if (!duplicate) {
+          await tx.task.create({
+            data: {
+              customerId: dto.customerId, assignedTo: collectorId, createdBy: actor.id,
+              taskType: 'followup_due', dueDate: nextFollowupDate,
+              priorityReason: `موعد المتابعة القادم — ${result.name}`,
+              expectedAmount: dto.expectedAmount, expectedCurrency: dto.expectedCurrency,
+            },
+          });
+        }
+      }
+      return created;
     });
 
     await this.audit.log({

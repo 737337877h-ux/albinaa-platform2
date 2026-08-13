@@ -6,9 +6,12 @@ import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { AssignmentsService } from './assignments.service';
 import { BulkAssignmentDto } from './dto/bulk-assignment.dto';
 import { CreateAssignmentDto } from './dto/create-assignment.dto';
+import { CreateAssignmentChangeRequestDto } from './dto/create-assignment-change-request.dto';
+import { ReviewAssignmentChangeRequestDto } from './dto/review-assignment-change-request.dto';
 import { SmartAssignmentDto } from './dto/smart-assignment.dto';
 
 @ApiTags('Assignments')
@@ -67,6 +70,38 @@ export class AssignmentsController {
   @ApiOperation({ summary: 'Bulk assign/transfer selected customers to one target collector' })
   bulkExecute(@CurrentUser() user: AuthUser, @Body() dto: BulkAssignmentDto, @Req() req: Request) {
     return this.assignments.executeBulkAssign(user, dto, req);
+  }
+
+  @Post('change-requests')
+  @Idempotent()
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'طلب مصحح لتغيير إسناد عميل، دون تنفيذ النقل قبل المراجعة' })
+  requestChange(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreateAssignmentChangeRequestDto,
+    @Req() req: Request,
+  ) {
+    return this.assignments.requestChange(user, dto, req);
+  }
+
+  @Get('change-requests')
+  @RequirePermissions('customers.transfer')
+  @ApiQuery({ name: 'status', required: false, enum: ['pending', 'approved', 'rejected'] })
+  @ApiOperation({ summary: 'طلبات تغيير الإسناد لمدير النظام ومدير المديونية والمحاسب المخوّل' })
+  listChangeRequests(@CurrentUser() user: AuthUser, @Query('status') status?: string) {
+    return this.assignments.listChangeRequests(user, status);
+  }
+
+  @Patch('change-requests/:id/review')
+  @RequirePermissions('customers.transfer')
+  @ApiOperation({ summary: 'اعتماد أو رفض طلب تغيير الإسناد مع توثيق القرار' })
+  reviewChangeRequest(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReviewAssignmentChangeRequestDto,
+    @Req() req: Request,
+  ) {
+    return this.assignments.reviewChangeRequest(user, id, dto, req);
   }
 
   @Post('smart/preview')

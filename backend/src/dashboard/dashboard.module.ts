@@ -7,5 +7,6 @@ import { AgingModule } from '../aging/aging.module';
   imports: [AgingModule],
   controllers: [DashboardController],
   providers: [DashboardService],
+  exports: [DashboardService],
 })
 export class DashboardModule {}

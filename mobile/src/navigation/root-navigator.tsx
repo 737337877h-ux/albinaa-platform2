@@ -3,6 +3,8 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import { View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../store/auth-context';
 import Loading from '../components/loading';
@@ -22,6 +24,10 @@ import UploadReceiptScreen from '../screens/upload-receipt';
 import NotificationsScreen from '../screens/notifications';
 import ProfileScreen from '../screens/profile';
 import SettingsScreen from '../screens/settings';
+import CustomerLocationPickerScreen from '../screens/customer-location-picker';
+import MessageTemplatesScreen from '../screens/message-templates';
+import PromisesListScreen from '../screens/promises-list';
+import ReservationsScreen from '../screens/reservations';
 import { colors } from '../theme';
 
 const Stack = createNativeStackNavigator();
@@ -35,20 +41,59 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
     Advances: focused ? 'wallet' : 'wallet-outline',
     Profile: focused ? 'person-circle' : 'person-circle-outline',
   };
-  return <Ionicons name={icons[name] || 'document-outline'} size={23} color={focused ? colors.gold : '#81908C'} />;
+  return (
+    <View style={{
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: focused ? colors.gold : 'transparent',
+      transform: [{ translateY: focused ? -7 : 0 }],
+      ...(focused ? {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 7,
+        elevation: 7,
+      } : {}),
+    }}>
+      <Ionicons
+        name={icons[name] || 'document-outline'}
+        size={focused ? 24 : 22}
+        color={focused ? colors.primary : colors.background}
+      />
+    </View>
+  );
 }
 
 function MainTabs() {
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, 10);
   return (
     <Tab.Navigator screenOptions={({ route }) => ({
       headerStyle: { backgroundColor: colors.primary },
       headerTintColor: '#fff',
-      headerTitleStyle: { fontWeight: '800' },
+      headerTitleStyle: { fontFamily: 'Tajawal', fontWeight: '800', fontSize: 20 },
       tabBarIcon: ({ focused }) => <TabIcon name={route.name} focused={focused} />,
-      tabBarActiveTintColor: colors.primary,
-      tabBarInactiveTintColor: '#81908C',
-      tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginBottom: 5 },
-      tabBarStyle: { backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: colors.line, height: 67, paddingTop: 7 },
+      tabBarActiveTintColor: colors.gold,
+      tabBarInactiveTintColor: colors.background,
+      tabBarHideOnKeyboard: true,
+      tabBarLabelStyle: { fontFamily: 'Tajawal', fontSize: 11, fontWeight: '800', marginTop: 1 },
+      tabBarItemStyle: { paddingTop: 6 },
+      tabBarStyle: {
+        backgroundColor: colors.primary,
+        borderTopWidth: 1,
+        borderTopColor: colors.goldDark,
+        height: 66 + bottomInset,
+        paddingTop: 7,
+        paddingBottom: bottomInset,
+        elevation: 18,
+        shadowColor: '#001F1A',
+        shadowOffset: { width: 0, height: -4 },
+        shadowOpacity: 0.18,
+        shadowRadius: 10,
+      },
     })}>
       <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ title: 'الرئيسية', headerShown: false }} />
       <Tab.Screen name="Tasks" component={TasksScreen} options={{ title: 'المهام' }} />
@@ -66,7 +111,7 @@ export default function RootNavigator() {
   return (
     <NavigationContainer>
       {isAuthenticated ? (
-        <Stack.Navigator screenOptions={{ headerStyle: { backgroundColor: colors.primary }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: '800' } }}>
+        <Stack.Navigator screenOptions={{ headerStyle: { backgroundColor: colors.primary }, headerTintColor: '#fff', headerTitleStyle: { fontFamily: 'Tajawal', fontWeight: '800', fontSize: 20 }, headerTitleAlign: 'center' }}>
           <Stack.Screen name="Main" component={MainTabs} options={{ headerShown: false }} />
           <Stack.Screen name="Customer360" component={Customer360Screen} options={{ title: 'تفاصيل الحساب' }} />
           <Stack.Screen name="NewFollowup" component={NewFollowupScreen} options={{ title: 'متابعة جديدة' }} />
@@ -77,6 +122,10 @@ export default function RootNavigator() {
           <Stack.Screen name="NewTask" component={NewTaskScreen} options={{ title: 'مهمة جديدة' }} />
           <Stack.Screen name="UploadReceipt" component={UploadReceiptScreen} options={{ title: 'رفع سند' }} />
           <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'الإعدادات' }} />
+          <Stack.Screen name="CustomerLocationPicker" component={CustomerLocationPickerScreen} options={{ title: 'تحديد موقع العميل' }} />
+          <Stack.Screen name="MessageTemplates" component={MessageTemplatesScreen} options={{ title: 'قوالب الرسائل' }} />
+          <Stack.Screen name="PromisesList" component={PromisesListScreen} options={{ title: 'وعود السداد' }} />
+          <Stack.Screen name="Reservations" component={ReservationsScreen} options={{ title: 'حجوزات البضاعة' }} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'الإشعارات' }} />
         </Stack.Navigator>
       ) : (

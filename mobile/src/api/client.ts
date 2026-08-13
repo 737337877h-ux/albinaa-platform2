@@ -11,10 +11,10 @@ let pendingRequests: Array<{
 
 async function buildClient(): Promise<AxiosInstance> {
   const baseURL = await getBaseUrl();
-  // React Native's legacy XHR adapter can report a generic Network Error for
-  // reachable clear-text LAN hosts. The fetch adapter uses the same native
-  // transport as the successful health probe and works consistently on Android.
-  const c = axios.create({ baseURL, timeout: 15_000, adapter: 'fetch' });
+  // Let Axios use React Native's native XHR transport. The explicit Axios fetch
+  // adapter fails before sending POST requests on some Android builds even when
+  // the same LAN host passes the global fetch health probe.
+  const c = axios.create({ baseURL, timeout: 15_000 });
 
   c.interceptors.request.use(async (config) => {
     const token = await getAccessToken();
@@ -41,7 +41,7 @@ async function buildClient(): Promise<AxiosInstance> {
       try {
         const refreshToken = await getRefreshToken();
         if (!refreshToken) throw new Error('No refresh token');
-        const { data } = await axios.post(`${baseURL}/auth/refresh`, { refreshToken }, { adapter: 'fetch' });
+        const { data } = await axios.post(`${baseURL}/auth/refresh`, { refreshToken });
         await setTokens(data.accessToken, data.refreshToken);
         pendingRequests.forEach((pending) => pending.resolve(data.accessToken));
         pendingRequests = [];
@@ -74,6 +74,12 @@ export async function getClient(): Promise<AxiosInstance> {
  * يجب استدعاؤها من شاشة الإعدادات بعد حفظ عنوان جديد.
  */
 export async function resetClient(): Promise<AxiosInstance> {
+  // A logout or server/account switch must not inherit a refresh operation or
+  // rejected request queue from the previous session.
+  const resetError = new Error('HTTP session reset');
+  pendingRequests.forEach((pending) => pending.reject(resetError));
+  pendingRequests = [];
+  isRefreshing = false;
   client = await buildClient();
   return client;
 }

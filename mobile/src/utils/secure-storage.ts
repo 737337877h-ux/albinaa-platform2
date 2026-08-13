@@ -5,6 +5,8 @@ const TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
 const CACHED_USER_KEY = 'albinaa.cached_user';
 const BIOMETRIC_KEY = 'albinaa.biometric_enabled';
+const REMEMBER_ME_KEY = 'albinaa.remember_me';
+const REMEMBERED_USERNAME_KEY = 'albinaa.remembered_username';
 
 export async function getAccessToken(): Promise<string | null> {
   return SecureStore.getItemAsync(TOKEN_KEY);
@@ -53,6 +55,23 @@ export async function isBiometricEnabled(): Promise<boolean> {
 
 export async function setBiometricEnabled(enabled: boolean): Promise<void> {
   await SecureStore.setItemAsync(BIOMETRIC_KEY, enabled ? 'true' : 'false');
+}
+
+export async function isRememberMeEnabled(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(REMEMBER_ME_KEY)) === 'true';
+}
+
+export async function getRememberedUsername(): Promise<string> {
+  return (await SecureStore.getItemAsync(REMEMBERED_USERNAME_KEY)) || '';
+}
+
+export async function setRememberMe(enabled: boolean, username?: string): Promise<void> {
+  await SecureStore.setItemAsync(REMEMBER_ME_KEY, enabled ? 'true' : 'false');
+  if (enabled && username?.trim()) {
+    await SecureStore.setItemAsync(REMEMBERED_USERNAME_KEY, username.trim());
+  } else if (!enabled) {
+    await SecureStore.deleteItemAsync(REMEMBERED_USERNAME_KEY);
+  }
 }
 
 export async function isAuthenticated(): Promise<boolean> {

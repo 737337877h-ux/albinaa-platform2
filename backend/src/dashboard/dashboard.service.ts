@@ -240,7 +240,7 @@ export class DashboardService {
   }
 
   /** صافي تغير المديونية بين آخر استيرادين متجانسين، مع تفاصيل الزيادات والانخفاضات. */
-  private async newDebtBetweenLastTwoImports(orgId: string) {
+  async newDebtBetweenLastTwoImports(orgId: string) {
     const recentImports = await this.prisma.importJob.findMany({
       where: {
         organizationId: orgId,

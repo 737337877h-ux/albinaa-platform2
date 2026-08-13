@@ -2,12 +2,30 @@ import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { I18nManager, Text, TextInput, View } from 'react-native';
 
 import { AuthProvider } from './src/store/auth-context';
 import { SyncProvider } from './src/store/sync-context';
 import RootNavigator from './src/navigation/root-navigator';
 import { initializeLocalNotifications } from './src/utils/local-notifications';
 import { restoreGpsTracking } from './src/utils/gps';
+import { colors } from './src/theme';
+
+I18nManager.allowRTL(true);
+I18nManager.forceRTL(true);
+I18nManager.swapLeftAndRightInRTL(true);
+
+const defaultTextStyle = { fontFamily: 'Tajawal', writingDirection: 'rtl' as const };
+const TextComponent = Text as typeof Text & { defaultProps?: Record<string, unknown> };
+const TextInputComponent = TextInput as typeof TextInput & { defaultProps?: Record<string, unknown> };
+TextComponent.defaultProps = {
+  ...(TextComponent.defaultProps || {}),
+  style: [defaultTextStyle, TextComponent.defaultProps?.style],
+};
+TextInputComponent.defaultProps = {
+  ...(TextInputComponent.defaultProps || {}),
+  style: [defaultTextStyle, TextInputComponent.defaultProps?.style],
+};
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,17 +54,15 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   render() {
     if (this.state.hasError) {
       return (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f4f8' }}>
-          <Text style={{ fontSize: 18, color: '#333', marginBottom: 16 }}>حدث خطأ غير متوقع</Text>
-          <Text style={{ fontSize: 14, color: '#666' }}>يرجى إعادة تشغيل التطبيق</Text>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
+          <Text style={{ fontSize: 18, fontWeight: '800', color: colors.primary, marginBottom: 16 }}>حدث خطأ غير متوقع</Text>
+          <Text style={{ fontSize: 14, color: colors.muted }}>يرجى إعادة تشغيل التطبيق</Text>
         </View>
       );
     }
     return this.props.children;
   }
 }
-
-import { View, Text } from 'react-native';
 
 export default function App() {
   React.useEffect(() => {

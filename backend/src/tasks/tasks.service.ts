@@ -210,7 +210,7 @@ export class TasksService {
     const stored = await this.prisma.task.findMany({
       where: {
         status: 'open',
-        dueDate: { gte: today, lt: tomorrow },
+        dueDate: { lt: tomorrow },
         customer: { organizationId: orgId },
         ...(collectorIdParam
           ? { assignedTo: collectorIdParam }

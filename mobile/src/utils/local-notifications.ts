@@ -1,8 +1,41 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import * as SecureStore from 'expo-secure-store';
 import { getAll, getMutationQueueStats } from '../db/database';
 
 const CHANNEL_ID = 'albinaa-reminders';
+const SOUND_KEY = 'albinaa.notification_sound';
+const ENABLED_KEY = 'albinaa.notifications_enabled';
+export type NotificationSoundPreference = 'news' | 'default' | 'silent';
+
+export async function getNotificationSoundPreference(): Promise<NotificationSoundPreference> {
+  const stored = await SecureStore.getItemAsync(SOUND_KEY);
+  return stored === 'default' || stored === 'silent' ? stored : 'news';
+}
+
+export async function setNotificationSoundPreference(value: NotificationSoundPreference): Promise<void> {
+  await SecureStore.setItemAsync(SOUND_KEY, value);
+  if (Platform.OS === 'android') await Notifications.deleteNotificationChannelAsync(CHANNEL_ID).catch(() => undefined);
+  await ensureNotificationChannel(value);
+}
+
+function soundValue(value: NotificationSoundPreference): string | undefined {
+  if (value === 'news') return 'news_flash.mp3';
+  if (value === 'default') return 'default';
+  return undefined;
+}
+
+async function ensureNotificationChannel(value?: NotificationSoundPreference): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  const preference = value || await getNotificationSoundPreference();
+  await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
+    name: 'تنبيهات التحصيل والمهام',
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#004D40',
+    sound: soundValue(preference),
+  });
+}
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -96,39 +129,41 @@ export function buildReminderPlan(
 }
 
 export async function initializeLocalNotifications(): Promise<boolean> {
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
-      name: 'تنبيهات التحصيل والمهام',
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#0A4A3C',
-    });
-  }
+  await ensureNotificationChannel();
   const current = await Notifications.getPermissionsAsync();
-  if (current.granted) return true;
+  if (current.granted) {
+    await SecureStore.setItemAsync(ENABLED_KEY, 'true');
+    return true;
+  }
   const requested = await Notifications.requestPermissionsAsync();
+  if (requested.granted) await SecureStore.setItemAsync(ENABLED_KEY, 'true');
   return requested.granted;
 }
 
 export async function areLocalNotificationsEnabled(): Promise<boolean> {
-  const permission = await Notifications.getPermissionsAsync();
-  return permission.granted;
+  const [permission, enabled] = await Promise.all([
+    Notifications.getPermissionsAsync(), SecureStore.getItemAsync(ENABLED_KEY),
+  ]);
+  return permission.granted && enabled !== 'false';
 }
 
 export async function disableLocalNotifications(): Promise<void> {
+  await SecureStore.setItemAsync(ENABLED_KEY, 'false');
   await Notifications.cancelAllScheduledNotificationsAsync();
   await Notifications.setBadgeCountAsync(0);
 }
 
 export async function rescheduleOfflineReminders(): Promise<number> {
-  const enabled = await initializeLocalNotifications();
+  const enabled = await areLocalNotificationsEnabled();
   if (!enabled) return 0;
+  await ensureNotificationChannel();
   const [tasks, promises, queue] = await Promise.all([
     getAll('tasks'),
     getAll('promises'),
     getMutationQueueStats(),
   ]);
   const plan = buildReminderPlan(tasks, promises, new Date(), queue.blocked);
+  const soundPreference = await getNotificationSoundPreference();
   await Notifications.cancelAllScheduledNotificationsAsync();
   for (const item of plan) {
     await Notifications.scheduleNotificationAsync({
@@ -137,7 +172,7 @@ export async function rescheduleOfflineReminders(): Promise<number> {
         title: item.title,
         body: item.body,
         data: item.data || {},
-        sound: 'default',
+        sound: soundValue(soundPreference),
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,

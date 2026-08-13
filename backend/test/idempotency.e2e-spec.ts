@@ -29,11 +29,25 @@ describe('Idempotency (e2e)', () => {
 
     const login = await request(app.getHttpServer()).post('/auth/login').send(ADMIN).expect(200);
     adminToken = login.body.accessToken;
+    const me = await request(app.getHttpServer())
+      .get('/auth/me').set('Authorization', `Bearer ${adminToken}`).expect(200);
 
     const customers = await request(app.getHttpServer())
       .get('/mobile/customers').set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
     customerId = customers.body?.[0]?.id;
+    if (!customerId) {
+      const customer = await prisma.customer.create({
+        data: {
+          organizationId: me.body.organizationId,
+          externalCustomerCode: `IDEM-${uniq}`,
+          name: 'عميل اختبار منع التكرار',
+          nameNormalized: 'عميل اختبار منع التكرار',
+          customerType: 'customer',
+        },
+      });
+      customerId = customer.id;
+    }
 
     const types = await request(app.getHttpServer())
       .get('/followups/types').set('Authorization', `Bearer ${adminToken}`).expect(200);
@@ -46,8 +60,6 @@ describe('Idempotency (e2e)', () => {
     methodId = methods.body[0]?.id || (await prisma.collectionMethod.findFirstOrThrow()).id;
 
     // Create a collector record for admin and assign customer
-    const me = await request(app.getHttpServer())
-      .get('/auth/me').set('Authorization', `Bearer ${adminToken}`).expect(200);
     let adminCollector = await prisma.collector.findUnique({ where: { userId: me.body.id } });
     if (!adminCollector) {
       adminCollector = await prisma.collector.create({ data: { userId: me.body.id, active: true } });
@@ -71,7 +83,10 @@ describe('Idempotency (e2e)', () => {
   });
 
   it('should create a followup with idempotency key and return same on retry', async () => {
-    const payload = { customerId, typeId, resultId, notes: 'Idempotency test' };
+    const payload = {
+      customerId, typeId, resultId, notes: 'Idempotency test',
+      nextFollowupDate: new Date(Date.now() + 2 * 86400000).toISOString(),
+    };
 
     const res1 = await request(app.getHttpServer())
       .post('/followups').set('Authorization', `Bearer ${adminToken}`)
@@ -141,7 +156,10 @@ describe('Idempotency (e2e)', () => {
   });
 
   it('should handle concurrent requests with same idempotency key gracefully', async () => {
-    const payload = { customerId, typeId, resultId, notes: 'Race condition test' };
+    const payload = {
+      customerId, typeId, resultId, notes: 'Race condition test',
+      nextFollowupDate: new Date(Date.now() + 3 * 86400000).toISOString(),
+    };
     const key = ID_KEY + '-race';
 
     const [r1, r2] = await Promise.all([
@@ -180,7 +198,10 @@ describe('Idempotency (e2e)', () => {
   it('should work without idempotency key (backward compatible)', async () => {
     await request(app.getHttpServer())
       .post('/followups').set('Authorization', `Bearer ${adminToken}`)
-      .send({ customerId, typeId, resultId, notes: 'No idempotency key' })
+      .send({
+        customerId, typeId, resultId, notes: 'No idempotency key',
+        nextFollowupDate: new Date(Date.now() + 4 * 86400000).toISOString(),
+      })
       .expect(201);
   });
 

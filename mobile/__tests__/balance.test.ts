@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from '@jest/globals';
 import { computeBalance, applyLedgerEntries, LedgerEntry } from '../src/utils/balance';
-import { totalsByCurrency } from '../src/utils/customer';
+import { largestDebtorBalance, totalDebtorBalance, totalsByCurrency } from '../src/utils/customer';
 
 describe('balance', () => {
   describe('portfolio totals', () => {
@@ -28,6 +28,12 @@ describe('balance', () => {
 
     it('can still calculate signed net balances for advance accounts', () => {
       expect(totalsByCurrency(accounts)).toEqual({ YER: 900, SAR: 40 });
+    });
+
+    it('excludes credit and settled balances from communication priority', () => {
+      expect(totalDebtorBalance([{ currency: 'YER', balance: -9_000 }, { currency: 'SAR', balance: 0 }])).toBe(0);
+      expect(totalDebtorBalance([{ currency: 'YER', balance: 1_250 }, { currency: 'SAR', balance: -5_000 }])).toBe(1_250);
+      expect(largestDebtorBalance([{ currency: 'SAR', balance: -5_000 }, { currency: 'YER', balance: 1_250 }])).toMatchObject({ currency: 'YER', balance: 1_250 });
     });
   });
 

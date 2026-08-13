@@ -77,6 +77,8 @@ export class NotificationsService {
       promise_due: ['وعد سداد مستحق', customerName ? `حان موعد وعد السداد للعميل ${customerName}` : 'لديك وعد سداد مستحق'],
       promise_overdue: ['وعد سداد متأخر', customerName ? `تأخر وعد السداد للعميل ${customerName}` : 'لديك وعد سداد متأخر'],
       customer_transferred: ['إسناد عميل جديد', customerName ? `تم إسناد ${customerName} إليك` : 'تم إسناد عميل جديد إليك'],
+      assignment_change_requested: ['طلب تغيير إسناد', customerName ? `طلب جديد لتغيير إسناد ${customerName}` : 'يوجد طلب تغيير إسناد يحتاج المراجعة'],
+      assignment_change_reviewed: ['نتيجة طلب تغيير الإسناد', customerName ? `تمت معالجة طلب إسناد ${customerName}` : 'تمت معالجة طلب تغيير الإسناد'],
       finance_alert: ['تنبيه مالي مهم', 'يوجد إجراء مالي يتطلب المراجعة'],
     };
     const [title, body] = messages[kind] ?? ['تنبيه من الراقي', 'لديك تحديث جديد في نظام التحصيل'];

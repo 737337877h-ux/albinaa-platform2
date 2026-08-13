@@ -6,7 +6,7 @@ import { fetchSync, uploadGps } from '../api/endpoints';
 import {
   applySyncSnapshot, blockMutation, getMeta, getMutationQueueStats,
   getPendingMutations, getUnsyncedGps, incrementRetry, markGpsSynced,
-  removeMutation, retryBlockedMutations,
+  removeMutation, retryBlockedMutations, saveGpsPoint,
 } from '../db/database';
 import { useAuth } from './auth-context';
 import { SYNC_INTERVAL_MS } from '../utils/constants';
@@ -58,6 +58,15 @@ function errorMessage(error: any): string {
   return serverMessage || error?.message || 'تعذر الاتصال بالخادم المحلي';
 }
 
+function sanitizeLegacyGpsPayload(endpoint: string, payload: any) {
+  if (endpoint !== '/collections' && endpoint !== '/payment-promises') return payload;
+  const clean = { ...payload };
+  delete clean.gpsLatitude;
+  delete clean.gpsLongitude;
+  delete clean.gpsAccuracy;
+  return clean;
+}
+
 export function SyncProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuth();
   const [status, setStatus] = useState<SyncStatus>(INITIAL_STATUS);
@@ -78,12 +87,22 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     const client = await getClient();
     for (const mutation of mutations) {
       try {
-        await client({
+        const rawPayload = JSON.parse(mutation.payload);
+        const response = await client({
           method: mutation.type.toLowerCase(),
           url: mutation.endpoint,
-          data: JSON.parse(mutation.payload),
+          data: sanitizeLegacyGpsPayload(mutation.endpoint, rawPayload),
           headers: { 'Idempotency-Key': mutation.operationId },
         });
+        if (Number.isFinite(rawPayload?.gpsLatitude) && Number.isFinite(rawPayload?.gpsLongitude)) {
+          await saveGpsPoint({
+            latitude: rawPayload.gpsLatitude,
+            longitude: rawPayload.gpsLongitude,
+            accuracy: rawPayload.gpsAccuracy,
+            entityTable: mutation.endpoint === '/collections' ? 'collections' : 'payment_promises',
+            entityId: response.data?.id,
+          });
+        }
         await removeMutation(mutation.id);
       } catch (error: any) {
         const message = errorMessage(error);
@@ -138,7 +157,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         followups: data.followups || [],
         promises: data.promises || [],
         collections: data.collections || [],
+        reservations: data.reservations || [],
         references: data.references || {},
+        newDebt: data.newDebt ?? null,
       }, data.syncToken);
       await rescheduleOfflineReminders();
       const queue = await getMutationQueueStats();

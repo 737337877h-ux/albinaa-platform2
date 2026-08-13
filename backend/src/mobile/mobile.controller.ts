@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Post, StreamableFile, UploadedFile, UseInterceptors,
+  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, StreamableFile, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -13,6 +13,7 @@ import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { GpsPointDto } from './dto/gps-point.dto';
 import { SyncRequestDto } from './dto/sync-request.dto';
 import { UploadReceiptDto } from './dto/upload-receipt.dto';
+import { UpdateCustomerFieldDto } from './dto/update-customer-field.dto';
 import { MobileService } from './mobile.service';
 
 const ALLOWED_MIME_TYPES = [
@@ -124,6 +125,17 @@ export class MobileController {
   @ApiOperation({ summary: 'قائمة العملاء المبسطة للجوال' })
   findCustomers(@CurrentUser() user: AuthUser) {
     return this.mobile.findCustomers(user);
+  }
+
+  @Idempotent()
+  @Patch('customers/:id/field-update')
+  @ApiOperation({ summary: 'تحديث هاتف أو موقع عميل مسند من تطبيق الجوال' })
+  updateCustomerField(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCustomerFieldDto,
+  ) {
+    return this.mobile.updateCustomerField(user, id, dto);
   }
 
   @Get('customers/:id')

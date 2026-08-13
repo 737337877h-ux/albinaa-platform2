@@ -10,15 +10,18 @@ import {
   setStoredBaseUrl, clearStoredBaseUrl, pingServer, isValidBaseUrl, ServerHealth,
 } from '../config/api';
 import { resetClient } from '../api/client';
-import { clearSession } from '../utils/secure-storage';
+import {
+  clearSession, getRememberedUsername, isRememberMeEnabled,
+} from '../utils/secure-storage';
 import { APP_VERSION } from '../utils/constants';
 import { colors, radius, shadow } from '../theme';
-import brandImage from '../../assets/alraqi-brand.png';
+import brandImage from '../../assets/alraqi-header-flat-approved.png';
 
 export default function LoginScreen() {
   const { login, unlockOffline, cachedUser } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -32,6 +35,9 @@ export default function LoginScreen() {
       setCurrentUrl(cur);
       setStoredUrl(await getStoredBaseUrl());
       setDefaultUrl(getDefaultBaseUrl());
+      const remembered = await getRememberedUsername();
+      setUsername(remembered);
+      setRememberMe(await isRememberMeEnabled());
     })();
   }, []);
 
@@ -42,7 +48,7 @@ export default function LoginScreen() {
     }
     setLoading(true);
     try {
-      await login(username.trim(), password);
+      await login(username.trim(), password, rememberMe);
     } catch (err: any) {
       const status = err.response?.status;
       let msg = 'فشل تسجيل الدخول';
@@ -64,8 +70,8 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.card}>
-        <Image source={brandImage} style={styles.brandImage} />
-        <Text style={styles.logo}>الراقي</Text>
+        <Image source={brandImage} style={styles.brandImage} resizeMode="contain" />
+        <Text style={styles.logo}>ALRAQi ERP</Text>
         <Text style={styles.subtitle}>إدارة المديونية والتحصيل</Text>
         <TextInput
           style={styles.input}
@@ -89,6 +95,22 @@ export default function LoginScreen() {
             <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={22} color={colors.muted} />
           </TouchableOpacity>
         </View>
+        <TouchableOpacity
+          style={styles.rememberRow}
+          onPress={() => setRememberMe((value) => !value)}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: rememberMe }}
+        >
+          <Ionicons
+            name={rememberMe ? 'checkbox' : 'square-outline'}
+            size={22}
+            color={rememberMe ? colors.gold : colors.muted}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rememberTitle}>تذكرني على هذا الجهاز</Text>
+            <Text style={styles.rememberHint}>يحفظ اسم المستخدم؛ ومع البصمة تُحفظ الجلسة المشفرة، ولا تُحفظ كلمة المرور.</Text>
+          </View>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
           <Text style={styles.buttonText}>{loading ? 'جارٍ تسجيل الدخول...' : 'تسجيل الدخول'}</Text>
         </TouchableOpacity>
@@ -286,7 +308,7 @@ function StatusRow({ label, value, health, loading }: { label: string; value: st
         <Text style={styles.statusValue} selectable numberOfLines={1} ellipsizeMode="middle">{value}</Text>
       </View>
       {loading ? (
-        <ActivityIndicator color="#1a73e8" size="small" />
+        <ActivityIndicator color={colors.gold} size="small" />
       ) : health ? (
         <View style={styles.healthBlock}>
           <Text style={[styles.statusBadge, health.ok ? styles.badgeOk : styles.badgeFail]}>
@@ -343,46 +365,49 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'center', backgroundColor: colors.background, padding: 20 },
   card: { backgroundColor: '#fff', borderRadius: radius.lg, padding: 24, borderWidth: 1, borderColor: colors.line, ...shadow },
-  brandImage: { width: 92, height: 92, borderRadius: 24, alignSelf: 'center', marginBottom: 12 },
-  logo: { fontSize: 29, fontWeight: '900', color: colors.primary, textAlign: 'center', marginBottom: 3 },
+  brandImage: { width: 190, height: 145, alignSelf: 'center', marginBottom: 8 },
+  logo: { fontSize: 22, fontWeight: '900', color: colors.primary, textAlign: 'center', marginBottom: 3 },
   subtitle: { fontSize: 13, color: colors.muted, textAlign: 'center', marginBottom: 28 },
   input: { borderWidth: 1, borderColor: colors.line, backgroundColor: '#FAFBFA', borderRadius: 14, padding: 14, fontSize: 16, marginBottom: 13, color: colors.ink, textAlign: 'right' },
   passwordWrap: { borderWidth: 1, borderColor: colors.line, backgroundColor: '#FAFBFA', borderRadius: 14, paddingHorizontal: 14, marginBottom: 13, flexDirection: 'row', alignItems: 'center', gap: 8 },
   passwordInput: { flex: 1, paddingVertical: 14, fontSize: 16, color: colors.ink, textAlign: 'right' },
-  button: { backgroundColor: colors.primary, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 5 },
-  buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  button: { backgroundColor: colors.gold, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 5, ...shadow },
+  buttonText: { color: colors.primary, fontSize: 18, fontWeight: '800' },
   serverLink: { marginTop: 16, padding: 10, alignItems: 'center' },
   serverLinkText: { color: colors.secondary, fontSize: 11 },
   offlineButton: { marginTop: 12, padding: 12, flexDirection: 'row-reverse', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: colors.primarySoft },
   offlineTitle: { color: colors.primary, fontSize: 13, fontWeight: '800', textAlign: 'right' },
   offlineHint: { color: colors.muted, fontSize: 10, marginTop: 2, textAlign: 'right' },
   forgot: { color: colors.secondary, fontSize: 12, fontWeight: '700', textAlign: 'center', marginTop: 14 },
+  rememberRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 9, marginBottom: 8, paddingHorizontal: 3 },
+  rememberTitle: { color: colors.primary, fontSize: 13, fontWeight: '800', textAlign: 'right' },
+  rememberHint: { color: colors.muted, fontSize: 10, marginTop: 2, textAlign: 'right' },
 
   // Modal
-  modalContainer: { flex: 1, backgroundColor: '#f0f4f8' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#1a73e8', paddingTop: 50 },
+  modalContainer: { flex: 1, backgroundColor: colors.background },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: colors.primary, paddingTop: 50 },
   modalTitle: { color: '#fff', fontSize: 18, fontWeight: '600' },
-  modalClose: { color: '#fff', fontSize: 22, fontWeight: '600', padding: 4 },
+  modalClose: { color: colors.gold, fontSize: 22, fontWeight: '800', padding: 4 },
 
   // Cards
-  cardTitle: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 10 },
-  label: { fontSize: 13, color: '#666', marginBottom: 6, marginTop: 8 },
+  cardTitle: { fontSize: 14, fontWeight: '700', color: colors.primary, marginBottom: 10 },
+  label: { fontSize: 13, color: colors.muted, marginBottom: 6, marginTop: 8, textAlign: 'right' },
   buttonRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
   btn: { flex: 1, padding: 12, borderRadius: 8, alignItems: 'center' },
-  btnTest: { backgroundColor: '#34a853' },
-  btnSave: { backgroundColor: '#1a73e8' },
-  btnReset: { backgroundColor: '#ea4335' },
-  btnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  note: { fontSize: 12, color: '#666', marginTop: 4, lineHeight: 18 },
+  btnTest: { backgroundColor: colors.primary },
+  btnSave: { backgroundColor: colors.gold },
+  btnReset: { backgroundColor: colors.danger },
+  btnText: { color: colors.surface, fontSize: 14, fontWeight: '700' },
+  note: { fontSize: 12, color: colors.muted, marginTop: 4, lineHeight: 18, textAlign: 'right' },
 
   // Status row
-  statusRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f0f4f8' },
+  statusRow: { flexDirection: 'row-reverse', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.line },
   statusLabel: { fontSize: 11, color: '#999', marginBottom: 2 },
   statusValue: { fontSize: 13, color: '#333', fontWeight: '500' },
   healthBlock: { alignItems: 'flex-end' },
   statusBadge: { fontSize: 11, fontWeight: '700', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, overflow: 'hidden' },
-  badgeOk: { color: '#fff', backgroundColor: '#34a853' },
-  badgeFail: { color: '#fff', backgroundColor: '#ea4335' },
+  badgeOk: { color: '#fff', backgroundColor: colors.success },
+  badgeFail: { color: '#fff', backgroundColor: colors.danger },
   pingText: { fontSize: 10, color: '#999', marginTop: 2 },
 
   // Info

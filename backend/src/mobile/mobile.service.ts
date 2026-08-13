@@ -3,13 +3,19 @@ import * as fs from 'fs';
 import { createReadStream } from 'fs';
 import { extname } from 'path';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { orgDateOnly } from '../common/org-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { GpsPointDto } from './dto/gps-point.dto';
 import { UploadReceiptDto } from './dto/upload-receipt.dto';
+import { UpdateCustomerFieldDto } from './dto/update-customer-field.dto';
+import { DashboardService } from '../dashboard/dashboard.service';
 
 @Injectable()
 export class MobileService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly dashboard?: DashboardService,
+  ) {}
 
   async uploadReceipt(user: AuthUser, file: Express.Multer.File, dto: UploadReceiptDto) {
     const collection = await this.prisma.collection.findFirst({
@@ -96,15 +102,14 @@ export class MobileService {
 
     const canReadAll = user.permissions.includes('customers.read_all');
 
-    const taskWhere: any = {
-      status: 'open',
-    };
+    const today = new Date(`${orgDateOnly()}T00:00:00.000Z`);
+    const taskWhere: any = { status: 'open', dueDate: { lte: today } };
     if (collectorId) taskWhere.assignedTo = collectorId;
     else if (!canReadAll) taskWhere.assignedTo = 'no-access';
 
     const [
       rawTasks, customers, rawFollowups, rawPromises, rawCollections,
-      currencies, collectionMethods, followupTypes, followupResults,
+      rawReservations, currencies, collectionMethods, followupTypes, followupResults, newDebt,
     ] = await Promise.all([
       collectorId || canReadAll
         ? this.prisma.task.findMany({
@@ -122,7 +127,9 @@ export class MobileService {
       this.prisma.followup.findMany({
         where: {
           deletedAt: null,
-          ...(collectorId && !canReadAll ? { userId: user.id } : { customer: { organizationId: user.organizationId } }),
+          ...(canReadAll
+            ? { customer: { organizationId: user.organizationId } }
+            : collectorId ? { userId: user.id } : { id: 'no-access' }),
         },
         include: {
           customer: { select: { id: true, name: true } },
@@ -135,9 +142,9 @@ export class MobileService {
 
       this.prisma.paymentPromise.findMany({
         where: {
-          ...(collectorId && !canReadAll
-            ? { collectorId }
-            : { customer: { organizationId: user.organizationId } }),
+          ...(canReadAll
+            ? { customer: { organizationId: user.organizationId } }
+            : collectorId ? { collectorId } : { id: 'no-access' }),
         },
         include: {
           customer: { select: { id: true, name: true } },
@@ -148,15 +155,29 @@ export class MobileService {
 
       this.prisma.collection.findMany({
         where: {
-          ...(collectorId && !canReadAll
-            ? { collectorId }
-            : { customer: { organizationId: user.organizationId } }),
+          ...(canReadAll
+            ? { customer: { organizationId: user.organizationId } }
+            : collectorId ? { collectorId } : { id: 'no-access' }),
         },
         include: {
           customer: { select: { id: true, name: true } },
           method: { select: { name: true } },
         },
         orderBy: { collectedAt: 'desc' },
+        take: 500,
+      }),
+      this.prisma.reservation.findMany({
+        where: {
+          customer: {
+            organizationId: user.organizationId,
+            status: 'active',
+            ...(canReadAll
+              ? {}
+              : collectorId ? { assignments: { some: { collectorId, effectiveTo: null } } } : { id: 'no-access' }),
+          },
+        },
+        include: { customer: { select: { id: true, name: true } }, measureUnit: { select: { nameAr: true, weightKg: true } } },
+        orderBy: { reservedAt: 'desc' },
         take: 500,
       }),
       this.prisma.currency.findMany({
@@ -179,6 +200,7 @@ export class MobileService {
         select: { id: true, name: true },
         orderBy: { name: 'asc' },
       }),
+      this.dashboard?.newDebtBetweenLastTwoImports(user.organizationId) ?? Promise.resolve(null),
     ]);
 
     const syncToken = new Date().toISOString();
@@ -194,6 +216,7 @@ export class MobileService {
         followupTypes,
         followupResults,
       },
+      newDebt,
       tasks: rawTasks.map((t) => ({
         id: t.id,
         customerId: t.customerId,
@@ -236,6 +259,20 @@ export class MobileService {
         notes: c.notes,
         collectedAt: c.collectedAt,
       })),
+      reservations: rawReservations.map((r) => {
+        const quantity = Number(r.quantity ?? r.remainingQty ?? 0);
+        const remainingQty = Number(r.remainingQty ?? r.quantity ?? 0);
+        const totalAmount = Number(r.totalAmount ?? r.creditAmount ?? 0);
+        const weightKg = r.measureUnit?.weightKg == null ? null : Number(r.measureUnit.weightKg);
+        const totalTons = weightKg == null ? null : remainingQty * weightKg / 1000;
+        return {
+          id: r.id, customerId: r.customerId, customerName: r.customer?.name ?? null,
+          itemName: r.itemName, quantity, remainingQty, unitName: r.measureUnit?.nameAr || r.unit,
+          totalAmount, currencyCode: r.currencyCode, totalTons,
+          averageTonPrice: totalTons && totalTons > 0 ? totalAmount / totalTons : null,
+          reservedAt: r.reservedAt, expiresAt: r.expiresAt, status: r.status,
+        };
+      }),
     };
   }
 
@@ -253,6 +290,25 @@ export class MobileService {
     });
   }
 
+  async updateCustomerField(user: AuthUser, id: string, dto: UpdateCustomerFieldDto) {
+    const where: any = { id, organizationId: user.organizationId, status: 'active' };
+    if (!user.permissions.includes('customers.read_all')) {
+      const collector = await this.prisma.collector.findUnique({ where: { userId: user.id } });
+      if (!collector) throw new NotFoundException('العميل غير موجود أو غير مسند إليك');
+      where.assignments = { some: { collectorId: collector.id, effectiveTo: null } };
+    }
+    const customer = await this.prisma.customer.findFirst({ where, select: { id: true } });
+    if (!customer) throw new NotFoundException('العميل غير موجود أو غير مسند إليك');
+
+    const data: Record<string, string | number> = {};
+    for (const key of ['phonePrimary', 'phoneSecondary', 'whatsapp', 'geoLat', 'geoLng'] as const) {
+      if (dto[key] !== undefined) data[key] = dto[key] as string | number;
+    }
+    if (Object.keys(data).length === 0) return { id, updated: false };
+    await this.prisma.customer.update({ where: { id }, data });
+    return { id, updated: true };
+  }
+
   private async findActiveCustomerSnapshot(where: any) {
     const customers = await this.prisma.customer.findMany({
       where: { ...where, status: 'active' },
@@ -263,6 +319,12 @@ export class MobileService {
             accountingBalance: true,
             lastImportJob: { select: { importedAt: true } },
           },
+        },
+        assignments: {
+          where: { effectiveTo: null },
+          take: 1,
+          orderBy: { effectiveFrom: 'desc' },
+          include: { collector: { include: { user: { select: { fullName: true } } } } },
         },
       },
       orderBy: { name: 'asc' },
@@ -311,6 +373,7 @@ export class MobileService {
       address: c.address,
       geoLat: c.geoLat == null ? null : Number(c.geoLat),
       geoLng: c.geoLng == null ? null : Number(c.geoLng),
+      assignedCollectorName: c.assignments?.[0]?.collector?.user?.fullName ?? null,
       balances: c.balances.map((b: any) => ({
         currency: b.currencyCode,
         balance: Number(b.accountingBalance) + (ledgerDeltas.get(`${c.id}:${b.currencyCode}`) ?? 0),

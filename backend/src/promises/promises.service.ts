@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { orgDateOnly } from '../common/org-time';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RiskRefreshService } from '../risk/risk-refresh.service';
@@ -133,6 +134,11 @@ export class PromisesService {
 
     // البند ثالثًا: الوعد + مهمته في Transaction واحدة — لا وعد بلا مهمة أبدًا
     const promise = await this.prisma.$transaction(async (tx) => {
+      const today = new Date(`${orgDateOnly()}T00:00:00.000Z`);
+      await tx.task.updateMany({
+        where: { customerId: dto.customerId, assignedTo: collectorId, status: 'open', dueDate: { lte: today } },
+        data: { status: 'done' },
+      });
       const created = await tx.paymentPromise.create({
         data: {
           customerId: dto.customerId,

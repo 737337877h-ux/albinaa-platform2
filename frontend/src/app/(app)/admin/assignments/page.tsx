@@ -48,6 +48,14 @@ interface SmartPlan {
   distribution: { collectorId: string; collectorName: string; currentCustomers: number; currentTasks: number; planned: number; projectedCustomers: number }[];
 }
 
+interface AssignmentChangeRequest {
+  id: string; reason: string; status: string; createdAt: string;
+  customer: { id: string; name: string; externalCustomerCode: string | null };
+  requester: { id: string; fullName: string };
+  currentCollector: { id: string; user: { fullName: string } } | null;
+  requestedCollector: { id: string; user: { fullName: string } } | null;
+}
+
 function useDebounced<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -77,6 +85,7 @@ export default function BulkAssignmentPage() {
   const [reason, setReason] = useState('');
   const [preview, setPreview] = useState<BulkResult | null>(null);
   const [smartPreview, setSmartPreview] = useState<SmartPlan | null>(null);
+  const [requestTargets, setRequestTargets] = useState<Record<string, string>>({});
 
   const customersQuery = useQuery<CustomersResponse>({
     queryKey: ['bulk-assign-customers', debouncedSearch, region, collectorId, balanceState, currency, status, page],
@@ -129,6 +138,26 @@ export default function BulkAssignmentPage() {
       setPreview(data);
       setSelected(new Set());
       toast('تم تنفيذ الإسناد الجماعي بنجاح', 'ok');
+      qc.invalidateQueries({ queryKey: ['bulk-assign-customers'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
+  const changeRequestsQuery = useQuery<AssignmentChangeRequest[]>({
+    queryKey: ['assignment-change-requests', 'pending'],
+    queryFn: () => api<AssignmentChangeRequest[]>('/assignments/change-requests?status=pending'),
+    enabled: canTransfer,
+  });
+
+  const reviewRequestMut = useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) =>
+      api(`/assignments/change-requests/${id}/review`, {
+        method: 'PATCH',
+        body: JSON.stringify({ decision, collectorId: decision === 'approved' ? requestTargets[id] || undefined : undefined }),
+      }),
+    onSuccess: () => {
+      toast('تمت معالجة طلب تغيير الإسناد', 'ok');
+      qc.invalidateQueries({ queryKey: ['assignment-change-requests'] });
       qc.invalidateQueries({ queryKey: ['bulk-assign-customers'] });
     },
     onError: (err: Error) => toast(err.message, 'err'),
@@ -192,6 +221,54 @@ export default function BulkAssignmentPage() {
   return (
     <div className="space-y-5">
       <PageHeader title="الإسناد الجماعي" />
+
+      <Card>
+        <div className="border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+          <h2 className="font-display text-base font-semibold">طلبات تغيير الإسناد</h2>
+          <p className="mt-1 text-xs text-concrete-500">طلبات المحصلين المعلقة؛ لا يتغير الإسناد إلا بعد الاعتماد.</p>
+        </div>
+        <DataState
+          isLoading={changeRequestsQuery.isLoading}
+          isError={changeRequestsQuery.isError}
+          error={changeRequestsQuery.error}
+          onRetry={() => changeRequestsQuery.refetch()}
+          isEmpty={!changeRequestsQuery.data?.length}
+          emptyTitle="لا توجد طلبات تغيير إسناد معلقة"
+          skeletonClassName="h-28"
+        >
+          <div className="divide-y divide-concrete-100 dark:divide-white/10">
+            {(changeRequestsQuery.data ?? []).map((request) => {
+              const selectedCollector = requestTargets[request.id] ?? request.requestedCollector?.id ?? '';
+              return (
+                <div key={request.id} className="grid gap-3 p-4 lg:grid-cols-[1fr_240px_auto] lg:items-center">
+                  <div>
+                    <p className="font-semibold">{request.customer.name}</p>
+                    <p className="mt-1 text-xs text-concrete-500">
+                      {request.customer.externalCustomerCode || 'بلا كود'} • مقدم الطلب: {request.requester.fullName}
+                    </p>
+                    <p className="mt-2 text-sm text-concrete-700 dark:text-concrete-300">السبب: {request.reason}</p>
+                    <p className="mt-1 text-xs text-concrete-500">المحصل الحالي: {request.currentCollector?.user.fullName ?? 'غير مسند'}</p>
+                  </div>
+                  <Select
+                    value={selectedCollector}
+                    onChange={(e) => setRequestTargets((prev) => ({ ...prev, [request.id]: e.target.value }))}
+                    aria-label={`المحصل الجديد للعميل ${request.customer.name}`}
+                  >
+                    <option value="">اختر المحصل الجديد...</option>
+                    {(collectorsQuery.data ?? []).map((collector) => (
+                      <option key={collector.id} value={collector.id}>{collector.name}</option>
+                    ))}
+                  </Select>
+                  <div className="flex gap-2">
+                    <Button disabled={!selectedCollector} loading={reviewRequestMut.isPending} onClick={() => reviewRequestMut.mutate({ id: request.id, decision: 'approved' })}>اعتماد</Button>
+                    <Button variant="secondary" disabled={reviewRequestMut.isPending} onClick={() => reviewRequestMut.mutate({ id: request.id, decision: 'rejected' })}>رفض</Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </DataState>
+      </Card>
 
       <Card>
         <div className="border-b border-concrete-100 px-4 py-3 dark:border-white/10">

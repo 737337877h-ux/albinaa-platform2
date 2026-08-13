@@ -6,21 +6,23 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../store/auth-context';
 import { useSync } from '../store/sync-context';
-import { getAll } from '../db/database';
+import { getAll, getMeta } from '../db/database';
 import { colors, radius, shadow } from '../theme';
-import { formatBalance, parseBalances, totalAbsoluteBalance, totalsByCurrency } from '../utils/customer';
-import brandImage from '../../assets/alraqi-brand.png';
+import { formatBalance, largestDebtorBalance, totalDebtorBalance, totalsByCurrency } from '../utils/customer';
+import brandImage from '../../assets/alraqi-header-flat-approved.png';
 
 export default function DashboardScreen({ navigation }: any) {
   const { user } = useAuth();
   const { status, triggerSync } = useSync();
-  const [data, setData] = React.useState<{ tasks: any[]; collections: any[]; customers: any[]; followups: any[] }>({ tasks: [], collections: [], customers: [], followups: [] });
+  const [data, setData] = React.useState<{ tasks: any[]; collections: any[]; customers: any[]; followups: any[]; newDebt: any | null }>({ tasks: [], collections: [], customers: [], followups: [], newDebt: null });
 
   const load = React.useCallback(async () => {
-    const [tasks, collections, customers, followups] = await Promise.all([
-      getAll('tasks'), getAll('collections'), getAll('customers'), getAll('followups'),
+    const [tasks, collections, customers, followups, newDebtJson] = await Promise.all([
+      getAll('tasks'), getAll('collections'), getAll('customers'), getAll('followups'), getMeta('newDebt'),
     ]);
-    setData({ tasks, collections, customers, followups });
+    let newDebt = null;
+    try { newDebt = newDebtJson ? JSON.parse(newDebtJson) : null; } catch { /* keep unavailable */ }
+    setData({ tasks, collections, customers, followups, newDebt });
   }, []);
 
   useFocusEffect(React.useCallback(() => { load(); }, [load]));
@@ -35,8 +37,8 @@ export default function DashboardScreen({ navigation }: any) {
   const customerTotals = totalsByCurrency(customerAccounts, true);
   const advanceTotals = totalsByCurrency(advances);
   const priorities = [...customerAccounts, ...advances]
-    .filter((account) => totalAbsoluteBalance(account.balances) > 0)
-    .sort((a, b) => totalAbsoluteBalance(b.balances) - totalAbsoluteBalance(a.balances)).slice(0, 5);
+    .filter((account) => totalDebtorBalance(account.balances) > 0.001)
+    .sort((a, b) => totalDebtorBalance(b.balances) - totalDebtorBalance(a.balances)).slice(0, 5);
 
   return (
     <ScrollView
@@ -49,7 +51,7 @@ export default function DashboardScreen({ navigation }: any) {
           <TouchableOpacity style={styles.iconButton} onPress={() => navigation.navigate('Notifications')}>
             <Ionicons name="notifications-outline" size={22} color="#fff" />
           </TouchableOpacity>
-          <Image source={brandImage} style={styles.logo} />
+          <Image source={brandImage} style={styles.logo} resizeMode="contain" />
           <TouchableOpacity style={styles.iconButton} onPress={() => navigation.navigate('Settings')}>
             <Ionicons name="settings-outline" size={22} color="#fff" />
           </TouchableOpacity>
@@ -76,7 +78,10 @@ export default function DashboardScreen({ navigation }: any) {
         <BalanceSummary title="السلف" count={advances.length} totals={advanceTotals} icon="wallet-outline" onPress={() => navigation.navigate('Advances')} />
       </View>
 
+      <NewDebtCard value={data.newDebt} />
+
       <SectionHeader title="أولوية التواصل" subtitle="أعلى الحسابات رصيداً في نطاق إسنادك" />
+      <View style={styles.debtorRule}><Ionicons name="filter-circle" size={16} color={colors.primary} /><Text style={styles.debtorRuleText}>الحسابات المدينة فقط · الصافي والدائن مستبعدان</Text></View>
       <View style={styles.priorityCard}>
         {priorities.length === 0 ? <Text style={styles.empty}>لا توجد حسابات مدينة حالياً</Text> : priorities.map((account, index) => (
           <TouchableOpacity
@@ -88,6 +93,9 @@ export default function DashboardScreen({ navigation }: any) {
             <View style={styles.priorityMain}>
               <Text style={styles.priorityName} numberOfLines={1}>{account.fullName}</Text>
               <Text style={styles.priorityMeta}>{account.customerType === 'advance' ? 'سلفة' : 'عميل'} · #{account.accountNumber || account.externalCustomerCode || '—'}</Text>
+              {!!user?.permissions?.includes('customers.read_all') && (
+                <Text style={styles.priorityCollector}>المحصّل: {account.assignedCollectorName || 'غير مسند'}</Text>
+              )}
             </View>
             <BalanceCompact balances={account.balances} />
           </TouchableOpacity>
@@ -126,9 +134,31 @@ function BalanceSummary({ title, count, totals, icon, onPress }: any) {
 }
 
 function BalanceCompact({ balances }: { balances: unknown }) {
-  const value = parseBalances(balances).sort((a, b) => Math.abs(Number(b.balance || 0)) - Math.abs(Number(a.balance || 0)))[0];
+  const value = largestDebtorBalance(balances);
   if (!value) return <Text style={styles.net}>صافي</Text>;
   return <View style={styles.compact}><Text style={styles.compactAmount}>{formatBalance(Number(value.balance ?? value.accountingBalance ?? 0))}</Text><Text style={styles.compactCurrency}>{value.currency || value.currencyCode}</Text></View>;
+}
+
+function NewDebtCard({ value }: { value: any | null }) {
+  const entries = Object.entries(value?.perCurrency || {}) as [string, any][];
+  return (
+    <View style={styles.debtChangeCard}>
+      <View style={styles.debtChangeTitleRow}>
+        <Ionicons name="swap-vertical-outline" size={20} color={colors.gold} />
+        <View style={{ flex: 1 }}><Text style={styles.debtChangeTitle}>مديونية جديدة بين آخر استيرادين</Text><Text style={styles.debtChangeSubtitle}>المدين والدائن والزيادة والانخفاض لكل عملة</Text></View>
+      </View>
+      {!entries.length && <Text style={styles.debtEmpty}>لا تتوفر مقارنة حتى تكتمل عمليتا استيراد متجانستان.</Text>}
+      {entries.map(([currency, row]) => {
+        const net = Number(row.netChange ?? row.amount ?? 0);
+        return (
+          <View key={currency} style={styles.debtCurrencyRow}>
+            <View style={styles.debtNet}><Text style={[styles.debtNetValue, net < 0 && styles.debtDecrease]}>{formatBalance(Math.abs(net))}</Text><Text style={styles.debtCurrency}>{currency} · {net >= 0 ? 'مدين' : 'دائن'}</Text></View>
+            <View style={styles.debtDetail}><Text style={styles.debtIncrease}>↑ {formatBalance(Number(row.positiveIncreases || 0))}</Text><Text style={styles.debtDecrease}>↓ {formatBalance(Number(row.decreases || 0))}</Text><Text style={styles.debtAffected}>{Number(row.affectedCount || 0).toLocaleString('en-US')} حساب</Text></View>
+          </View>
+        );
+      })}
+    </View>
+  );
 }
 
 function localDateKey(value: Date): string {
@@ -139,15 +169,17 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background }, content: { paddingBottom: 100 },
   header: { backgroundColor: colors.primary, paddingHorizontal: 20, paddingTop: 16, paddingBottom: 25, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 },
   headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  logo: { width: 55, height: 55, borderRadius: 15 }, iconButton: { width: 42, height: 42, borderRadius: 14, backgroundColor: 'rgba(255,255,255,.08)', alignItems: 'center', justifyContent: 'center' },
+  logo: { width: 115, height: 62 }, iconButton: { width: 42, height: 42, borderRadius: 14, backgroundColor: 'rgba(255,255,255,.08)', alignItems: 'center', justifyContent: 'center' },
   greeting: { color: '#fff', fontSize: 24, fontWeight: '900', textAlign: 'right', marginTop: 15 }, tagline: { color: '#B9CCC7', fontSize: 13, textAlign: 'right', marginTop: 4 },
   syncRow: { alignSelf: 'flex-end', marginTop: 16, flexDirection: 'row-reverse', gap: 6, alignItems: 'center', paddingVertical: 7, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,.08)', borderRadius: radius.pill },
   syncText: { color: '#E4EEEB', fontSize: 11, fontWeight: '700' }, queueBadge: { color: colors.primary, backgroundColor: colors.gold, borderRadius: 9, minWidth: 18, textAlign: 'center', fontWeight: '900', fontSize: 10 },
   quickGrid: { flexDirection: 'row-reverse', flexWrap: 'wrap', padding: 14, gap: 9 }, metric: { width: '48.5%', backgroundColor: '#fff', padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, ...shadow },
   metricIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-end' }, metricValue: { fontSize: 27, fontWeight: '900', color: colors.ink, marginTop: 6, textAlign: 'right' }, metricLabel: { fontSize: 12, color: colors.muted, textAlign: 'right', marginTop: 2 },
   sectionHeader: { paddingHorizontal: 17, marginTop: 11, marginBottom: 9 }, sectionTitle: { color: colors.ink, fontSize: 18, fontWeight: '900', textAlign: 'right' }, sectionSubtitle: { color: colors.muted, fontSize: 11, marginTop: 3, textAlign: 'right' },
+  debtChangeCard: { marginHorizontal: 14, marginTop: 14, backgroundColor: '#fff', borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, padding: 14, ...shadow }, debtChangeTitleRow: { flexDirection: 'row-reverse', gap: 8, alignItems: 'center', marginBottom: 8 }, debtChangeTitle: { color: colors.ink, fontSize: 15, fontWeight: '900', textAlign: 'right' }, debtChangeSubtitle: { color: colors.muted, fontSize: 10, textAlign: 'right', marginTop: 2 }, debtEmpty: { color: colors.muted, backgroundColor: colors.background, borderRadius: radius.sm, padding: 10, fontSize: 11, textAlign: 'right' }, debtCurrencyRow: { paddingVertical: 9, borderTopWidth: 1, borderTopColor: colors.line, flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center', gap: 8 }, debtNet: { alignItems: 'flex-end' }, debtNetValue: { color: colors.danger, fontSize: 17, fontWeight: '900' }, debtCurrency: { color: colors.muted, fontSize: 10, fontWeight: '800' }, debtDetail: { alignItems: 'flex-start', gap: 2 }, debtIncrease: { color: colors.danger, fontSize: 11, fontWeight: '800' }, debtDecrease: { color: colors.success, fontSize: 11, fontWeight: '800' }, debtAffected: { color: colors.muted, fontSize: 9 },
+  debtorRule: { alignSelf: 'flex-end', marginHorizontal: 14, marginBottom: 7, paddingVertical: 6, paddingHorizontal: 9, backgroundColor: colors.primarySoft, borderRadius: radius.pill, flexDirection: 'row-reverse', alignItems: 'center', gap: 4 }, debtorRuleText: { color: colors.primary, fontSize: 10, fontWeight: '800' },
   portfolioRow: { flexDirection: 'row-reverse', paddingHorizontal: 14, gap: 9 }, balanceSummary: { flex: 1, minHeight: 150, backgroundColor: '#fff', borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, padding: 14 },
-  summaryTitleRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 7 }, summaryIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' }, summaryTitle: { color: colors.ink, fontWeight: '900', fontSize: 15 }, summaryCount: { color: colors.muted, fontSize: 10, textAlign: 'right', marginVertical: 8 },
+  summaryTitleRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 7 }, summaryIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.gold, alignItems: 'center', justifyContent: 'center' }, summaryTitle: { color: colors.ink, fontWeight: '900', fontSize: 15 }, summaryCount: { color: colors.muted, fontSize: 10, textAlign: 'right', marginVertical: 8 },
   summaryBalance: { flexDirection: 'row', alignItems: 'baseline', gap: 4, justifyContent: 'flex-start', marginTop: 3 }, summaryAmount: { color: colors.danger, fontSize: 15, fontWeight: '900' }, summaryCurrency: { color: colors.muted, fontSize: 9, fontWeight: '800' }, emptyMini: { color: colors.success, fontSize: 12, fontWeight: '800' },
-  priorityCard: { marginHorizontal: 14, backgroundColor: '#fff', borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, overflow: 'hidden' }, priorityRow: { minHeight: 69, padding: 12, flexDirection: 'row-reverse', alignItems: 'center', gap: 10 }, priorityBorder: { borderTopWidth: 1, borderTopColor: colors.line }, rank: { width: 30, height: 30, borderRadius: 10, backgroundColor: colors.goldSoft, alignItems: 'center', justifyContent: 'center' }, rankText: { color: colors.warning, fontWeight: '900' }, priorityMain: { flex: 1 }, priorityName: { color: colors.ink, fontSize: 13, fontWeight: '800', textAlign: 'right' }, priorityMeta: { color: colors.muted, fontSize: 10, marginTop: 3, textAlign: 'right' }, compact: { alignItems: 'flex-start' }, compactAmount: { color: colors.danger, fontWeight: '900', fontSize: 13 }, compactCurrency: { color: colors.muted, fontSize: 9 }, net: { color: colors.success, fontWeight: '800', fontSize: 11 }, empty: { color: colors.muted, padding: 25, textAlign: 'center' },
+  priorityCard: { marginHorizontal: 14, backgroundColor: '#fff', borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, overflow: 'hidden' }, priorityRow: { minHeight: 69, padding: 12, flexDirection: 'row-reverse', alignItems: 'center', gap: 10 }, priorityBorder: { borderTopWidth: 1, borderTopColor: colors.line }, rank: { width: 30, height: 30, borderRadius: 10, backgroundColor: colors.goldSoft, alignItems: 'center', justifyContent: 'center' }, rankText: { color: colors.warning, fontWeight: '900' }, priorityMain: { flex: 1 }, priorityName: { color: colors.ink, fontSize: 13, fontWeight: '800', textAlign: 'right' }, priorityMeta: { color: colors.muted, fontSize: 10, marginTop: 3, textAlign: 'right' }, priorityCollector: { color: colors.secondary, fontSize: 10, fontWeight: '800', marginTop: 2, textAlign: 'right' }, compact: { alignItems: 'flex-start' }, compactAmount: { color: colors.danger, fontWeight: '900', fontSize: 13 }, compactCurrency: { color: colors.muted, fontSize: 9 }, net: { color: colors.success, fontWeight: '800', fontSize: 11 }, empty: { color: colors.muted, padding: 25, textAlign: 'center' },
 });

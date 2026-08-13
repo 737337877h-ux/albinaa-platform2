@@ -1,19 +1,43 @@
 import * as SQLite from 'expo-sqlite';
 
 let db: SQLite.SQLiteDatabase;
+let dbOpening: Promise<SQLite.SQLiteDatabase> | null = null;
+let ownerTransition: Promise<void> | null = null;
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 9;
 
-const BUSINESS_TABLES = ['customers', 'tasks', 'followups', 'promises', 'collections'] as const;
+const BUSINESS_TABLES = ['customers', 'tasks', 'followups', 'promises', 'collections', 'reservations'] as const;
 type BusinessTable = typeof BUSINESS_TABLES[number];
+
+async function hasColumn(
+  d: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+): Promise<boolean> {
+  const columns = await d.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+  return columns.some((item) => item.name === column);
+}
+
+async function addColumnIfMissing(
+  d: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  definition: string,
+): Promise<void> {
+  if (!(await hasColumn(d, table, column))) {
+    await d.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
 
 const TABLE_COLUMNS: Record<BusinessTable, string[]> = {
   customers: ['id', 'fullName', 'accountNumber', 'externalCustomerCode', 'customerType',
-    'phonePrimary', 'phoneSecondary', 'whatsapp', 'address', 'geoLat', 'geoLng', 'balances'],
+    'phonePrimary', 'phoneSecondary', 'whatsapp', 'address', 'geoLat', 'geoLng',
+    'assignedCollectorName', 'balances'],
   tasks: ['id', 'customerId', 'customerName', 'title', 'dueDate', 'priority', 'status'],
   followups: ['id', 'customerId', 'customerName', 'typeName', 'resultName', 'notes', 'followupAt'],
   promises: ['id', 'customerId', 'customerName', 'expectedAmount', 'currencyCode', 'dueDate', 'status', 'notes'],
   collections: ['id', 'customerId', 'customerName', 'amount', 'currencyCode', 'methodName', 'notes', 'collectedAt'],
+  reservations: ['id', 'customerId', 'customerName', 'itemName', 'quantity', 'remainingQty', 'unitName', 'totalAmount', 'currencyCode', 'totalTons', 'averageTonPrice', 'reservedAt', 'expiresAt', 'status'],
 };
 
 const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => Promise<void>> = {
@@ -74,11 +98,58 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => Promise<void>> =
       PRAGMA user_version = 6;
     `);
   },
+  7: async (d) => {
+    await d.execAsync(`
+      CREATE TABLE IF NOT EXISTS reservations (
+        id TEXT PRIMARY KEY,
+        customerId TEXT,
+        customerName TEXT,
+        itemName TEXT,
+        quantity REAL,
+        remainingQty REAL,
+        unitName TEXT,
+        totalAmount REAL,
+        currencyCode TEXT,
+        totalTons REAL,
+        averageTonPrice REAL,
+        reservedAt TEXT,
+        expiresAt TEXT,
+        status TEXT,
+        updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_reservations_customer_status ON reservations(customerId, status);
+      PRAGMA user_version = 7;
+    `);
+  },
+  8: async (d) => {
+    await addColumnIfMissing(d, 'customers', 'assignedCollectorName', 'TEXT');
+    await d.execAsync(`
+      UPDATE mutation_queue
+      SET endpoint = REPLACE(endpoint, '/customers/', '/mobile/customers/') || '/field-update',
+          status = 'pending', retryCount = 0, lastError = NULL,
+          blockedAt = NULL, nextRetryAt = NULL
+      WHERE type = 'PATCH' AND endpoint LIKE '/customers/%';
+      PRAGMA user_version = 8;
+    `);
+  },
+  9: async (d) => {
+    // Self-heal databases that were marked as v8 by an older PRAGMA reader
+    // although CREATE TABLE IF NOT EXISTS could not add the new column.
+    await addColumnIfMissing(d, 'customers', 'assignedCollectorName', 'TEXT');
+    await d.execAsync(`
+      UPDATE mutation_queue
+      SET endpoint = REPLACE(endpoint, '/customers/', '/mobile/customers/') || '/field-update',
+          status = 'pending', retryCount = 0, lastError = NULL,
+          blockedAt = NULL, nextRetryAt = NULL
+      WHERE type = 'PATCH' AND endpoint LIKE '/customers/%';
+      PRAGMA user_version = 9;
+    `);
+  },
 };
 
 async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
-  const row = await d.getFirstAsync<{ version: number }>('PRAGMA user_version');
-  const currentVersion = row?.version ?? 0;
+  const row = await d.getFirstAsync<{ user_version?: number; version?: number }>('PRAGMA user_version');
+  const currentVersion = row?.user_version ?? row?.version ?? 0;
 
   if (currentVersion === 0) {
     // Fresh install — create full schema at latest version
@@ -95,6 +166,7 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
         address TEXT,
         geoLat REAL,
         geoLng REAL,
+        assignedCollectorName TEXT,
         balances TEXT,
         updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
       );
@@ -157,6 +229,24 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
         status TEXT NOT NULL DEFAULT 'pending',
         blockedAt TEXT
       );
+      CREATE TABLE IF NOT EXISTS reservations (
+        id TEXT PRIMARY KEY,
+        customerId TEXT,
+        customerName TEXT,
+        itemName TEXT,
+        quantity REAL,
+        remainingQty REAL,
+        unitName TEXT,
+        totalAmount REAL,
+        currencyCode TEXT,
+        totalTons REAL,
+        averageTonPrice REAL,
+        reservedAt TEXT,
+        expiresAt TEXT,
+        status TEXT,
+        updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_reservations_customer_status ON reservations(customerId, status);
       CREATE INDEX IF NOT EXISTS idx_mutation_queue_status_retry
         ON mutation_queue(status, nextRetryAt, id);
       CREATE TABLE IF NOT EXISTS gps_queue (
@@ -193,12 +283,25 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
   }
 }
 
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (!db) {
-    db = await SQLite.openDatabaseAsync('albinaa.db');
-    await ensureSchemaVersion(db);
+async function openDb(): Promise<SQLite.SQLiteDatabase> {
+  if (db) return db;
+  if (!dbOpening) {
+    dbOpening = (async () => {
+      const opened = await SQLite.openDatabaseAsync('albinaa.db');
+      await ensureSchemaVersion(opened);
+      db = opened;
+      return opened;
+    })().finally(() => { dbOpening = null; });
   }
-  return db;
+  return dbOpening;
+}
+
+export async function getDb(): Promise<SQLite.SQLiteDatabase> {
+  // Account ownership changes clear and re-scope cached business data. New
+  // reads wait for that short transaction instead of preparing statements
+  // against SQLite while its exclusive transaction is being replaced.
+  if (ownerTransition) await ownerTransition;
+  return openDb();
 }
 
 export async function upsert(table: string, record: Record<string, any>) {
@@ -234,13 +337,25 @@ async function materializeQueuedMutation(
     ? await d.getFirstAsync<{ fullName: string }>('SELECT fullName FROM customers WHERE id = ?', payload.customerId)
     : null;
   const customerName = customer?.fullName ?? 'عميل';
+  if (['/collections', '/followups', '/payment-promises'].includes(endpoint) && payload.customerId) {
+    await d.runAsync(
+      `UPDATE tasks SET status = 'done', updatedAt = datetime('now')
+       WHERE customerId = ? AND status IN ('open', 'pending')
+         AND (dueDate IS NULL OR date(dueDate) <= date('now'))`,
+      payload.customerId,
+    );
+  }
   if (endpoint === '/collections') {
+    const existing = await d.getFirstAsync<{ id: string }>('SELECT id FROM collections WHERE id = ?', id);
     await upsertWithDatabase(d, 'collections', {
       id, customerId: payload.customerId, customerName,
       amount: payload.amount, currencyCode: payload.currencyCode,
       methodName: 'بانتظار المزامنة', notes: payload.notes,
       collectedAt: payload.collectedAt || new Date().toISOString(),
     });
+    if (!existing) {
+      await applyLocalCollectionBalance(d, payload.customerId, payload.currencyCode, Number(payload.amount || 0));
+    }
   } else if (endpoint === '/followups') {
     await upsertWithDatabase(d, 'followups', {
       id, customerId: payload.customerId, customerName,
@@ -268,6 +383,15 @@ export async function getAll(table: string): Promise<any[]> {
   return await d.getAllAsync(`SELECT * FROM ${table} ORDER BY updatedAt DESC`);
 }
 
+export async function getCustomerOptionsOffline(): Promise<any[]> {
+  const d = await getDb();
+  return d.getAllAsync(
+    `SELECT id, fullName, accountNumber, externalCustomerCode,
+            phonePrimary, phoneSecondary, whatsapp
+     FROM customers ORDER BY fullName COLLATE NOCASE ASC`,
+  );
+}
+
 export async function dedupeTable(table: string): Promise<number> {
   const d = await getDb();
   if (!BUSINESS_TABLES.includes(table as BusinessTable)) throw new Error(`Unsupported table: ${table}`);
@@ -289,10 +413,89 @@ export async function getById(table: string, id: string): Promise<any> {
 }
 
 export async function updateCustomerPhoneOffline(id: string, phonePrimary: string): Promise<void> {
+  return updateCustomerContactOffline(id, { phonePrimary });
+}
+
+export async function updateCustomerContactOffline(
+  id: string,
+  fields: { phonePrimary?: string; phoneSecondary?: string; whatsapp?: string },
+): Promise<void> {
+  const d = await getDb();
+  const entries = Object.entries(fields).filter(([key]) => ['phonePrimary', 'phoneSecondary', 'whatsapp'].includes(key));
+  if (entries.length === 0) return;
+  const setClause = entries.map(([key]) => `${key} = ?`).join(', ');
+  await d.runAsync(
+    `UPDATE customers SET ${setClause}, updatedAt = datetime('now') WHERE id = ?`,
+    ...entries.map(([, value]) => value ?? ''), id,
+  );
+}
+
+async function applyLocalCollectionBalance(
+  d: SQLite.SQLiteDatabase,
+  customerId: string,
+  currencyCode: string,
+  amount: number,
+): Promise<void> {
+  if (!customerId || !currencyCode || !Number.isFinite(amount) || amount <= 0) return;
+  const customer = await d.getFirstAsync<{ balances: string | null }>(
+    'SELECT balances FROM customers WHERE id = ?', customerId,
+  );
+  if (!customer) return;
+  let balances: any[];
+  try { balances = JSON.parse(customer.balances || '[]'); } catch { balances = []; }
+  let found = false;
+  balances = balances.map((item) => {
+    const currency = item?.currency || item?.currencyCode;
+    if (currency !== currencyCode) return item;
+    found = true;
+    const current = Number(item?.operationalBalance ?? item?.balance ?? item?.accountingBalance ?? 0);
+    return { ...item, operationalBalance: current - amount };
+  });
+  if (!found) balances.push({ currency: currencyCode, balance: 0, operationalBalance: -amount });
+  await d.runAsync(
+    "UPDATE customers SET balances = ?, updatedAt = datetime('now') WHERE id = ?",
+    JSON.stringify(balances), customerId,
+  );
+}
+
+export async function recordCollectionOffline(input: {
+  id: string;
+  customerId: string;
+  customerName?: string;
+  amount: number;
+  currencyCode: string;
+  methodName?: string;
+  notes?: string;
+  collectedAt?: string;
+}): Promise<void> {
+  const d = await getDb();
+  const existing = await d.getFirstAsync<{ id: string }>('SELECT id FROM collections WHERE id = ?', input.id);
+  await upsertWithDatabase(d, 'collections', {
+    id: input.id,
+    customerId: input.customerId,
+    customerName: input.customerName || 'عميل',
+    amount: input.amount,
+    currencyCode: input.currencyCode,
+    methodName: input.methodName || 'تحصيل مسجل',
+    notes: input.notes,
+    collectedAt: input.collectedAt || new Date().toISOString(),
+  });
+  await d.runAsync(
+    `UPDATE tasks SET status = 'done', updatedAt = datetime('now')
+     WHERE customerId = ? AND status IN ('open', 'pending')
+       AND (dueDate IS NULL OR date(dueDate) <= date('now'))`,
+    input.customerId,
+  );
+  if (!existing) {
+    await applyLocalCollectionBalance(d, input.customerId, input.currencyCode, input.amount);
+  }
+}
+
+export async function updateCustomerLocationOffline(id: string, geoLat: number, geoLng: number): Promise<void> {
   const d = await getDb();
   await d.runAsync(
-    "UPDATE customers SET phonePrimary = ?, updatedAt = datetime('now') WHERE id = ?",
-    phonePrimary, id,
+    "UPDATE customers SET geoLat = ?, geoLng = ?, updatedAt = datetime('now') WHERE id = ?",
+    geoLat, geoLng, id,
   );
 }
 
@@ -331,7 +534,9 @@ export interface MobileSyncBatch {
   followups?: Record<string, any>[];
   promises?: Record<string, any>[];
   collections?: Record<string, any>[];
+  reservations?: Record<string, any>[];
   references?: Record<string, Record<string, any>[]>;
+  newDebt?: Record<string, any> | null;
 }
 
 /**
@@ -340,8 +545,14 @@ export interface MobileSyncBatch {
  * server page is requested again on the next launch.
  */
 export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: string): Promise<void> {
-  const d = await getDb();
-  await d.withExclusiveTransactionAsync(async (tx) => {
+  const previous = ownerTransition;
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  ownerTransition = current;
+  if (previous) await previous;
+  try {
+    const d = await openDb();
+    await d.withExclusiveTransactionAsync(async (tx) => {
     await tx.runAsync(`
       CREATE TEMP TABLE IF NOT EXISTS sync_seen_ids (
         tableName TEXT NOT NULL,
@@ -396,6 +607,12 @@ export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: strin
         }
       }
     }
+    if (batch.newDebt !== undefined) {
+      await tx.runAsync(
+        'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
+        'newDebt', JSON.stringify(batch.newDebt),
+      );
+    }
     const queued = await tx.getAllAsync<{ operationId: string; endpoint: string; payload: string }>(
       "SELECT operationId, endpoint, payload FROM mutation_queue WHERE status IN ('pending', 'blocked') ORDER BY id ASC",
     );
@@ -412,7 +629,11 @@ export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: strin
       'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
       'lastSyncAt', new Date().toISOString(),
     );
-  });
+    });
+  } finally {
+    release();
+    if (ownerTransition === current) ownerTransition = null;
+  }
 }
 
 /**
@@ -420,24 +641,38 @@ export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: strin
  * it. Existing unscoped data is treated as unsafe and removed once.
  */
 export async function ensureDataOwner(ownerId: string): Promise<boolean> {
-  const d = await getDb();
-  const row = await d.getFirstAsync<{ value: string }>(
-    "SELECT value FROM sync_metadata WHERE key = 'dataOwner'",
-  );
-  if (row?.value === ownerId) return false;
+  const normalizedOwner = String(ownerId || '').trim();
+  if (!normalizedOwner) throw new Error('Missing local data owner');
 
-  await d.withExclusiveTransactionAsync(async (tx) => {
-    for (const table of BUSINESS_TABLES) await tx.runAsync(`DELETE FROM ${table}`);
-    await tx.runAsync('DELETE FROM mutation_queue');
-    await tx.runAsync('DELETE FROM gps_queue');
-    await tx.runAsync('DELETE FROM reference_options');
-    await tx.runAsync('DELETE FROM sync_metadata');
-    await tx.runAsync(
-      'INSERT INTO sync_metadata (key, value) VALUES (?, ?)',
-      'dataOwner', ownerId,
+  const previous = ownerTransition;
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  ownerTransition = current;
+  if (previous) await previous;
+
+  try {
+    const d = await openDb();
+    const row = await d.getFirstAsync<{ value: string }>(
+      "SELECT value FROM sync_metadata WHERE key = 'dataOwner'",
     );
-  });
-  return true;
+    if (row?.value === normalizedOwner) return false;
+
+    await d.withExclusiveTransactionAsync(async (tx) => {
+      for (const table of BUSINESS_TABLES) await tx.runAsync(`DELETE FROM ${table}`);
+      await tx.runAsync('DELETE FROM mutation_queue');
+      await tx.runAsync('DELETE FROM gps_queue');
+      await tx.runAsync('DELETE FROM reference_options');
+      await tx.runAsync('DELETE FROM sync_metadata');
+      await tx.runAsync(
+        'INSERT INTO sync_metadata (key, value) VALUES (?, ?)',
+        'dataOwner', normalizedOwner,
+      );
+    });
+    return true;
+  } finally {
+    release();
+    if (ownerTransition === current) ownerTransition = null;
+  }
 }
 
 export async function getReferenceOptions(kind: string): Promise<any[]> {

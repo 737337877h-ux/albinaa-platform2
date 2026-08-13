@@ -7,6 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { getAll } from '../db/database';
 import Loading from '../components/loading';
 import { colors, radius, shadow } from '../theme';
+import { useAuth } from '../store/auth-context';
 import {
   formatBalance, parseBalances, searchableCustomerText, totalAbsoluteBalance,
 } from '../utils/customer';
@@ -22,8 +23,10 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
   const [accounts, setAccounts] = React.useState<any[]>([]);
   const [search, setSearch] = React.useState('');
   const [sort, setSort] = React.useState<SortMode>('balance');
-  const [onlyWithBalance, setOnlyWithBalance] = React.useState(false);
+  const [excludeSettled, setExcludeSettled] = React.useState(true);
   const [loading, setLoading] = React.useState(true);
+  const { user } = useAuth();
+  const showCollector = !!user?.permissions?.includes('customers.read_all');
 
   useFocusEffect(React.useCallback(() => {
     let active = true;
@@ -42,14 +45,14 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
       const isAdvance = account.customerType === 'advance';
       if ((kind === 'advance') !== isAdvance) return false;
       if (query && !searchableCustomerText(account).includes(query)) return false;
-      return !onlyWithBalance || totalAbsoluteBalance(account.balances) > 0.001;
+      return !excludeSettled || totalAbsoluteBalance(account.balances) > 0.001;
     });
     return result.sort((a, b) => {
       if (sort === 'balance') return totalAbsoluteBalance(b.balances) - totalAbsoluteBalance(a.balances);
       if (sort === 'recent') return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
       return String(a.fullName || '').localeCompare(String(b.fullName || ''), 'ar');
     });
-  }, [accounts, kind, onlyWithBalance, search, sort]);
+  }, [accounts, excludeSettled, kind, search, sort]);
 
   if (loading) return <Loading />;
   const title = kind === 'advance' ? 'حسابات السلف' : 'العملاء';
@@ -88,7 +91,7 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
         <Filter label="أعلى رصيد" active={sort === 'balance'} onPress={() => setSort('balance')} />
         <Filter label="الاسم" active={sort === 'name'} onPress={() => setSort('name')} />
         <Filter label="الأحدث" active={sort === 'recent'} onPress={() => setSort('recent')} />
-        <Filter label="له رصيد" active={onlyWithBalance} onPress={() => setOnlyWithBalance((v) => !v)} />
+        <Filter label="استبعاد الصافي" icon="remove-circle-outline" active={excludeSettled} onPress={() => setExcludeSettled((v) => !v)} />
       </View>
 
       <FlatList
@@ -102,6 +105,7 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
         renderItem={({ item }) => (
           <AccountRow
             account={item}
+            showCollector={showCollector}
             onPress={() => navigation.navigate('Customer360', { id: String(item.id), customer: item })}
           />
         )}
@@ -117,15 +121,16 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
   );
 }
 
-function Filter({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function Filter({ label, icon, active, onPress }: { label: string; icon?: keyof typeof Ionicons.glyphMap; active: boolean; onPress: () => void }) {
   return (
     <TouchableOpacity style={[styles.filter, active && styles.filterActive]} onPress={onPress}>
+      {!!icon && <Ionicons name={icon} size={14} color={active ? '#fff' : colors.muted} />}
       <Text style={[styles.filterText, active && styles.filterTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
-function AccountRow({ account, onPress }: { account: any; onPress: () => void }) {
+function AccountRow({ account, showCollector, onPress }: { account: any; showCollector: boolean; onPress: () => void }) {
   const balances = parseBalances(account.balances).filter((b) => Math.abs(Number(b.balance ?? b.accountingBalance ?? 0)) > 0.001);
   const code = account.accountNumber || account.externalCustomerCode || '—';
   return (
@@ -133,6 +138,11 @@ function AccountRow({ account, onPress }: { account: any; onPress: () => void })
       <View style={styles.avatar}><Text style={styles.avatarText}>{String(account.fullName || '?').trim().charAt(0)}</Text></View>
       <View style={styles.accountMain}>
         <Text style={styles.accountName} numberOfLines={2}>{account.fullName || 'بدون اسم'}</Text>
+        {showCollector && (
+          <Text style={styles.collectorName} numberOfLines={1}>
+            المحصّل: {account.assignedCollectorName || 'غير مسند'}
+          </Text>
+        )}
         <View style={styles.metaRow}>
           <Text style={styles.code}>#{code}</Text>
           {!!account.phonePrimary && <Text style={styles.phone}>{account.phonePrimary}</Text>}
@@ -141,7 +151,7 @@ function AccountRow({ account, onPress }: { account: any; onPress: () => void })
       <View style={styles.balanceStack}>
         {balances.length ? balances.slice(0, 2).map((balance, index) => (
           <View key={`${balance.currency || balance.currencyCode}-${index}`} style={styles.balanceLine}>
-            <Text style={styles.balanceAmount}>{formatBalance(Number(balance.balance ?? balance.accountingBalance ?? 0))}</Text>
+            <Text style={[styles.balanceAmount, Number(balance.balance ?? balance.accountingBalance ?? 0) < 0 && styles.creditBalance]}>{formatBalance(Math.abs(Number(balance.balance ?? balance.accountingBalance ?? 0)))}</Text>
             <Text style={styles.currency}>{balance.currency || balance.currencyCode}</Text>
           </View>
         )) : <Text style={styles.zero}>صافي</Text>}
@@ -161,7 +171,7 @@ const styles = StyleSheet.create({
   searchBox: { margin: 14, marginBottom: 8, height: 52, borderRadius: radius.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, flexDirection: 'row-reverse', alignItems: 'center', paddingHorizontal: 14, gap: 9, ...shadow },
   searchInput: { flex: 1, color: colors.ink, fontSize: 15, textAlign: 'right', paddingVertical: 0 },
   filters: { flexDirection: 'row-reverse', paddingHorizontal: 14, paddingBottom: 10, gap: 7 },
-  filter: { flex: 1, paddingVertical: 8, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, alignItems: 'center' },
+  filter: { flex: 1, paddingVertical: 8, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center', flexDirection: 'row-reverse', gap: 3 },
   filterActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   filterText: { fontSize: 11, color: colors.muted, fontWeight: '700' },
   filterTextActive: { color: '#fff' },
@@ -171,12 +181,14 @@ const styles = StyleSheet.create({
   avatarText: { color: colors.primary, fontSize: 19, fontWeight: '900' },
   accountMain: { flex: 1 },
   accountName: { color: colors.ink, fontSize: 15, lineHeight: 22, fontWeight: '800', textAlign: 'right' },
+  collectorName: { color: colors.secondary, fontSize: 11, fontWeight: '800', textAlign: 'right', marginTop: 2 },
   metaRow: { flexDirection: 'row-reverse', gap: 8, marginTop: 5, alignItems: 'center' },
   code: { color: colors.warning, fontSize: 12, fontWeight: '800' },
   phone: { color: colors.muted, fontSize: 11 },
   balanceStack: { minWidth: 96, alignItems: 'flex-start', gap: 3 },
   balanceLine: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
   balanceAmount: { color: colors.danger, fontSize: 13, fontWeight: '900' },
+  creditBalance: { color: colors.success },
   currency: { color: colors.muted, fontSize: 9, fontWeight: '800' },
   zero: { color: colors.success, fontWeight: '800', fontSize: 12 },
   empty: { alignItems: 'center', paddingTop: 70 },

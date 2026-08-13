@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createPromise, fetchCurrencies } from '../api/endpoints';
 import { enqueueMutation, getReferenceOptions } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
+import { saveGpsPoint } from '../db/database';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
 import CustomerPicker from '../components/customer-picker';
+import { colors, radius, shadow } from '../theme';
+import { displayDateFromIso, parseFlexibleDate } from '../utils/date-input';
 
 export default function NewPromiseScreen({ route, navigation }: any) {
   const presetCustomerId = route.params?.customerId || '';
@@ -16,7 +19,7 @@ export default function NewPromiseScreen({ route, navigation }: any) {
   const [dueDate, setDueDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 7);
-    return d.toISOString().split('T')[0];
+    return displayDateFromIso(d.toISOString().split('T')[0]);
   });
   const [notes, setNotes] = useState('');
   const [customerId, setCustomerId] = useState(presetCustomerId);
@@ -36,24 +39,30 @@ export default function NewPromiseScreen({ route, navigation }: any) {
       if (!customerId) throw new Error('اختر عميلاً');
       const num = Number(amount);
       if (!Number.isFinite(num) || num <= 0) throw new Error('المبلغ يجب أن يكون أكبر من صفر');
-      if (!dueDate) throw new Error('تاريخ الاستحقاق مطلوب');
+      const parsedDueDate = parseFlexibleDate(dueDate);
+      if (!parsedDueDate) throw new Error('أدخل تاريخًا صحيحًا، مثلاً 128 أو 1282026');
       const payload: any = {
         customerId,
         expectedAmount: num,
         currencyCode: currency,
-        dueDate: new Date(dueDate).toISOString(),
+        dueDate: parsedDueDate.iso,
         notes: notes || undefined,
       };
+      let position: Awaited<ReturnType<typeof getCurrentPosition>> | null = null;
       try {
-        const pos = await getCurrentPosition();
-        Object.assign(payload, { gpsLatitude: pos.latitude, gpsLongitude: pos.longitude, gpsAccuracy: pos.accuracy });
+        position = await getCurrentPosition();
       } catch { /* GPS optional */ }
       try {
-        return await createPromise(payload);
+        const result = await createPromise(payload);
+        if (position && result.data?.id) {
+          await saveGpsPoint({ ...position, entityTable: 'payment_promises', entityId: result.data.id });
+        }
+        return result;
       } catch (err: any) {
         if (!err?.response) {
           const opId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
           await enqueueMutation(opId, 'POST', '/payment-promises', payload);
+          if (position) await saveGpsPoint({ ...position, entityTable: 'payment_promises', entityId: `local:${opId}` });
           return { data: { id: opId, offline: true } };
         }
         throw err;
@@ -75,7 +84,8 @@ export default function NewPromiseScreen({ route, navigation }: any) {
   });
 
   return (
-    <ScrollView style={styles.container}>
+    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <CustomerPicker
         selectedId={customerId}
         selectedName={customerName}
@@ -105,10 +115,16 @@ export default function NewPromiseScreen({ route, navigation }: any) {
       <Text style={styles.label}>تاريخ الاستحقاق</Text>
       <TextInput
         style={styles.input}
-        placeholder="YYYY-MM-DD"
+        placeholder="مثال: 128 أو 1282026"
         placeholderTextColor="#999"
         value={dueDate}
         onChangeText={setDueDate}
+        onBlur={() => {
+          const parsed = parseFlexibleDate(dueDate);
+          if (parsed) setDueDate(parsed.display);
+        }}
+        keyboardType="number-pad"
+        maxLength={10}
       />
 
       <Text style={styles.label}>ملاحظات</Text>
@@ -118,19 +134,22 @@ export default function NewPromiseScreen({ route, navigation }: any) {
         <Text style={styles.buttonText}>{mutation.isPending ? 'جارٍ الحفظ...' : 'تسجيل'}</Text>
       </TouchableOpacity>
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f4f8', padding: 16 },
-  label: { fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 16 },
-  input: { backgroundColor: '#fff', borderRadius: 10, padding: 14, fontSize: 16, color: '#333', marginBottom: 8 },
+  screen: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, backgroundColor: colors.background },
+  content: { padding: 16, paddingBottom: 48 },
+  label: { fontSize: 15, fontWeight: '800', color: colors.ink, marginBottom: 8, marginTop: 16, textAlign: 'right' },
+  input: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 14, fontSize: 16, color: colors.ink, marginBottom: 8, borderWidth: 1, borderColor: colors.line, textAlign: 'right' },
   currencyRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  currencyBtn: { flex: 1, minWidth: 70, padding: 12, borderRadius: 10, backgroundColor: '#fff', alignItems: 'center', borderWidth: 1, borderColor: '#ddd' },
-  currencyBtnActive: { backgroundColor: '#34a853', borderColor: '#34a853' },
-  currencyText: { color: '#333' },
-  currencyTextActive: { color: '#fff' },
-  textarea: { backgroundColor: '#fff', borderRadius: 10, padding: 14, fontSize: 16, color: '#333', textAlignVertical: 'top', minHeight: 80 },
-  button: { backgroundColor: '#34a853', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 24, marginBottom: 40 },
-  buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  currencyBtn: { flex: 1, minWidth: 70, padding: 12, borderRadius: radius.md, backgroundColor: colors.surface, alignItems: 'center', borderWidth: 1, borderColor: colors.line },
+  currencyBtnActive: { backgroundColor: colors.gold, borderColor: colors.goldDark },
+  currencyText: { color: colors.ink, fontWeight: '700' },
+  currencyTextActive: { color: colors.primary, fontWeight: '900' },
+  textarea: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 14, fontSize: 16, color: colors.ink, textAlignVertical: 'top', textAlign: 'right', minHeight: 80, borderWidth: 1, borderColor: colors.line },
+  button: { backgroundColor: colors.gold, borderRadius: radius.md, padding: 16, alignItems: 'center', marginTop: 24, ...shadow },
+  buttonText: { color: colors.primary, fontSize: 17, fontWeight: '900' },
 });
