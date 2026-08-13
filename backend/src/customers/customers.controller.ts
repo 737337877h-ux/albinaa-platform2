@@ -66,6 +66,19 @@ export class CustomersController {
     return this.customers.advancesSummary(user);
   }
 
+  @Get('credit-control')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'Paginated credit-control overview, including missing limits and utilization by currency' })
+  creditControl(
+    @CurrentUser() user: AuthUser,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('missingOnly') missingOnly?: string,
+  ) {
+    return this.customers.creditControl(user, Number(page ?? 1), Number(limit ?? 25), search, missingOnly === 'true');
+  }
+
   @Patch('duplicates/:pairId')
   @RequirePermissions('duplicates.review')
   @ApiOperation({ summary: 'اعتماد قرار مراجعة حالة تشابه' })

@@ -702,18 +702,21 @@ export class ImportsService {
 
     // ---- كشف تشابه الأسماء (تنبيه فقط — لا دمج تلقائي أبدًا) ----
     let dupPairs = 0;
-    const dupGroups = await this.prisma.customer.groupBy({
-      by: ['nameNormalized'],
-      where: { organizationId: actor.organizationId },
-      having: { nameNormalized: { _count: { gt: 1 } } },
-      _count: true,
+    const duplicateCandidates = await this.prisma.customer.findMany({
+      where: { organizationId: actor.organizationId, status: { notIn: ['merged', 'import_reversed'] } },
+      select: { id: true, nameNormalized: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
     });
-    for (const g of dupGroups) {
-      const members = await this.prisma.customer.findMany({
-        where: { organizationId: actor.organizationId, nameNormalized: g.nameNormalized },
-        select: { id: true },
-        orderBy: { createdAt: 'asc' },
-      });
+    const duplicateGroups = new Map<string, typeof duplicateCandidates>();
+    for (const candidate of duplicateCandidates) {
+      // Imports commonly append 1/2 when a duplicate name is encountered.
+      // Treat it as a review candidate only; never merge automatically.
+      const key = candidate.nameNormalized.replace(/[\s\d]+$/u, '').trim();
+      if (!key) continue;
+      duplicateGroups.set(key, [...(duplicateGroups.get(key) ?? []), candidate]);
+    }
+    for (const members of duplicateGroups.values()) {
+      if (members.length < 2) continue;
       for (let a = 0; a < members.length; a += 1) {
         for (let b = a + 1; b < members.length; b += 1) {
           await this.prisma.potentialDuplicateCustomer.upsert({
@@ -726,7 +729,8 @@ export class ImportsService {
             create: {
               customerAId: members[a].id,
               customerBId: members[b].id,
-              matchReason: 'تطابق اسم تام بعد التطبيع مع اختلاف الكود',
+              matchReason: 'تطابق الاسم بعد التطبيع وإزالة لاحقة رقمية محتملة — للمراجعة فقط',
+              sourceImportJobId: jobId,
             },
           });
           dupPairs += 1;

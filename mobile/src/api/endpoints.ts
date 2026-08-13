@@ -3,11 +3,21 @@ import { getClient } from './client';
 export interface SyncResponse {
   syncToken: string;
   serverTime: string;
+  snapshot: 'full';
+  schemaVersion: number;
   tasks: any[];
   customers: any[];
   followups: any[];
   promises: any[];
   collections: any[];
+  reservations: any[];
+  newDebt: any | null;
+  references: {
+    currencies: Currency[];
+    collectionMethods: NamedOption[];
+    followupTypes: NamedOption[];
+    followupResults: NamedOption[];
+  };
 }
 
 export interface GpsPoint {
@@ -149,7 +159,7 @@ export async function fetchCurrencies() {
 
 export async function fetchNotifications() {
   const client = await getClient();
-  return client.get('/notifications');
+  return client.get('/notifications', { params: { page: 1, limit: 25 } });
 }
 
 export async function fetchTasks() {
@@ -168,6 +178,15 @@ export async function createTask(data: {
 }) {
   const client = await getClient();
   return client.post('/tasks', data);
+}
+
+export async function requestAssignmentChange(data: {
+  customerId: string;
+  reason: string;
+  requestedCollectorId?: string;
+}) {
+  const client = await getClient();
+  return client.post('/assignments/change-requests', data);
 }
 
 export async function markNotificationRead(id: string) {

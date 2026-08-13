@@ -1,8 +1,8 @@
 'use client';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { AlertTriangle, Bot, ChevronLeft, PackageCheck, Sparkles } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronLeft, PackageCheck, Sparkles, UsersRound } from 'lucide-react';
 import { api, tokenStore } from '@/lib/api';
 import { useCan, useMe } from '@/lib/auth';
 import { todayISO } from '@/lib/errors';
@@ -11,6 +11,7 @@ import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { HBarChart, StackedBar } from '@/components/ui/charts';
 import { Badge, Card, CardHeader, Money } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
+import { Dialog } from '@/components/ui/dialog';
 
 /**
  * شرط موحّد: نفّذ الاستعلام فقط عند وجود Access Token في المتصفح.
@@ -24,7 +25,19 @@ interface DashboardSummary {
   methodology?: { debtScope: string };
   byCurrency: Record<string, { debtors: number; debtTotal: number; creditors: number; creditTotal: number; zero: number }>;
   lastImport: { id: string; fileName: string; importedAt: string } | null;
-  newDebt: { perCurrency?: Record<string, { amount: number; accounts: number; newDebtors: number }> } | null;
+  newDebt: {
+    perCurrency?: Record<string, {
+      amount: number;
+      netChange?: number;
+      positiveIncreases?: number;
+      decreases?: number;
+      accounts: number;
+      affectedCount?: number;
+      newDebtors: number;
+      affectedAccounts?: DebtChangeAccount[];
+    }>;
+    note?: string | null;
+  } | null;
 }
 interface CollectorSummary {
   assignedCustomers: number;
@@ -61,6 +74,16 @@ interface ReservationSummary {
   unweightedUnits: { unitName: string; qty: number }[];
   expiringIn7Days: number;
 }
+interface DebtChangeAccount {
+  customerId: string;
+  customerName: string;
+  customerCode: string;
+  currencyCode: string;
+  previousBalance: number;
+  currentBalance: number;
+  change: number;
+  direction: 'increase' | 'decrease';
+}
 
 interface KpiResponse {
   customers: { total: number; active: number; debtors: number };
@@ -69,6 +92,10 @@ interface KpiResponse {
   tasksToday: { total: number; assigned: number; unassigned: number };
   topReasons: { taskType: string; count: number }[];
   debt120Plus: { count: number; totalByCurrency: Record<string, number> };
+  concentrationByCurrency: Record<string, {
+    totalDebt: number; top10Debt: number; percentage: number;
+    topCustomers: { customerId: string; customerName: string; customerCode: string | null; amount: number }[];
+  }>;
   highRiskCustomers: {
     customerId: string; customerCode: string | null; customerName: string;
     score: number; riskLevel: string;
@@ -104,6 +131,7 @@ export default function DashboardPage() {
   const { data: me } = useMe();
   const qc = useQueryClient();
   const today = todayISO();
+  const [debtAccounts, setDebtAccounts] = useState<{ currency: string; items: DebtChangeAccount[] } | null>(null);
 
   const canAdminKpis = can('reports.read');
   const canCollectorKpis = can('tasks.manage');
@@ -227,7 +255,7 @@ export default function DashboardPage() {
             skeletonClassName="h-36"
           >
             {summary.data && (
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                 <Link href="/customers">
                   <Card className="p-4 transition-colors hover:bg-pine-50/40 dark:hover:bg-white/5">
                     <p className="text-xs text-concrete-500">إجمالي العملاء</p>
@@ -268,9 +296,33 @@ export default function DashboardPage() {
                 ))}
                 {summary.data.newDebt?.perCurrency && Object.keys(summary.data.newDebt.perCurrency).length > 0 && (
                   <Card className="p-4">
-                    <p className="text-xs text-concrete-500">مديونية جديدة (بين آخر استيرادين)</p>
+                    <p className="text-xs text-concrete-500">صافي تغير المديونية (بين استيرادين متجانسين)</p>
                     {Object.entries(summary.data.newDebt.perCurrency).map(([ccy, v]) => (
-                      <p key={ccy} className="tnum mt-1 text-sm font-bold" dir="ltr">{fmtMoney(v.amount)} {ccy}</p>
+                      <div key={ccy} className="mt-2 rounded-lg border border-concrete-100 p-2 dark:border-white/10">
+                        <div className="flex items-center justify-between gap-3">
+                          <Badge tone="neutral">{ccy}</Badge>
+                          <p
+                            className={`tnum text-sm font-bold ${(v.netChange ?? v.amount) >= 0 ? 'text-debt-600 dark:text-debt-400' : 'text-credit-600 dark:text-credit-400'}`}
+                            dir="ltr"
+                          >
+                            {fmtMoney(v.netChange ?? v.amount)} {ccy}
+                          </p>
+                        </div>
+                        <div className="mt-1 flex flex-wrap justify-between gap-x-3 text-[11px] text-concrete-500">
+                          <span dir="ltr">الزيادات: {fmtMoney(v.positiveIncreases ?? 0)}</span>
+                          <span dir="ltr">الانخفاضات: {fmtMoney(v.decreases ?? 0)}</span>
+                        </div>
+                        {(v.affectedAccounts?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setDebtAccounts({ currency: ccy, items: v.affectedAccounts ?? [] })}
+                            className="mt-2 inline-flex min-h-9 w-full items-center justify-center gap-2 rounded-lg bg-pine-50 px-3 py-1.5 text-xs font-semibold text-pine-700 transition-colors hover:bg-pine-100 dark:bg-pine-900/50 dark:text-pine-100 dark:hover:bg-pine-900"
+                          >
+                            <UsersRound className="h-4 w-4" />
+                            عرض {v.affectedCount ?? v.affectedAccounts?.length ?? 0} حسابًا متأثرًا
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </Card>
                 )}
@@ -322,6 +374,88 @@ export default function DashboardPage() {
           </DataState>
         )}
       </section>
+
+      <Dialog
+        open={Boolean(debtAccounts)}
+        onClose={() => setDebtAccounts(null)}
+        title={`الحسابات المتأثرة — ${debtAccounts?.currency ?? ''}`}
+        className="sm:max-w-5xl"
+      >
+        <p className="mb-3 text-xs text-concrete-500">
+          مرتبة حسب أكبر تغير مطلق بين الاستيرادين. اضغط على اسم الحساب لفتح تفاصيله.
+        </p>
+        <div className="space-y-2 md:hidden">
+          {debtAccounts?.items.map((account) => (
+            <div key={`${account.customerId}-${account.currencyCode}-mobile`} className="rounded-xl border border-line p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <Link
+                    href={`/customers/${account.customerId}`}
+                    onClick={() => setDebtAccounts(null)}
+                    className="block truncate font-semibold text-pine-700 hover:underline dark:text-pine-200"
+                  >
+                    {account.customerName}
+                  </Link>
+                  <span className="tnum text-xs text-concrete-500" dir="ltr">{account.customerCode}</span>
+                </div>
+                <span
+                  className={`tnum shrink-0 text-sm font-bold ${account.direction === 'increase' ? 'text-debt-600 dark:text-debt-400' : 'text-credit-600 dark:text-credit-400'}`}
+                  dir="ltr"
+                >
+                  {account.change > 0 ? '+' : '−'}{fmtMoney(Math.abs(account.change))}
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2 border-t border-line pt-2 text-xs">
+                <div>
+                  <p className="text-concrete-500">الرصيد السابق</p>
+                  <p className="tnum mt-0.5" dir="ltr">{fmtMoney(account.previousBalance)} {account.currencyCode}</p>
+                </div>
+                <div>
+                  <p className="text-concrete-500">الرصيد الحالي</p>
+                  <p className="tnum mt-0.5 font-semibold" dir="ltr">{fmtMoney(account.currentBalance)} {account.currencyCode}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="hidden overflow-x-auto rounded-xl border border-line md:block">
+          <table className="w-full min-w-[760px] text-sm">
+            <thead className="bg-concrete-50 text-xs text-concrete-600 dark:bg-white/5 dark:text-concrete-300">
+              <tr>
+                <th className="px-3 py-2 text-right">الحساب</th>
+                <th className="px-3 py-2 text-right">الكود</th>
+                <th className="px-3 py-2 text-left">الرصيد السابق</th>
+                <th className="px-3 py-2 text-left">الرصيد الحالي</th>
+                <th className="px-3 py-2 text-left">التغير</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {debtAccounts?.items.map((account) => (
+                <tr key={`${account.customerId}-${account.currencyCode}`} className="hover:bg-concrete-50/60 dark:hover:bg-white/5">
+                  <td className="px-3 py-2.5 font-semibold">
+                    <Link
+                      href={`/customers/${account.customerId}`}
+                      onClick={() => setDebtAccounts(null)}
+                      className="text-pine-700 hover:underline dark:text-pine-200"
+                    >
+                      {account.customerName}
+                    </Link>
+                  </td>
+                  <td className="tnum px-3 py-2.5 text-concrete-500" dir="ltr">{account.customerCode}</td>
+                  <td className="tnum px-3 py-2.5 text-left" dir="ltr">{fmtMoney(account.previousBalance)} {account.currencyCode}</td>
+                  <td className="tnum px-3 py-2.5 text-left" dir="ltr">{fmtMoney(account.currentBalance)} {account.currencyCode}</td>
+                  <td
+                    className={`tnum px-3 py-2.5 text-left font-bold ${account.direction === 'increase' ? 'text-debt-600 dark:text-debt-400' : 'text-credit-600 dark:text-credit-400'}`}
+                    dir="ltr"
+                  >
+                    {account.change > 0 ? '+' : '−'}{fmtMoney(Math.abs(account.change))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Dialog>
 
       {canReservations && (
         <DataState
@@ -483,6 +617,21 @@ export default function DashboardPage() {
                       </li>
                     ))}
                   </ul>
+                </Card>
+                <Card className="p-4">
+                  <p className="text-xs text-concrete-500">تركيز المخاطر — أعلى 10 عملاء</p>
+                  <div className="mt-2 space-y-2">
+                    {Object.entries(kpis.data.concentrationByCurrency ?? {}).map(([currency, value]) => (
+                      <div key={currency}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold">{currency}</span>
+                          <span className="tnum text-lg font-extrabold text-hazard-700 dark:text-hazard-400">{value.percentage.toFixed(1)}%</span>
+                        </div>
+                        <p className="tnum text-[11px] text-concrete-500" dir="ltr">{fmtMoney(value.top10Debt)} / {fmtMoney(value.totalDebt)}</p>
+                      </div>
+                    ))}
+                    {Object.keys(kpis.data.concentrationByCurrency ?? {}).length === 0 && <p className="text-xs text-concrete-500">لا توجد مديونية موجبة.</p>}
+                  </div>
                 </Card>
               </div>
 

@@ -4,6 +4,7 @@ import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { AgingService } from '../aging/aging.service';
 
 /**
  * خدمة درجات المخاطر (PR 4) — الصيغة المعتمدة من مالك المنتج:
@@ -136,6 +137,7 @@ export class RiskService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly agingService: AgingService,
   ) {}
 
   async recalculate(
@@ -147,42 +149,32 @@ export class RiskService {
     const orgId = actor.organizationId;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const customerScope = {
+      organizationId: orgId,
+      status: 'active' as const,
+      OR: [{ customerType: null }, { customerType: { not: 'advance' as const } }],
+    };
 
-    const [customers, balances, agingSummaries, aging, collections, brokenPromises, followups, followupResults, creditTxns, creditPolicies] = await Promise.all([
+    const [customers, balances, agingReport, collections, brokenPromises, followups, followupResults, creditTxns, creditPolicies] = await Promise.all([
       this.prisma.customer.findMany({
-        where: { organizationId: orgId },
+        where: customerScope,
         select: { id: true, externalCustomerCode: true, name: true },
       }),
       this.prisma.customerBalance.findMany({
-        where: { customer: { organizationId: orgId } },
+        where: { customer: customerScope },
         select: { customerId: true, currencyCode: true, accountingBalance: true },
       }),
-      this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId }, reversedAt: null },
-        select: { customerId: true, currencyCode: true, totalDue: true },
-      }),
-      this.prisma.debtAgingDetail.findMany({
-        where: { customer: { organizationId: orgId }, reversedAt: null },
-        select: {
-          customerId: true,
-          currencyCode: true,
-          bucket_0_30: true,
-          bucket_31_60: true,
-          bucket_61_90: true,
-          bucket_91_120: true,
-          bucket_120_plus: true,
-        },
-      }),
+      this.agingService.report(actor, { accountClass: 'customer' }),
       this.prisma.collection.findMany({
-        where: { customer: { organizationId: orgId }, status: { notIn: ['reversed'] } },
+        where: { customer: customerScope, status: { notIn: ['reversed'] } },
         select: { customerId: true, currencyCode: true, collectedAt: true },
       }),
       this.prisma.paymentPromise.findMany({
-        where: { customer: { organizationId: orgId }, status: BROKEN_PROMISE_STATUS },
+        where: { customer: customerScope, status: BROKEN_PROMISE_STATUS },
         select: { customerId: true },
       }),
       this.prisma.followup.findMany({
-        where: { customer: { organizationId: orgId }, deletedAt: null },
+        where: { customer: customerScope, deletedAt: null },
         select: { customerId: true, resultId: true, followupAt: true },
       }),
       this.prisma.followupResult.findMany({
@@ -190,11 +182,11 @@ export class RiskService {
         select: { id: true, name: true },
       }),
       this.prisma.importedTransaction.findMany({
-        where: { customer: { organizationId: orgId }, credit: { gt: 0 }, reversedAt: null },
+        where: { customer: customerScope, credit: { gt: 0 }, reversedAt: null },
         select: { customerId: true, currencyCode: true, txDate: true },
       }),
       this.prisma.customerCreditLimit.findMany({
-        where: { customer: { organizationId: orgId }, effectiveFrom: { lte: today } },
+        where: { customer: customerScope, effectiveFrom: { lte: today } },
         select: { customerId: true, amount: true, currencyCode: true },
       }),
     ]);
@@ -234,14 +226,14 @@ export class RiskService {
     }
 
     const agingBucketsByKey = new Map<string, AgingBuckets>();
-    for (const a of aging) {
-      const key = `${a.customerId}|${a.currencyCode}`;
+    for (const a of agingReport.customers) {
+      const key = `${a.customerId}|${a.currency}`;
       const cur = agingBucketsByKey.get(key) ?? { b30: false, b60: false, b90: false, b120: false, b120Plus: false };
-      if (Number(a.bucket_0_30) > 0) cur.b30 = true;
-      if (Number(a.bucket_31_60) > 0) cur.b60 = true;
-      if (Number(a.bucket_61_90) > 0) cur.b90 = true;
-      if (Number(a.bucket_91_120) > 0) cur.b120 = true;
-      if (Number(a.bucket_120_plus) > 0) cur.b120Plus = true;
+      if (Number(a.buckets.bucket_0_30) > 0) cur.b30 = true;
+      if (Number(a.buckets.bucket_31_60) > 0) cur.b60 = true;
+      if (Number(a.buckets.bucket_61_90) > 0) cur.b90 = true;
+      if (Number(a.buckets.bucket_91_120) > 0) cur.b120 = true;
+      if (Number(a.buckets.bucket_120_plus) > 0) cur.b120Plus = true;
       agingBucketsByKey.set(key, cur);
     }
 
@@ -259,7 +251,7 @@ export class RiskService {
       }
     };
     // المصدر الأساسي للرصيد: ملف أعمار الديون (إجمالي الدين الحالي) — ثم أرصدة الحسابات كمكمّل
-    for (const s of agingSummaries) trackBalance(s.customerId, s.currencyCode, Number(s.totalDue));
+    for (const s of agingReport.customers) trackBalance(String(s.customerId), s.currency, Number(s.totalDue));
     for (const b of balances) trackBalance(b.customerId, b.currencyCode, Number(b.accountingBalance));
     // النسبة المئوية لرصيد كل (عميل|عملة) داخل عملته — لتحديد نقاط "قيمة الرصيد"
     const percentileByKey = new Map<string, number>();

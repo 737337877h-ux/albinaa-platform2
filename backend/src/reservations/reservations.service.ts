@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { IssueReservationDto } from './dto/issue-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
+import { CreateUnitDto, UpdateUnitDto } from './dto/manage-unit.dto';
 
 export function reservationWeightTons(quantity: number, weightKg: number | null): number | null {
   return weightKg === null ? null : quantity * weightKg / 1000;
@@ -79,6 +80,69 @@ export class ReservationsService {
       nameAr: unit.nameAr,
       weightKg: unit.weightKg === null ? null : Number(unit.weightKg),
     }));
+  }
+
+  async listAllUnits() {
+    const rows = await this.prisma.unit.findMany({
+      orderBy: [{ isActive: 'desc' }, { weightKg: 'desc' }, { nameAr: 'asc' }],
+      include: { _count: { select: { reservations: true } } },
+    });
+    return rows.map((unit) => ({
+      id: unit.id,
+      code: unit.code,
+      nameAr: unit.nameAr,
+      weightKg: unit.weightKg === null ? null : Number(unit.weightKg),
+      isActive: unit.isActive,
+      reservationsCount: unit._count.reservations,
+    }));
+  }
+
+  async createUnit(actor: AuthUser, dto: CreateUnitDto, req: Request) {
+    const code = dto.code.trim().toUpperCase();
+    const nameAr = dto.nameAr.trim();
+    if (!code || !nameAr) throw new BadRequestException('رمز الوحدة واسمها مطلوبان');
+    const existing = await this.prisma.unit.findUnique({ where: { code } });
+    if (existing) throw new ConflictException('رمز الوحدة مستخدم مسبقًا');
+    const unit = await this.prisma.unit.create({
+      data: { code, nameAr, weightKg: dto.weightKg ?? null },
+    });
+    await this.audit.log({
+      userId: actor.id, action: 'reservation_unit_created', entityTable: 'units', entityId: unit.id,
+      newValue: { code: unit.code, nameAr: unit.nameAr, weightKg: unit.weightKg }, req,
+    });
+    return { ...unit, weightKg: unit.weightKg === null ? null : Number(unit.weightKg), reservationsCount: 0 };
+  }
+
+  async updateUnit(actor: AuthUser, id: string, dto: UpdateUnitDto, req: Request) {
+    const before = await this.prisma.unit.findUnique({ where: { id } });
+    if (!before) throw new NotFoundException('وحدة القياس غير موجودة');
+    const code = dto.code === undefined ? undefined : dto.code.trim().toUpperCase();
+    const nameAr = dto.nameAr === undefined ? undefined : dto.nameAr.trim();
+    if (code === '' || nameAr === '') throw new BadRequestException('رمز الوحدة واسمها لا يمكن أن يكونا فارغين');
+    if (code && code !== before.code) {
+      const existing = await this.prisma.unit.findUnique({ where: { code } });
+      if (existing) throw new ConflictException('رمز الوحدة مستخدم مسبقًا');
+    }
+    const unit = await this.prisma.unit.update({
+      where: { id },
+      data: {
+        ...(code !== undefined ? { code } : {}),
+        ...(nameAr !== undefined ? { nameAr } : {}),
+        ...(dto.weightKg !== undefined ? { weightKg: dto.weightKg } : {}),
+        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+      },
+      include: { _count: { select: { reservations: true } } },
+    });
+    await this.audit.log({
+      userId: actor.id, action: 'reservation_unit_updated', entityTable: 'units', entityId: unit.id,
+      oldValue: { code: before.code, nameAr: before.nameAr, weightKg: before.weightKg, isActive: before.isActive },
+      newValue: { code: unit.code, nameAr: unit.nameAr, weightKg: unit.weightKg, isActive: unit.isActive }, req,
+    });
+    return {
+      ...unit,
+      weightKg: unit.weightKg === null ? null : Number(unit.weightKg),
+      reservationsCount: unit._count.reservations,
+    };
   }
 
   async summary(actor: AuthUser) {

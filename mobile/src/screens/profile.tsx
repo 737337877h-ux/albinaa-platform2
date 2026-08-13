@@ -1,36 +1,11 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { getMe } from '../api/auth';
-import { apiErrorMessage } from '../utils/errors';
-import Loading from '../components/loading';
+import React from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useAuth } from '../store/auth-context';
 import { APP_VERSION } from '../utils/constants';
+import { colors, radius, shadow } from '../theme';
 
-export default function ProfileScreen() {
-  const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-      (async () => {
-        setLoading(true);
-        setError(null);
-        try {
-          const me = await getMe();
-          if (!cancelled) setUser(me);
-        } catch (e: any) {
-          if (!cancelled) setError(apiErrorMessage(e, 'تعذر تحميل البيانات'));
-        } finally {
-          if (!cancelled) setLoading(false);
-        }
-      })();
-      return () => { cancelled = true; };
-    }, []),
-  );
-
-  if (loading) return <Loading />;
+export default function ProfileScreen({ navigation }: any) {
+  const { user } = useAuth();
 
   return (
     <ScrollView style={styles.container}>
@@ -40,36 +15,28 @@ export default function ProfileScreen() {
         </View>
         <Text style={styles.name}>{user?.fullName || '—'}</Text>
         <Text style={styles.username}>@{user?.username || '—'}</Text>
+        <Text style={styles.offlineHint}>هذه الهوية محفوظة بأمان للعمل دون اتصال</Text>
       </View>
-
-      {error ? (
-        <View style={styles.errorBox}>
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity onPress={() => setLoading(true)} style={styles.retryBtn}>
-            <Text style={styles.retryText}>إعادة المحاولة</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
 
       <View style={styles.section}>
         <InfoRow label="الدور" value={user?.roles?.length ? user.roles.join('، ') : '—'} />
         <InfoRow label="الصلاحيات" value={`${user?.permissions?.length || 0} صلاحية`} />
-        {user?.organizationId && <InfoRow label="معرّف المنشأة" value={user.organizationId.substring(0, 8) + '…'} />}
+        {user?.organizationId && <InfoRow label="معرّف المنشأة" value={`${user.organizationId.substring(0, 8)}…`} />}
       </View>
 
-      <View style={styles.section}>
-        <InfoRow label="إصدار التطبيق" value="1.0.0" />
-        <InfoRow label="المنصة" value="React Native (Expo)" />
+      <TouchableOpacity style={styles.settingsBtn} onPress={() => navigation.navigate('Settings')}>
+        <Text style={styles.settingsText}>إعدادات الاتصال والمزامنة والتنبيهات</Text>
+      </TouchableOpacity>
+      <View style={styles.quickRow}>
+        <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('FollowupsList')}><Text style={styles.quickText}>المتابعات</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('PromisesList')}><Text style={styles.quickText}>وعود السداد</Text></TouchableOpacity>
       </View>
-
-      <View style={styles.section}>
-        <InfoRow label="إصدار التطبيق" value="1.0.0" />
-        <InfoRow label="المنصة" value="React Native (Expo)" />
-      </View>
+      <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('MessageTemplates')}><Text style={styles.templatesText}>قوالب واتساب والرسائل النصية</Text></TouchableOpacity>
+      <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('Reservations')}><Text style={styles.templatesText}>حجوزات البضاعة ومتوسط سعر الطن</Text></TouchableOpacity>
 
       <View style={styles.section}>
         <InfoRow label="إصدار التطبيق" value={APP_VERSION} />
-        <InfoRow label="المنصة" value="React Native (Expo)" />
+        <InfoRow label="وضع البيانات" value="قاعدة محلية + مزامنة آمنة" />
       </View>
     </ScrollView>
   );
@@ -85,18 +52,22 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f4f8' },
-  header: { backgroundColor: '#1a73e8', padding: 30, alignItems: 'center' },
-  avatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
-  avatarText: { fontSize: 32, color: '#fff', fontWeight: 'bold' },
+  container: { flex: 1, backgroundColor: colors.background },
+  header: { backgroundColor: colors.primary, padding: 30, alignItems: 'center' },
+  avatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.gold, justifyContent: 'center', alignItems: 'center', marginBottom: 12, ...shadow },
+  avatarText: { fontSize: 32, color: colors.primary, fontWeight: '900' },
   name: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
-  username: { fontSize: 16, color: '#fff', opacity: 0.8, marginTop: 4 },
-  section: { backgroundColor: '#fff', margin: 16, borderRadius: 12, overflow: 'hidden' },
-  infoRow: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f0f4f8' },
-  infoLabel: { fontSize: 16, color: '#666' },
-  infoValue: { fontSize: 16, color: '#333', fontWeight: '500' },
-  errorBox: { backgroundColor: '#fef2f2', margin: 16, padding: 16, borderRadius: 10, alignItems: 'center' },
-  errorText: { color: '#ea4335', fontSize: 14, textAlign: 'center' },
-  retryBtn: { marginTop: 10, padding: 8 },
-  retryText: { color: '#1a73e8', fontSize: 14, fontWeight: '600' },
+  username: { fontSize: 16, color: colors.warmGray, marginTop: 4 },
+  offlineHint: { fontSize: 12, color: '#DCE8E5', marginTop: 10, textAlign: 'center' },
+  section: { backgroundColor: colors.surface, margin: 16, borderRadius: radius.md, overflow: 'hidden', borderWidth: 1, borderColor: colors.line, ...shadow },
+  infoRow: { flexDirection: 'row-reverse', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.line },
+  infoLabel: { fontSize: 15, color: colors.muted },
+  infoValue: { fontSize: 15, color: colors.primary, fontWeight: '700' },
+  settingsBtn: { marginHorizontal: 16, backgroundColor: colors.gold, borderRadius: radius.md, padding: 16, alignItems: 'center', ...shadow },
+  settingsText: { color: colors.primary, fontSize: 15, fontWeight: '900' },
+  quickRow: { flexDirection: 'row-reverse', gap: 8, marginHorizontal: 16, marginTop: 10 },
+  quickBtn: { flex: 1, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, padding: 14, alignItems: 'center' },
+  quickText: { color: colors.primary, fontSize: 13, fontWeight: '800' },
+  templatesBtn: { marginHorizontal: 16, marginTop: 8, backgroundColor: colors.goldSoft, borderRadius: radius.md, padding: 14, alignItems: 'center' },
+  templatesText: { color: colors.primary, fontSize: 13, fontWeight: '800' },
 });

@@ -216,3 +216,13 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod exec backup \
 ```
 
 ينبغي نسخ مجلد/وحدة `albinaa_backups` إلى تخزين خارجي مشفّر؛ وجود النسخة على الخادم نفسه لا يكفي للتعافي من فقد الخادم.
+
+## 10. فحص الجاهزية والمراقبة
+
+قبل تشغيل الإنتاج، افحص ملف البيئة المحلي الذي لا يُرفع إلى Git:
+
+```bash
+node scripts/validate-production-env.mjs .env.prod
+```
+
+يفشل الفحص عند بقاء قيم تجريبية، أو قصر الأسرار، أو تكرار أسرار JWT، أو استخدام HTTP/CORS غير آمن. ولتفعيل المراقبة الدورية، عيّن متغير مستودع GitHub باسم `PRODUCTION_HEALTH_URL` إلى أصل واجهة API المشفر مثل `https://api.company.example`. يفحص workflow مساري `/health` و`/health/ready` كل 15 دقيقة، وتظهر إخفاقاته في GitHub Actions والتنبيهات المرتبطة بالمستودع.

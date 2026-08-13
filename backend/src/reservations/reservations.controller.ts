@@ -9,6 +9,7 @@ import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { IssueReservationDto } from './dto/issue-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
+import { CreateUnitDto, UpdateUnitDto } from './dto/manage-unit.dto';
 import { ReservationsService } from './reservations.service';
 
 // Goods reservations — operational tracking only. No financial balance impact,
@@ -24,6 +25,32 @@ export class ReservationsController {
   @ApiOperation({ summary: 'Active normalized units used by goods reservations' })
   units() {
     return this.reservations.listUnits();
+  }
+
+  @Get('units/all')
+  @RequirePermissions('reservations.manage')
+  @ApiOperation({ summary: 'List all reservation units for administration' })
+  allUnits() {
+    return this.reservations.listAllUnits();
+  }
+
+  @Post('units')
+  @RequirePermissions('reservations.manage')
+  @ApiOperation({ summary: 'Create a normalized reservation unit' })
+  createUnit(@CurrentUser() user: AuthUser, @Body() dto: CreateUnitDto, @Req() req: Request) {
+    return this.reservations.createUnit(user, dto, req);
+  }
+
+  @Patch('units/:id')
+  @RequirePermissions('reservations.manage')
+  @ApiOperation({ summary: 'Update or deactivate a reservation unit' })
+  updateUnit(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateUnitDto,
+    @Req() req: Request,
+  ) {
+    return this.reservations.updateUnit(user, id, dto, req);
   }
 
   @Get('summary')

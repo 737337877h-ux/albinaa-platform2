@@ -94,6 +94,8 @@ describe('Dashboard Review Fixes (e2e)', () => {
         await prisma.$executeRawUnsafe(`ALTER TABLE collections DISABLE TRIGGER trg_collections_no_delete`);
         await prisma.collection.deleteMany({ where: { collectorId: { in: adminCollectorIds } } });
         await prisma.$executeRawUnsafe(`ALTER TABLE collections ENABLE TRIGGER trg_collections_no_delete`);
+        await prisma.task.deleteMany({ where: { assignedTo: { in: adminCollectorIds } } });
+        await prisma.collectorTarget.deleteMany({ where: { collectorId: { in: adminCollectorIds } } });
         await prisma.customerAssignment.deleteMany({ where: { collectorId: { in: adminCollectorIds } } });
       }
       await prisma.collector.deleteMany({ where: { userId: adminUserId } });

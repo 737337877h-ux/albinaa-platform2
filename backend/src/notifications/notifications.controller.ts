@@ -1,14 +1,27 @@
-import { Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
+import { PushTokenDto, RemovePushTokenDto } from './dto/push-token.dto';
 
 @ApiTags('Notifications')
 @ApiBearerAuth('access-token')
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly notifications: NotificationsService) {}
+
+  @Post('push-tokens')
+  @ApiOperation({ summary: 'تسجيل جهاز المستخدم لاستقبال إشعارات الهاتف' })
+  registerPushToken(@CurrentUser() user: AuthUser, @Body() body: PushTokenDto) {
+    return this.notifications.registerPushToken(user, body);
+  }
+
+  @Delete('push-tokens')
+  @ApiOperation({ summary: 'إلغاء تسجيل جهاز المستخدم من إشعارات الهاتف' })
+  unregisterPushToken(@CurrentUser() user: AuthUser, @Body() body: RemovePushTokenDto) {
+    return this.notifications.unregisterPushToken(user, body.token);
+  }
 
   @Get()
   @ApiQuery({ name: 'unreadOnly', required: false })

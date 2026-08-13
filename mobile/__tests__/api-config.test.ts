@@ -12,7 +12,7 @@ jest.mock('expo-secure-store', () => ({
 const mockFetch: any = jest.fn();
 global.fetch = mockFetch;
 
-import { isValidBaseUrl, pingServer } from '../src/config/api';
+import { isLocalNetworkUrl, isValidBaseUrl, pingServer } from '../src/config/api';
 
 describe('api config', () => {
   beforeEach(() => {
@@ -35,6 +35,26 @@ describe('api config', () => {
     it('rejects non-url', () => {
       expect(isValidBaseUrl('192.168.1.10:3000')).toBe(false);
       expect(isValidBaseUrl('ftp://x')).toBe(false);
+    });
+  });
+
+  describe('isLocalNetworkUrl', () => {
+    it.each([
+      'http://192.168.8.148:18001',
+      'http://10.0.0.5:18001',
+      'http://172.16.2.20:18001',
+      'http://172.31.255.1',
+      'http://albinaa.local:18001',
+    ])('accepts private LAN address %s', (url) => {
+      expect(isLocalNetworkUrl(url)).toBe(true);
+    });
+
+    it.each([
+      'https://api.albinaa.com',
+      'http://172.32.0.1',
+      'http://8.8.8.8',
+    ])('rejects non-LAN address %s', (url) => {
+      expect(isLocalNetworkUrl(url)).toBe(false);
     });
   });
 

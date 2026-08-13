@@ -67,6 +67,15 @@ function useDebounced<T>(value: T, delay: number): T {
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
+function isPaidFollowupResult(name: string | undefined): boolean {
+  const normalized = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\u064b-\u065f\u0670]/g, '')
+    .replace(/\s+/g, ' ');
+  return normalized === 'تم السداد' || normalized === 'سدد بالكامل';
+}
+
 /* ────────────────────────────── Validation ────────────────────────────── */
 
 const createSchema = z.object({
@@ -451,6 +460,13 @@ function CreateDialog({
   };
 
   const expectedAmount = watch('expectedAmount');
+  const selectedResultId = watch('resultId');
+  const selectedResult = results.find((item) => item.id === selectedResultId);
+  const requiresNextFollowup = Boolean(selectedResultId && !isPaidFollowupResult(selectedResult?.name));
+
+  useEffect(() => {
+    if (selectedResultId && !requiresNextFollowup) setValue('nextFollowupDate', '');
+  }, [requiresNextFollowup, selectedResultId, setValue]);
 
   return (
     <Dialog open={open} onClose={onClose} title="تسجيل متابعة جديدة">
@@ -526,9 +542,11 @@ function CreateDialog({
           <Input type="datetime-local" {...register('followupAt')} />
         </Field>
 
-        <Field label="موعد المتابعة القادمة" error={errors.nextFollowupDate?.message}>
-          <Input type="date" {...register('nextFollowupDate')} />
-        </Field>
+        {requiresNextFollowup && (
+          <Field label="موعد المتابعة القادمة *" error={errors.nextFollowupDate?.message}>
+            <Input type="date" required {...register('nextFollowupDate')} />
+          </Field>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="المبلغ المتوقع" error={errors.expectedAmount?.message}>

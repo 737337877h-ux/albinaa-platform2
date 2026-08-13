@@ -11,6 +11,8 @@ frontend/.env.local
 dist/
 uploads/
 data/
+data-clean/
+mobile/assets/sounds/alraqi-notification-candidate.wav
 coverage/
 .next/
 out/
@@ -20,3 +22,8 @@ test-output-*.txt
 .eslintcache
 nginx/ssl/*.pem
 nginx/ssl/*.key
+mobile/.gradle-codex/
+mobile/artifacts/
+mobile/assets/previews/
+mobile/assets/fonts/package-tmp/
+tmp/

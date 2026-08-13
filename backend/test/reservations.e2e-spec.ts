@@ -60,6 +60,15 @@ describe('Reservation units and summary (e2e)', () => {
     expect(ton.weightKg).toBe(1000);
     expect(piece.weightKg).toBeNull();
 
+    const baseline = (await request(app.getHttpServer())
+      .get('/reservations/summary').set('Authorization', `Bearer ${token}`).expect(200)).body;
+    const amount = (summary: any, currency: string) => Number(
+      summary.totalsByCurrency.find((row: any) => row.currency === currency)?.amount ?? 0,
+    );
+    const unweightedQty = (summary: any, unitName: string) => Number(
+      summary.unweightedUnits.find((row: any) => row.unitName === unitName)?.qty ?? 0,
+    );
+
     const create = (body: Record<string, unknown>) => request(app.getHttpServer())
       .post('/reservations')
       .set('Authorization', `Bearer ${token}`)
@@ -79,15 +88,13 @@ describe('Reservation units and summary (e2e)', () => {
       .get('/reservations/summary')
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
-    expect(summary.body.activeCount).toBe(2);
-    expect(summary.body.customerCount).toBe(1);
-    expect(summary.body.totalTons).toBe(2);
-    expect(summary.body.expiringIn7Days).toBe(1);
-    expect(summary.body.totalsByCurrency).toEqual([
-      { currency: 'SAR', amount: 150 },
-      { currency: 'YER', amount: 200 },
-    ]);
-    expect(summary.body.unweightedUnits).toEqual([{ unitName: 'حبة', qty: 3 }]);
+    expect(summary.body.activeCount).toBe(baseline.activeCount + 2);
+    expect(summary.body.customerCount).toBe(baseline.customerCount + 1);
+    expect(summary.body.totalTons).toBeCloseTo(baseline.totalTons + 2, 6);
+    expect(summary.body.expiringIn7Days).toBe(baseline.expiringIn7Days + 1);
+    expect(amount(summary.body, 'SAR')).toBeCloseTo(amount(baseline, 'SAR') + 150, 6);
+    expect(amount(summary.body, 'YER')).toBeCloseTo(amount(baseline, 'YER') + 200, 6);
+    expect(unweightedQty(summary.body, 'حبة')).toBeCloseTo(unweightedQty(baseline, 'حبة') + 3, 6);
 
     await request(app.getHttpServer())
       .post(`/reservations/${activeTon.body.id}/issue`)
@@ -98,7 +105,7 @@ describe('Reservation units and summary (e2e)', () => {
       .get('/reservations/summary')
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
-    expect(afterIssue.body.totalTons).toBe(1.5);
-    expect(afterIssue.body.totalsByCurrency).toContainEqual({ currency: 'YER', amount: 150 });
+    expect(afterIssue.body.totalTons).toBeCloseTo(baseline.totalTons + 1.5, 6);
+    expect(amount(afterIssue.body, 'YER')).toBeCloseTo(amount(baseline, 'YER') + 150, 6);
   });
 });

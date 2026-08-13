@@ -25,6 +25,7 @@ import { CollectorsModule } from './collectors/collectors.module';
 import { MobileModule } from './mobile/mobile.module';
 import { RiskModule } from './risk/risk.module';
 import { ReservationsModule } from './reservations/reservations.module';
+import { MessagingModule } from './messaging/messaging.module';
 import { AnalyticalAccountsModule } from './analytical-accounts/analytical-accounts.module';
 import { AgingModule } from './aging/aging.module';
 import { ReportsModule } from './reports/reports.module';
@@ -62,6 +63,7 @@ import { IdempotencyInterceptor } from './common/interceptors/idempotency.interc
     MobileModule,
     RiskModule,
     ReservationsModule,
+    MessagingModule,
     AnalyticalAccountsModule,
     AgingModule,
     ReportsModule,

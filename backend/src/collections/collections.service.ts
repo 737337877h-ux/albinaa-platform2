@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
-import { hasExplicitTimeZone, orgYear, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
+import { hasExplicitTimeZone, orgDateOnly, orgYear, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -186,6 +186,11 @@ export class CollectionsService {
           createdBy: actor.id,
         },
       });
+      const today = new Date(`${orgDateOnly()}T00:00:00.000Z`);
+      await tx.task.updateMany({
+        where: { customerId: dto.customerId, assignedTo: collectorId, status: 'open', dueDate: { lte: today } },
+        data: { status: 'done' },
+      });
       return created;
     });
 
@@ -211,7 +216,10 @@ export class CollectionsService {
       },
       req,
     });
-    await this.riskRefresh?.trigger(actor, [dto.customerId], 'collection_created', req);
+    // The financial transaction and audit are already durable at this point.
+    // Recalculating the customer's risk may take noticeably longer on a phone
+    // request, so keep it eventual and do not delay the collection receipt.
+    void this.riskRefresh?.trigger(actor, [dto.customerId], 'collection_created', req);
     return collection;
   }
 
@@ -300,9 +308,19 @@ export class CollectionsService {
       where: { collectionId: id, status: 'pending' },
     });
     if (pending) throw new ConflictException('يوجد طلب عكس معلق لهذه العملية');
-    const reversalRequest = await this.prisma.collectionReversalRequest.create({
-      data: { collectionId: id, reason: dto.reason, requestedBy: actor.id },
-    });
+    let reversalRequest;
+    try {
+      reversalRequest = await this.prisma.collectionReversalRequest.create({
+        data: { collectionId: id, reason: dto.reason, requestedBy: actor.id },
+      });
+    } catch (error) {
+      // الفحص السابق يحسن الرسالة فقط، أما القيد الفريد فهو حارس التزامن الحقيقي.
+      // حوّل سباق طلبين متزامنين إلى 409 متوقع بدل تسريب خطأ قاعدة كـ500.
+      if ((error as { code?: string })?.code === 'P2002') {
+        throw new ConflictException('يوجد طلب عكس مسجل لهذه العملية');
+      }
+      throw error;
+    }
     await this.notifications.notifyByPermission(
       actor.organizationId, 'collections.approve', 'collection_reversal_requested', {
         requestId: reversalRequest.id, collectionId: id, amount: Number(original.amount),

@@ -12,8 +12,31 @@
 
 import { describe, it, expect } from '@jest/globals';
 import { computeBalance, applyLedgerEntries, LedgerEntry } from '../src/utils/balance';
+import { largestDebtorBalance, totalDebtorBalance, totalsByCurrency } from '../src/utils/customer';
 
 describe('balance', () => {
+  describe('portfolio totals', () => {
+    const accounts = [
+      { balances: [{ currency: 'YER', balance: 1_000 }, { currency: 'SAR', balance: 50 }] },
+      { balances: [{ currency: 'YER', balance: -300 }, { currency: 'SAR', balance: -10 }] },
+      { balances: [{ currency: 'YER', balance: 200 }] },
+    ];
+
+    it('uses positive debtor balances for the customer debt card', () => {
+      expect(totalsByCurrency(accounts, true)).toEqual({ YER: 1_200, SAR: 50 });
+    });
+
+    it('can still calculate signed net balances for advance accounts', () => {
+      expect(totalsByCurrency(accounts)).toEqual({ YER: 900, SAR: 40 });
+    });
+
+    it('excludes credit and settled balances from communication priority', () => {
+      expect(totalDebtorBalance([{ currency: 'YER', balance: -9_000 }, { currency: 'SAR', balance: 0 }])).toBe(0);
+      expect(totalDebtorBalance([{ currency: 'YER', balance: 1_250 }, { currency: 'SAR', balance: -5_000 }])).toBe(1_250);
+      expect(largestDebtorBalance([{ currency: 'SAR', balance: -5_000 }, { currency: 'YER', balance: 1_250 }])).toMatchObject({ currency: 'YER', balance: 1_250 });
+    });
+  });
+
   describe('computeBalance', () => {
     it('returns accounting balance when no ledger entries', () => {
       const result = computeBalance({ accountingBalance: 1000, ledgerEntries: [] });

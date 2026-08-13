@@ -55,6 +55,7 @@ services:
       TZ: Asia/Aden
       RISK_AUTO_RECALCULATE_ENABLED: ${RISK_AUTO_RECALCULATE_ENABLED:-true}
       RISK_RECALCULATE_HOUR: ${RISK_RECALCULATE_HOUR:-2}
+      PUSH_ENABLED: "false"
     volumes:
       - ./data/uploads:/data/uploads
     ports:

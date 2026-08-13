@@ -1,13 +1,23 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createTask, fetchCurrencies } from '../api/endpoints';
-import { enqueueMutation } from '../db/database';
+import { enqueueMutation, getReferenceOptions } from '../db/database';
 import { apiErrorMessage } from '../utils/errors';
 import { useSync } from '../store/sync-context';
 import CustomerPicker from '../components/customer-picker';
+import { colors, radius, shadow } from '../theme';
+import { displayDateFromIso, parseFlexibleDate } from '../utils/date-input';
 
 const TASK_TYPES = ['visit', 'call', 'promise_due', 'followup', 'collection', 'other'];
+const TASK_TYPE_LABELS: Record<string, string> = {
+  visit: 'زيارة',
+  call: 'اتصال',
+  promise_due: 'استحقاق وعد',
+  followup: 'متابعة',
+  collection: 'تحصيل',
+  other: 'أخرى',
+};
 
 export default function NewTaskScreen({ route, navigation }: any) {
   const presetCustomerId = route.params?.customerId || '';
@@ -18,7 +28,7 @@ export default function NewTaskScreen({ route, navigation }: any) {
   const [dueDate, setDueDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
-    return d.toISOString().split('T')[0];
+    return displayDateFromIso(d.toISOString().split('T')[0]);
   });
   const [priorityReason, setPriorityReason] = useState('');
   const [expectedAmount, setExpectedAmount] = useState('');
@@ -27,18 +37,22 @@ export default function NewTaskScreen({ route, navigation }: any) {
   const { triggerSync } = useSync();
   const { data: currencies } = useQuery({
     queryKey: ['currencies'],
-    queryFn: () => fetchCurrencies().then((r) => r.data),
+    queryFn: async () => {
+      try { return (await fetchCurrencies()).data || []; }
+      catch { return getReferenceOptions('currencies'); }
+    },
   });
 
   const mutation = useMutation({
     mutationFn: async () => {
       if (!customerId) throw new Error('اختر عميلاً');
       if (!taskType) throw new Error('اختر نوع المهمة');
-      if (!dueDate) throw new Error('تاريخ الاستحقاق مطلوب');
+      const parsedDueDate = parseFlexibleDate(dueDate);
+      if (!parsedDueDate) throw new Error('أدخل تاريخًا صحيحًا، مثلاً 128 أو 1282026');
       const payload: any = {
         customerId,
         taskType,
-        dueDate: new Date(dueDate).toISOString(),
+        dueDate: parsedDueDate.iso,
         priorityReason: priorityReason || undefined,
         expectedAmount: expectedAmount ? Number(expectedAmount) : undefined,
         expectedCurrency: expectedAmount ? expectedCurrency : undefined,
@@ -68,7 +82,12 @@ export default function NewTaskScreen({ route, navigation }: any) {
   });
 
   return (
-    <ScrollView style={styles.container}>
+    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled"
+    >
       <CustomerPicker
         selectedId={customerId}
         selectedName={customerName}
@@ -83,7 +102,7 @@ export default function NewTaskScreen({ route, navigation }: any) {
             style={[styles.typeBtn, taskType === t && styles.typeBtnActive]}
             onPress={() => setTaskType(t)}
           >
-            <Text style={[styles.typeText, taskType === t && styles.typeTextActive]}>{t}</Text>
+            <Text style={[styles.typeText, taskType === t && styles.typeTextActive]}>{TASK_TYPE_LABELS[t]}</Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -91,10 +110,16 @@ export default function NewTaskScreen({ route, navigation }: any) {
       <Text style={styles.label}>تاريخ الاستحقاق</Text>
       <TextInput
         style={styles.input}
-        placeholder="YYYY-MM-DD"
+        placeholder="مثال: 128 أو 1282026"
         placeholderTextColor="#999"
         value={dueDate}
         onChangeText={setDueDate}
+        onBlur={() => {
+          const parsed = parseFlexibleDate(dueDate);
+          if (parsed) setDueDate(parsed.display);
+        }}
+        keyboardType="number-pad"
+        maxLength={10}
       />
 
       <Text style={styles.label}>سبب الأولوية (اختياري)</Text>
@@ -137,19 +162,22 @@ export default function NewTaskScreen({ route, navigation }: any) {
         <Text style={styles.buttonText}>{mutation.isPending ? 'جارٍ الحفظ...' : 'تسجيل المهمة'}</Text>
       </TouchableOpacity>
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f4f8', padding: 16 },
-  label: { fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 16 },
-  input: { backgroundColor: '#fff', borderRadius: 10, padding: 14, fontSize: 16, color: '#333', marginBottom: 8 },
+  screen: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, backgroundColor: colors.background },
+  content: { padding: 16, paddingBottom: 48 },
+  label: { fontSize: 15, fontWeight: '800', color: colors.ink, marginBottom: 8, marginTop: 18, textAlign: 'right' },
+  input: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 14, fontSize: 16, color: colors.ink, marginBottom: 8, borderWidth: 1, borderColor: colors.line, textAlign: 'right' },
   typeRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  typeBtn: { paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#fff', alignItems: 'center', borderWidth: 1, borderColor: '#ddd', minWidth: '30%' },
-  typeBtnActive: { backgroundColor: '#1a73e8', borderColor: '#1a73e8' },
-  typeText: { color: '#333', textAlign: 'center' },
-  typeTextActive: { color: '#fff' },
+  typeBtn: { paddingVertical: 11, paddingHorizontal: 12, borderRadius: radius.md, backgroundColor: colors.surface, alignItems: 'center', borderWidth: 1, borderColor: colors.line, minWidth: '30%', ...shadow },
+  typeBtnActive: { backgroundColor: colors.gold, borderColor: colors.goldDark },
+  typeText: { color: colors.ink, textAlign: 'center', fontWeight: '700' },
+  typeTextActive: { color: colors.primary, fontWeight: '900' },
   row: { flexDirection: 'row', alignItems: 'center' },
-  button: { backgroundColor: '#1a73e8', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 24, marginBottom: 40 },
-  buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  button: { backgroundColor: colors.gold, borderRadius: radius.md, padding: 16, alignItems: 'center', marginTop: 26, ...shadow },
+  buttonText: { color: colors.primary, fontSize: 17, fontWeight: '900' },
 });

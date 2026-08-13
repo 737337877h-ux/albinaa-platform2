@@ -3,18 +3,142 @@ import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { priorityOfTaskType } from '../tasks/tasks.service';
 import { orgDateOnly, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
+import { AgingService } from '../aging/aging.service';
+
+type DebtSnapshot = {
+  customerId: string;
+  currencyCode: string;
+  balance: unknown;
+  customer?: {
+    id: string;
+    name: string;
+    externalCustomerCode: string;
+  };
+};
+
+type DebtChangeAccount = {
+  customerId: string;
+  customerName: string;
+  customerCode: string;
+  currencyCode: string;
+  previousBalance: number;
+  currentBalance: number;
+  change: number;
+  direction: 'increase' | 'decrease';
+};
+
+type SnapshotImport = {
+  id: string;
+  importedAt: Date;
+  fileName: string;
+  snapshots: DebtSnapshot[];
+};
+
+const snapshotKey = (snapshot: Pick<DebtSnapshot, 'customerId' | 'currencyCode'>) =>
+  `${snapshot.customerId}|${snapshot.currencyCode}`;
+
+/**
+ * Prevents comparing a full customer import with an advances import or a job
+ * that has no balance snapshots. Comparable imports must cover at least half
+ * of the larger customer portfolio.
+ */
+export function findComparablePreviousImport(
+  latest: SnapshotImport,
+  candidates: SnapshotImport[],
+): SnapshotImport | null {
+  const latestKeys = new Set(latest.snapshots.map(snapshotKey));
+  if (latestKeys.size === 0) return null;
+
+  for (const candidate of candidates) {
+    const candidateKeys = new Set(candidate.snapshots.map(snapshotKey));
+    if (candidateKeys.size === 0) continue;
+    let overlap = 0;
+    for (const key of candidateKeys) {
+      if (latestKeys.has(key)) overlap += 1;
+    }
+    if (overlap / Math.max(latestKeys.size, candidateKeys.size) >= 0.5) return candidate;
+  }
+  return null;
+}
+
+export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapshot[]) {
+  const latestMap = new Map<string, DebtSnapshot>();
+  const previousMap = new Map<string, DebtSnapshot>();
+  for (const snapshot of latest) latestMap.set(snapshotKey(snapshot), snapshot);
+  for (const snapshot of previous) previousMap.set(snapshotKey(snapshot), snapshot);
+
+  const perCurrency: Record<string, {
+    amount: number;
+    netChange: number;
+    positiveIncreases: number;
+    decreases: number;
+    accounts: number;
+    affectedCount: number;
+    newDebtors: number;
+    affectedAccounts: DebtChangeAccount[];
+  }> = {};
+
+  for (const key of new Set([...latestMap.keys(), ...previousMap.keys()])) {
+    const latestSnapshot = latestMap.get(key);
+    const previousSnapshot = previousMap.get(key);
+    const current = Number(latestSnapshot?.balance ?? 0);
+    const prior = Number(previousSnapshot?.balance ?? 0);
+    const difference = current - prior;
+    const snapshot = latestSnapshot ?? previousSnapshot;
+    const currency = snapshot?.currencyCode;
+    if (!currency) continue;
+    const row = (perCurrency[currency] ??= {
+      amount: 0,
+      netChange: 0,
+      positiveIncreases: 0,
+      decreases: 0,
+      accounts: 0,
+      affectedCount: 0,
+      newDebtors: 0,
+      affectedAccounts: [],
+    });
+    row.netChange += difference;
+    row.amount = row.netChange;
+    if (difference > 0.005) {
+      row.positiveIncreases += difference;
+      row.accounts += 1;
+      if (prior <= 0 && current > 0) row.newDebtors += 1;
+    } else if (difference < -0.005) {
+      row.decreases += -difference;
+    } else {
+      continue;
+    }
+    row.affectedCount += 1;
+    row.affectedAccounts.push({
+      customerId: snapshot.customer?.id ?? snapshot.customerId,
+      customerName: snapshot.customer?.name ?? 'حساب غير مسمى',
+      customerCode: snapshot.customer?.externalCustomerCode ?? snapshot.customerId,
+      currencyCode: currency,
+      previousBalance: prior,
+      currentBalance: current,
+      change: difference,
+      direction: difference > 0 ? 'increase' : 'decrease',
+    });
+  }
+
+  for (const row of Object.values(perCurrency)) {
+    row.affectedAccounts.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+  }
+
+  return perCurrency;
+}
 
 /**
  * Dashboard API — المؤشرات الأساسية المتاحة من بيانات المرحلة الحالية.
  * ملاحظات منهجية موثقة (من مرحلة التحقق):
  * - كل المؤشرات المالية مفصولة حسب العملة — لا جمع مخلوطًا بين عملات.
- * - "المديونية الجديدة" = الزيادات الموجبة بين آخر استيرادين (Snapshots).
+ * - تغير المديونية = صافي الفرق بين آخر استيرادين متجانسين، مع فصل الزيادات عن الانخفاضات.
  * - أعمار الديون "تقديرية" حصريًا (بحسب أقدم حركة متاحة، لا تواريخ استحقاق) —
  *   تُعرض بعلامة estimated=true ولا تُقدَّم كعمر محاسبي مؤكد.
  */
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly agingService: AgingService) {}
 
   async navCounts(user: AuthUser) {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -115,59 +239,72 @@ export class DashboardService {
     };
   }
 
-  /** المديونية الجديدة بين آخر استيرادين: زيادات موجبة + عملاء ظهروا مدينين لأول مرة. */
-  private async newDebtBetweenLastTwoImports(orgId: string) {
-    const lastTwo = await this.prisma.importJob.findMany({
-      where: { organizationId: orgId, status: 'completed' },
-      orderBy: { importedAt: 'desc' },
-      take: 2,
-      select: { id: true, importedAt: true },
-    });
-    if (lastTwo.length === 0) return null;
-
-    const [latest, previous] = lastTwo;
-    const latestSnaps = await this.prisma.balanceSnapshot.findMany({
+  /** صافي تغير المديونية بين آخر استيرادين متجانسين، مع تفاصيل الزيادات والانخفاضات. */
+  async newDebtBetweenLastTwoImports(orgId: string) {
+    const recentImports = await this.prisma.importJob.findMany({
       where: {
-        importJobId: latest.id,
-        customer: { status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
-      },
-      select: { customerId: true, currencyCode: true, balance: true },
-    });
-    const prevMap = new Map<string, number>();
-    if (previous) {
-      const prevSnaps = await this.prisma.balanceSnapshot.findMany({
-        where: {
-          importJobId: previous.id,
-          customer: { status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        organizationId: orgId,
+        status: 'completed',
+        snapshots: {
+          some: {
+            reversedAt: null,
+            customer: {
+              status: 'active',
+              OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+            },
+          },
         },
-        select: { customerId: true, currencyCode: true, balance: true },
-      });
-      for (const s of prevSnaps) {
-        prevMap.set(`${s.customerId}|${s.currencyCode}`, Number(s.balance));
-      }
+      },
+      orderBy: { importedAt: 'desc' },
+      take: 12,
+      select: {
+        id: true,
+        importedAt: true,
+        fileName: true,
+        snapshots: {
+          where: {
+            reversedAt: null,
+            customer: {
+              status: 'active',
+              OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+            },
+          },
+          orderBy: { snapshotAt: 'asc' },
+          select: {
+            customerId: true,
+            currencyCode: true,
+            balance: true,
+            customer: { select: { id: true, name: true, externalCustomerCode: true } },
+          },
+        },
+      },
+    });
+    if (recentImports.length === 0) return null;
+
+    const [latest, ...candidates] = recentImports;
+    const previous = findComparablePreviousImport(latest, candidates);
+    if (!previous) {
+      return {
+        betweenImports: { latest: latest.importedAt, previous: null },
+        comparison: { latestFile: latest.fileName, previousFile: null, comparable: false },
+        perCurrency: {},
+        note: 'لا يوجد استيراد عملاء سابق متجانس للمقارنة؛ لم تُعتبر الأرصدة الحالية مديونية جديدة.',
+      };
     }
 
-    const perCurrency: Record<string, { amount: number; accounts: number; newDebtors: number }> = {};
-    for (const s of latestSnaps) {
-      const cur = Number(s.balance);
-      const prev = prevMap.get(`${s.customerId}|${s.currencyCode}`);
-      const increase = prev === undefined ? (cur > 0 ? cur : 0) : Math.max(cur - prev, 0);
-      if (increase > 0) {
-        const c = (perCurrency[s.currencyCode] ??= { amount: 0, accounts: 0, newDebtors: 0 });
-        c.amount += increase;
-        c.accounts += 1;
-        if (prev === undefined || prev <= 0) c.newDebtors += 1;
-      }
-    }
+    const perCurrency = summarizeDebtChange(latest.snapshots, previous.snapshots);
     return {
       betweenImports: {
         latest: latest.importedAt,
-        previous: previous?.importedAt ?? null,
+        previous: previous.importedAt,
+      },
+      comparison: {
+        latestFile: latest.fileName,
+        previousFile: previous.fileName,
+        comparable: true,
       },
       perCurrency,
-      note: previous
-        ? null
-        : 'استيراد واحد فقط حتى الآن — كل رصيد مدين يُعد مديونية جديدة',
+      note: 'صافي التغير هو المؤشر الرئيسي؛ الزيادات والانخفاضات معروضة منفصلة ولا تُخلط ملفات العملاء بالسلف.',
     };
   }
 
@@ -231,7 +368,7 @@ export class DashboardService {
     const today = startOfOrgDay(todayDate);
     const tomorrow = startOfNextOrgDay(todayDate);
 
-    const [totalCustomers, activeCustomers, balances, scores, todayTasks, aging] = await Promise.all([
+    const [totalCustomers, activeCustomers, balances, scores, todayTasks, agingReport] = await Promise.all([
       this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' }, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
       this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
       this.prisma.customerBalance.findMany({
@@ -239,7 +376,7 @@ export class DashboardService {
         select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
       }),
       this.prisma.customerScore.findMany({
-        where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
+        where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
         orderBy: { computedAt: 'desc' },
         select: { customerId: true, score: true, riskLevel: true },
       }),
@@ -250,10 +387,7 @@ export class DashboardService {
           expectedAmount: true, expectedCurrency: true,
         },
       }),
-      this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] }, bucket_120_plus: { gt: 0 }, reversedAt: null },
-        select: { customerId: true, currencyCode: true, totalDue: true },
-      }),
+      this.agingService.report(user, { accountClass: 'customer' }),
     ]);
 
     const operationalBalances = await Promise.all(balances.map(async (balance) => {
@@ -300,15 +434,46 @@ export class DashboardService {
 
     const debt120TotalByCurrency: Record<string, number> = {};
     const debt120Customers = new Set<string>();
-    for (const a of aging) {
-      debt120Customers.add(a.customerId);
-      debt120TotalByCurrency[a.currencyCode] = (debt120TotalByCurrency[a.currencyCode] ?? 0) + Number(a.totalDue);
+    for (const a of agingReport.customers) {
+      const amount120 = Number(a.buckets.bucket_120_plus ?? 0);
+      if (amount120 <= 0.005) continue;
+      debt120Customers.add(String(a.customerId));
+      debt120TotalByCurrency[a.currency] = (debt120TotalByCurrency[a.currency] ?? 0) + amount120;
     }
     const debt120Plus = { count: debt120Customers.size, totalByCurrency: debt120TotalByCurrency };
+
+    const concentrationByCurrency: Record<string, {
+      totalDebt: number;
+      top10Debt: number;
+      percentage: number;
+      topCustomers: Array<{ customerId: string; customerName: string; customerCode: string | null; amount: number }>;
+    }> = {};
+    const agingByCurrency = new Map<string, typeof agingReport.customers>();
+    for (const row of agingReport.customers) {
+      agingByCurrency.set(row.currency, [...(agingByCurrency.get(row.currency) ?? []), row]);
+    }
+    for (const [currency, rows] of agingByCurrency) {
+      const ranked = [...rows].sort((a, b) => Number(b.totalDue) - Number(a.totalDue));
+      const totalDebt = ranked.reduce((sum, row) => sum + Number(row.totalDue), 0);
+      const top = ranked.slice(0, 10);
+      const top10Debt = top.reduce((sum, row) => sum + Number(row.totalDue), 0);
+      concentrationByCurrency[currency] = {
+        totalDebt,
+        top10Debt,
+        percentage: totalDebt > 0 ? (top10Debt / totalDebt) * 100 : 0,
+        topCustomers: top.map((row) => ({
+          customerId: String(row.customerId),
+          customerName: String(row.customerName),
+          customerCode: row.customerCode == null ? null : String(row.customerCode),
+          amount: Number(row.totalDue),
+        })),
+      };
+    }
 
     const highRisk = await this.prisma.customer.findMany({
       where: {
         organizationId: orgId,
+        status: 'active',
         OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
         scores: { some: { riskLevel: { in: ['high', 'critical'] } } },
       },
@@ -394,6 +559,7 @@ export class DashboardService {
       tasksToday,
       topReasons,
       debt120Plus,
+      concentrationByCurrency,
       highRiskCustomers,
       topPriorityTasks,
       collectorPerformanceToday,

@@ -27,7 +27,7 @@ const hasToken = () => typeof window !== 'undefined' && !!tokenStore.access;
 export default function ReportsPage() {
   const can = useCan(); const allowed = can('reports.read'); const canExport = can('reports.export');
   const [accountClass, setAccountClass] = useState<'customer' | 'advance'>('customer');
-  const [currency, setCurrency] = useState(''); const [downloading, setDownloading] = useState(false);
+  const [currency, setCurrency] = useState(''); const [downloading, setDownloading] = useState(false); const [pdfDownloading, setPdfDownloading] = useState(false);
   const report = useQuery({ queryKey: ['reports-summary', accountClass], queryFn: () => api<ReportSummary>(`/reports/summary?accountClass=${accountClass}`), enabled: allowed && hasToken() });
   const currencies = report.data?.byCurrency.map((row) => row.currency) ?? [];
   const selected = currency || currencies[0] || '';
@@ -42,9 +42,15 @@ export default function ReportsPage() {
     catch (error) { toast(error instanceof Error ? error.message : 'تعذّر تنزيل التقرير', 'err'); }
     finally { setDownloading(false); }
   }
+  async function exportPdf() {
+    setPdfDownloading(true);
+    try { await downloadApiFile(`/reports/summary.pdf?accountClass=${accountClass}`, `albinaa-${accountClass}-report-${new Date().toISOString().slice(0, 10)}.pdf`); toast('تم تنزيل التقرير الإداري PDF', 'ok'); }
+    catch (error) { toast(error instanceof Error ? error.message : 'تعذّر تنزيل التقرير', 'err'); }
+    finally { setPdfDownloading(false); }
+  }
   if (!allowed) return <Card><PermissionNotice message="لا تملك صلاحية عرض التقارير" /></Card>;
   return <div className="report-print space-y-5">
-    <PageHeader title="التقرير الإداري الشامل" action={<div className="flex gap-2 print:hidden">{canExport && <Button variant="secondary" loading={downloading} onClick={exportExcel}><Download className="h-4 w-4" /> Excel</Button>}<Button variant="secondary" onClick={() => window.print()}><Printer className="h-4 w-4" /> طباعة</Button></div>} />
+    <PageHeader title="التقرير الإداري الشامل" action={<div className="flex gap-2 print:hidden">{canExport && <><Button variant="secondary" loading={pdfDownloading} onClick={exportPdf}><FileText className="h-4 w-4" /> PDF</Button><Button variant="secondary" loading={downloading} onClick={exportExcel}><Download className="h-4 w-4" /> Excel</Button></>}<Button variant="secondary" onClick={() => window.print()}><Printer className="h-4 w-4" /> طباعة</Button></div>} />
     <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-concrete-500">ملخص {accountClass === 'advance' ? 'السلف على الغير' : 'مديونية العملاء'} • كل عملة مستقلة • {report.data ? fmtDate(report.data.generatedAt) : '—'}</p><div className="flex gap-2"><Select aria-label="نوع الحساب" className="w-44" value={accountClass} onChange={(event) => { setAccountClass(event.target.value as 'customer' | 'advance'); setCurrency(''); }}><option value="customer">العملاء فقط</option><option value="advance">السلف فقط</option></Select><Select aria-label="العملة" className="w-44" value={selected} onChange={(event) => setCurrency(event.target.value)}>{currencies.map((code) => <option key={code}>{code}</option>)}</Select></div></div>
     <DataState isLoading={report.isLoading} isError={report.isError} error={report.error} onRetry={() => report.refetch()} isFetching={report.isFetching} isEmpty={!currencies.length} emptyTitle="لا توجد بيانات مالية للتقرير" skeletonClassName="h-72">
       {summary && <>

@@ -11,7 +11,7 @@
 | RBAC | ✅ | 3 طبقات: JWT → أدوار → صلاحيات |
 | Permissions from DB | ✅ | تُحمّل من قاعدة البيانات لكل طلب (إبطال فوري) |
 | Max Sessions | ✅ | 5 جلسات نشطة/مستخدم (الجلسات الأقدم تُبطل) |
-| Password Policy | ✅ | 8 أحرف كحد أدنى للم管理员 |
+| Password Policy | ✅ | 8 أحرف كحد أدنى للمدير |
 | SQL Injection | ✅ | Prisma Client فقط (parameterized) |
 | XSS | ✅ | لا `dangerouslySetInnerHTML` في الواجهة |
 | Upload Validation | ✅ | امتدادات مسموحة (.xlsx, .xlsm)، حجم 30MB |

@@ -77,4 +77,13 @@ describe('Management report and customer statement exports (e2e)', () => {
     expect(pdf.subarray(0, 4).toString()).toBe('%PDF');
     expect(pdf.length).toBeGreaterThan(5000);
   });
+
+  it('creates a native Arabic management report PDF', async () => {
+    const response = await request(app.getHttpServer()).get('/reports/summary.pdf?accountClass=customer')
+      .set('Authorization', `Bearer ${token}`).buffer(true).parse(binaryParser).expect(200);
+    expect(response.headers['content-type']).toContain('application/pdf');
+    const pdf = Buffer.from(response.body);
+    expect(pdf.subarray(0, 4).toString()).toBe('%PDF');
+    expect(pdf.length).toBeGreaterThan(5000);
+  });
 });

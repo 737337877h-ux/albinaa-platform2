@@ -12,6 +12,7 @@ import {
   Gauge,
   ClipboardCheck,
   MessageCircle,
+  Ruler,
 } from 'lucide-react';
 import { useMe, useCan, useLogout } from '@/lib/auth';
 import { api, ApiError, tokenStore } from '@/lib/api';
@@ -24,6 +25,7 @@ import { NotificationsMenu } from '@/components/notifications-menu';
 import { CommandPalette } from '@/components/command-palette';
 
 const NAV = [
+  { href: '/campaigns', label: 'حملات التحصيل', icon: MessageCircle, perm: 'tasks.manage' },
   { href: '/dashboard', label: 'لوحة التحكم', icon: LayoutDashboard, perm: 'reports.read' },
   { href: '/tasks', label: 'عمل اليوم', icon: ListTodo, perm: 'tasks.manage' },
   { href: '/customers', label: 'العملاء', icon: Users, perm: 'customers.read' },
@@ -40,6 +42,8 @@ const NAV = [
 ] as const;
 
 const ADMIN_NAV = [
+  { href: '/admin/credit-control', label: 'الرقابة الائتمانية', icon: ShieldCheck, perm: 'customers.read' },
+  { href: '/admin/units', label: 'وحدات الحجوزات', icon: Ruler, perm: 'reservations.manage' },
   { href: '/admin/users', label: 'المستخدمين', icon: UserCog, perm: 'users.manage' },
   { href: '/admin/roles', label: 'الأدوار والصلاحيات', icon: Shield, perm: 'users.manage' },
   { href: '/admin/collectors', label: 'المحصلين', icon: Users, perm: 'users.manage' },

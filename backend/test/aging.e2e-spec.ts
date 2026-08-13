@@ -83,7 +83,9 @@ describe('Debt aging report (e2e)', () => {
     const snapshot = await request(app.getHttpServer()).get(`/reports/aging?asOf=${created.body.asOf}`)
       .set('Authorization', `Bearer ${token}`).expect(200);
     expect(snapshot.body.snapshot).toBe(true);
-    expect(snapshot.body.customers).toHaveLength(2);
+    // اللقطة على مستوى المنشأة وقد تحتوي fixtures من ملفات E2E أخرى؛
+    // تحقق من صفوف هذا السيناريو فقط حتى يبقى الاختبار مستقلاً عن ترتيب الملفات.
+    expect(snapshot.body.customers.filter((row: any) => ids.includes(row.customerId))).toHaveLength(2);
     expect(await prisma.auditLog.count({ where: { action: 'aging_snapshot_created', entityId: created.body.asOf } })).toBeGreaterThan(0);
   });
 });

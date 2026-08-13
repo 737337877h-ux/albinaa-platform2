@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Modal } from 'react-native';
-import { getAll } from '../db/database';
+import { getCustomerOptionsOffline } from '../db/database';
+import { colors, radius, shadow } from '../theme';
 
 export interface CustomerOption {
   id: string;
   fullName: string;
   phonePrimary?: string | null;
+  phoneSecondary?: string | null;
+  whatsapp?: string | null;
+  accountCode?: string | null;
 }
 
 interface Props {
@@ -22,7 +26,7 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
 
   useEffect(() => {
     (async () => {
-      const all = await getAll('customers');
+      const all = await getCustomerOptionsOffline();
       const seen = new Set<string>();
       const unique: CustomerOption[] = [];
       for (const c of all) {
@@ -32,6 +36,9 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
           id: c.id,
           fullName: c.fullName || c.name || 'عميل',
           phonePrimary: c.phonePrimary || null,
+          phoneSecondary: c.phoneSecondary || null,
+          whatsapp: c.whatsapp || null,
+          accountCode: c.accountNumber || c.externalCustomerCode || null,
         });
       }
       setCustomers(unique);
@@ -39,7 +46,7 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
   }, []);
 
   const openModal = async () => {
-    const all = await getAll('customers');
+    const all = await getCustomerOptionsOffline();
     const seen = new Set<string>();
     const unique: CustomerOption[] = [];
     for (const c of all) {
@@ -49,6 +56,9 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
         id: c.id,
         fullName: c.fullName || c.name || 'عميل',
         phonePrimary: c.phonePrimary || null,
+        phoneSecondary: c.phoneSecondary || null,
+        whatsapp: c.whatsapp || null,
+        accountCode: c.accountNumber || c.externalCustomerCode || null,
       });
     }
     setCustomers(unique);
@@ -57,7 +67,11 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
   };
 
   const filtered = customers.filter((c) =>
-    !search || c.fullName?.includes(search) || (c.phonePrimary || '').includes(search),
+    !search || c.fullName?.includes(search)
+      || (c.phonePrimary || '').includes(search)
+      || (c.phoneSecondary || '').includes(search)
+      || (c.whatsapp || '').includes(search)
+      || (c.accountCode || '').includes(search),
   );
 
   return (
@@ -77,7 +91,7 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
           </View>
           <TextInput
             style={styles.searchInput}
-            placeholder="ابحث عن عميل..."
+            placeholder="ابحث بالاسم أو الكود أو رقم الهاتف..."
             placeholderTextColor="#999"
             value={search}
             onChangeText={setSearch}
@@ -94,7 +108,9 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
                 }}
               >
                 <Text style={styles.customerName}>{item.fullName}</Text>
-                {!!item.phonePrimary && <Text style={styles.customerPhone}>{item.phonePrimary}</Text>}
+                <Text style={styles.customerPhone}>
+                  {[item.accountCode && `#${item.accountCode}`, item.phonePrimary, item.phoneSecondary].filter(Boolean).join(' · ') || 'لا يوجد رقم هاتف'}
+                </Text>
               </TouchableOpacity>
             )}
             ListEmptyComponent={<Text style={styles.emptyText}>لا يوجد عملاء</Text>}
@@ -106,17 +122,17 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
 }
 
 const styles = StyleSheet.create({
-  label: { fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 16 },
-  pickerBtn: { backgroundColor: '#fff', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#ddd' },
-  pickerText: { fontSize: 16, color: '#333' },
-  modalContainer: { flex: 1, backgroundColor: '#f0f4f8', paddingTop: 40 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#1a73e8' },
-  modalTitle: { color: '#fff', fontSize: 18, fontWeight: '600' },
-  modalClose: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  searchInput: { margin: 16, padding: 12, backgroundColor: '#fff', borderRadius: 10, fontSize: 16, textAlign: 'right' },
-  customerRow: { backgroundColor: '#fff', marginHorizontal: 16, marginBottom: 6, padding: 14, borderRadius: 10 },
-  customerRowActive: { borderColor: '#1a73e8', borderWidth: 2 },
-  customerName: { fontSize: 16, color: '#333', fontWeight: '500' },
-  customerPhone: { fontSize: 13, color: '#666', marginTop: 4 },
-  emptyText: { textAlign: 'center', color: '#999', padding: 30 },
+  label: { fontSize: 15, fontWeight: '800', color: colors.ink, marginBottom: 8, marginTop: 16, textAlign: 'right' },
+  pickerBtn: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 14, borderWidth: 1, borderColor: colors.line },
+  pickerText: { fontSize: 16, color: colors.ink, textAlign: 'right' },
+  modalContainer: { flex: 1, backgroundColor: colors.background, paddingTop: 40 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: colors.primary, borderBottomWidth: 2, borderBottomColor: colors.gold },
+  modalTitle: { color: colors.background, fontSize: 18, fontWeight: '900' },
+  modalClose: { color: colors.gold, fontSize: 14, fontWeight: '900' },
+  searchInput: { margin: 16, padding: 12, backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, fontSize: 16, color: colors.ink, textAlign: 'right' },
+  customerRow: { backgroundColor: colors.surface, marginHorizontal: 16, marginBottom: 8, padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, ...shadow },
+  customerRowActive: { borderColor: colors.gold, borderWidth: 2, backgroundColor: colors.goldSoft },
+  customerName: { fontSize: 16, color: colors.ink, fontWeight: '800', textAlign: 'right' },
+  customerPhone: { fontSize: 13, color: colors.muted, marginTop: 4, textAlign: 'right' },
+  emptyText: { textAlign: 'center', color: colors.muted, padding: 30 },
 });
