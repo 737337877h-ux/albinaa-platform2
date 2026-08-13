@@ -4,10 +4,11 @@ import {
   IMAGE_COMPRESSION_QUALITY, MUTATION_MAX_RETRIES, generateIdempotencyKey,
   DB_SCHEMA_VERSION,
 } from '../src/utils/constants';
+import appConfig from '../app.json';
 
 describe('constants', () => {
   it('exports expected app version', () => {
-    expect(APP_VERSION).toBe('1.3.9');
+    expect(APP_VERSION).toBe(appConfig.expo.version);
   });
 
   it('sync interval is 5 minutes', () => {
