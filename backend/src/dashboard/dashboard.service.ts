@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { priorityOfTaskType } from '../tasks/tasks.service';
+import { isActionableDebtorBalance } from '../common/debt-followup-policy';
 import { orgDateOnly, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
 import { AgingService } from '../aging/aging.service';
 
@@ -39,7 +40,7 @@ const snapshotKey = (snapshot: Pick<DebtSnapshot, 'customerId' | 'currencyCode'>
 
 /**
  * Prevents comparing a full customer import with an advances import or a job
- * that has no balance snapshots. Comparable imports must cover at least half
+ * that has no balance snapshots. Comparable imports must cover at least 70%
  * of the larger customer portfolio.
  */
 export function findComparablePreviousImport(
@@ -56,9 +57,24 @@ export function findComparablePreviousImport(
     for (const key of candidateKeys) {
       if (latestKeys.has(key)) overlap += 1;
     }
-    if (overlap / Math.max(latestKeys.size, candidateKeys.size) >= 0.5) return candidate;
+    if (overlap / Math.max(latestKeys.size, candidateKeys.size) >= 0.7) return candidate;
   }
   return null;
+}
+
+/**
+ * Chooses the newest two full-portfolio imports. Small correction batches and
+ * live deltas are excluded even when they overlap perfectly with each other.
+ */
+export function findLatestComparableImportPair(imports: SnapshotImport[]) {
+  if (imports.length === 0) return { latest: null, previous: null };
+  const sizes = imports.map((item) => new Set(item.snapshots.map(snapshotKey)).size);
+  const maximumSize = Math.max(...sizes);
+  const fullPortfolioFloor = Math.max(1, Math.ceil(maximumSize * 0.7));
+  const fullImports = imports.filter((_, index) => sizes[index] >= fullPortfolioFloor);
+  const [latest, ...candidates] = fullImports;
+  if (!latest) return { latest: null, previous: null };
+  return { latest, previous: findComparablePreviousImport(latest, candidates) };
 }
 
 export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapshot[]) {
@@ -256,7 +272,7 @@ export class DashboardService {
         },
       },
       orderBy: { importedAt: 'desc' },
-      take: 12,
+      take: 20,
       select: {
         id: true,
         importedAt: true,
@@ -281,8 +297,8 @@ export class DashboardService {
     });
     if (recentImports.length === 0) return null;
 
-    const [latest, ...candidates] = recentImports;
-    const previous = findComparablePreviousImport(latest, candidates);
+    const { latest, previous } = findLatestComparableImportPair(recentImports);
+    if (!latest) return null;
     if (!previous) {
       return {
         betweenImports: { latest: latest.importedAt, previous: null },
@@ -403,6 +419,23 @@ export class DashboardService {
     }));
     const debtorBalances = operationalBalances.filter((balance) => balance.effectiveBalance > 0.005);
     const debtors = new Set(debtorBalances.map((b) => b.customerId)).size;
+    const debtorCustomerIds = new Set(debtorBalances
+      .filter((balance) => isActionableDebtorBalance(balance.effectiveBalance, balance.currencyCode))
+      .map((balance) => balance.customerId));
+
+    // Keep the manager dashboard aligned with Today Work: only customers with
+    // an operational debit balance, and at most one highest-priority task per
+    // customer. This prevents a promise and a risk task from showing the same
+    // account twice in the decision list.
+    const eligibleTodayTasks = todayTasks
+      .filter((task) => !!task.customerId && debtorCustomerIds.has(task.customerId))
+      .sort((a, b) =>
+        priorityOfTaskType(a.taskType) - priorityOfTaskType(b.taskType)
+        || Number(b.expectedAmount ?? 0) - Number(a.expectedAmount ?? 0),
+      );
+    const uniqueTodayTasks = [...new Map(
+      eligibleTodayTasks.map((task) => [task.customerId as string, task]),
+    ).values()];
 
     const debtByCurrency: Record<string, number> = {};
     for (const b of debtorBalances) {
@@ -420,13 +453,13 @@ export class DashboardService {
     }
 
     const tasksToday = {
-      total: todayTasks.length,
-      assigned: todayTasks.filter((t) => t.assignedTo).length,
-      unassigned: todayTasks.filter((t) => !t.assignedTo).length,
+      total: uniqueTodayTasks.length,
+      assigned: uniqueTodayTasks.filter((t) => t.assignedTo).length,
+      unassigned: uniqueTodayTasks.filter((t) => !t.assignedTo).length,
     };
 
     const byType = new Map<string, number>();
-    for (const t of todayTasks) byType.set(t.taskType, (byType.get(t.taskType) ?? 0) + 1);
+    for (const t of uniqueTodayTasks) byType.set(t.taskType, (byType.get(t.taskType) ?? 0) + 1);
     const topReasons = [...byType.entries()]
       .map(([taskType, count]) => ({ taskType, count }))
       .sort((a, b) => b.count - a.count)
@@ -495,7 +528,7 @@ export class DashboardService {
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
 
-    const customerIds = [...new Set(todayTasks.map((t) => t.customerId).filter((x): x is string => !!x))];
+    const customerIds = uniqueTodayTasks.map((task) => task.customerId as string);
     const customers = customerIds.length > 0
       ? await this.prisma.customer.findMany({
           where: { id: { in: customerIds } },
@@ -503,7 +536,7 @@ export class DashboardService {
         })
       : [];
     const nameMap = new Map(customers.map((c) => [c.id, c]));
-    const topPriorityTasks = todayTasks
+    const topPriorityTasks = uniqueTodayTasks
       .map((t) => ({
         taskId: t.id,
         customerId: t.customerId ?? '',

@@ -68,7 +68,7 @@ function sanitizeLegacyGpsPayload(endpoint: string, payload: any) {
 }
 
 export function SyncProvider({ children }: { children: ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, refreshUser } = useAuth();
   const [status, setStatus] = useState<SyncStatus>(INITIAL_STATUS);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const syncingRef = useRef(false);
@@ -162,6 +162,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         newDebt: data.newDebt ?? null,
       }, data.syncToken);
       await rescheduleOfflineReminders();
+      await refreshUser();
       const queue = await getMutationQueueStats();
       setStatus({
         phase: 'synced',
@@ -181,7 +182,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     } finally {
       syncingRef.current = false;
     }
-  }, [isAuthenticated, processQueue, syncGps]);
+  }, [isAuthenticated, processQueue, refreshUser, syncGps]);
 
   const retryBlocked = useCallback(async () => {
     await retryBlockedMutations();

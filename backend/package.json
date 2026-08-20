@@ -14,7 +14,12 @@
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
     "prisma:generate": "prisma generate --schema=../prisma/schema.prisma",
     "prisma:migrate": "prisma migrate deploy --schema=../prisma/schema.prisma",
-    "prisma:seed": "node ../prisma/seed.js"
+    "prisma:seed": "node ../prisma/seed.js",
+    "oracle:inventory:sync": "ts-node src/oracle-inventory-sync/oracle-inventory-sync.cli.ts",
+    "oracle:inventory:publication": "ts-node src/oracle-inventory-sync/oracle-inventory-publication.cli.ts",
+    "oracle:customers:sync": "ts-node src/oracle-customer-sync/oracle-customer-sync.cli.ts",
+    "oracle:movements:sync": "ts-node src/oracle-movement-sync/oracle-movement-sync.cli.ts",
+    "oracle:movements:publication": "ts-node src/oracle-movement-sync/oracle-movement-auto-publication.cli.ts"
   },
   "dependencies": {
     "@fontsource/noto-sans-arabic": "^5.3.0",

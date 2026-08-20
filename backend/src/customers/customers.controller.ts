@@ -21,6 +21,8 @@ import { StatementQueryDto } from './dto/statement-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
 import { UpdateCreditLimitDto } from './dto/update-credit-limit.dto';
+import { CreateFinancialAdjustmentRequestDto } from './dto/create-financial-adjustment-request.dto';
+import { ReviewFinancialAdjustmentRequestDto } from './dto/review-financial-adjustment-request.dto';
 import { CustomersService } from './customers.service';
 
 @ApiTags('Customers')
@@ -79,6 +81,23 @@ export class CustomersController {
     return this.customers.creditControl(user, Number(page ?? 1), Number(limit ?? 25), search, missingOnly === 'true');
   }
 
+  @Get('financial-adjustment-requests')
+  @RequirePermissions('customers.write')
+  listFinancialAdjustmentRequests(@CurrentUser() user: AuthUser, @Query('status') status?: string) {
+    return this.customers.listFinancialAdjustmentRequests(user, status ?? 'pending');
+  }
+
+  @Patch('financial-adjustment-requests/:requestId')
+  @RequirePermissions('customers.write')
+  reviewFinancialAdjustmentRequest(
+    @CurrentUser() user: AuthUser,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+    @Body() dto: ReviewFinancialAdjustmentRequestDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.reviewFinancialAdjustmentRequest(user, requestId, dto, req);
+  }
+
   @Patch('duplicates/:pairId')
   @RequirePermissions('duplicates.review')
   @ApiOperation({ summary: 'اعتماد قرار مراجعة حالة تشابه' })
@@ -122,6 +141,18 @@ export class CustomersController {
   @ApiOperation({ summary: 'Customer 360: البيانات + الأرصدة + الإسناد + السياسة + العدادات' })
   find360(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.customers.find360(user, id);
+  }
+
+  @Post(':id/financial-adjustment-requests')
+  @Idempotent()
+  @RequirePermissions('customers.read')
+  createFinancialAdjustmentRequest(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateFinancialAdjustmentRequestDto,
+    @Req() req: Request,
+  ) {
+    return this.customers.createFinancialAdjustmentRequest(user, id, dto, req);
   }
 
   @Get(':id/account-group')
@@ -211,6 +242,13 @@ export class CustomersController {
   @ApiOperation({ summary: 'أرصدة العميل حسب العملة: المحاسبي + التشغيلي المشتق' })
   balances(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.customers.balances(user, id);
+  }
+
+  @Get(':id/media')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'صور إيصالات العميل ومواقع التحصيل ضمن نطاق الصلاحية' })
+  media(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.customers.media(user, id);
   }
 
   @Get(':id/statement')

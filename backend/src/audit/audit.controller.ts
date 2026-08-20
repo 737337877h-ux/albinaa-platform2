@@ -23,6 +23,9 @@ export class AuditController {
     if (q.entityTable) where.entityTable = q.entityTable;
     if (q.entityId) where.entityId = q.entityId;
     if (q.userId) where.userId = q.userId;
+    if (q.userSearch?.trim()) {
+      where.user = { fullName: { contains: q.userSearch.trim(), mode: 'insensitive' } };
+    }
     if (q.from || q.to) {
       where.createdAt = {};
       if (q.from) where.createdAt.gte = new Date(q.from);

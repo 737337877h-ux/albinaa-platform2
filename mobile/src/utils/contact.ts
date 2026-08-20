@@ -20,3 +20,15 @@ export function contactLinks(phone?: string | null) {
     whatsapp: `https://wa.me/${normalized}`,
   };
 }
+
+export function uniqueContactNumbers(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = normalizePhone(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(value!.trim());
+  }
+  return result;
+}

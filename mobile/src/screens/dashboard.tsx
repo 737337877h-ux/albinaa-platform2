@@ -8,37 +8,49 @@ import { useAuth } from '../store/auth-context';
 import { useSync } from '../store/sync-context';
 import { getAll, getMeta } from '../db/database';
 import { colors, radius, shadow } from '../theme';
-import { formatBalance, largestDebtorBalance, totalDebtorBalance, totalsByCurrency } from '../utils/customer';
+import { formatBalance, largestActionableDebtorBalance, totalActionableDebtorBalance, totalsByCurrency } from '../utils/customer';
+import { canUseMobileFeature } from '../utils/mobile-permissions';
 import brandImage from '../../assets/alraqi-header-flat-approved.png';
+import { collapseTasksByCustomer } from '../utils/tasks';
 
 export default function DashboardScreen({ navigation }: any) {
   const { user } = useAuth();
   const { status, triggerSync } = useSync();
-  const [data, setData] = React.useState<{ tasks: any[]; collections: any[]; customers: any[]; followups: any[]; newDebt: any | null }>({ tasks: [], collections: [], customers: [], followups: [], newDebt: null });
+  const [data, setData] = React.useState<{ tasks: any[]; collections: any[]; customers: any[]; followups: any[]; promises: any[]; newDebt: any | null }>({ tasks: [], collections: [], customers: [], followups: [], promises: [], newDebt: null });
 
   const load = React.useCallback(async () => {
-    const [tasks, collections, customers, followups, newDebtJson] = await Promise.all([
-      getAll('tasks'), getAll('collections'), getAll('customers'), getAll('followups'), getMeta('newDebt'),
+    const [tasks, collections, customers, followups, promises, newDebtJson] = await Promise.all([
+      getAll('tasks'), getAll('collections'), getAll('customers'), getAll('followups'), getAll('promises'), getMeta('newDebt'),
     ]);
     let newDebt = null;
     try { newDebt = newDebtJson ? JSON.parse(newDebtJson) : null; } catch { /* keep unavailable */ }
-    setData({ tasks, collections, customers, followups, newDebt });
+    setData({ tasks, collections, customers, followups, promises, newDebt });
   }, []);
 
   useFocusEffect(React.useCallback(() => { load(); }, [load]));
   const today = localDateKey(new Date());
   const customerAccounts = data.customers.filter((c) => c.customerType !== 'advance');
   const advances = data.customers.filter((c) => c.customerType === 'advance');
-  const todayTasks = data.tasks.filter((task) => String(task.dueDate || '').slice(0, 10) === today && task.status !== 'completed');
-  const overdue = data.tasks.filter((task) => task.dueDate && String(task.dueDate).slice(0, 10) < today && task.status !== 'completed');
+  const todayTasks = collapseTasksByCustomer(data.tasks.filter((task) => String(task.dueDate || '').slice(0, 10) === today && task.status !== 'completed'));
+  const overdue = collapseTasksByCustomer(data.tasks.filter((task) => task.dueDate && String(task.dueDate).slice(0, 10) < today && task.status !== 'completed'));
   const todayCollections = data.collections.filter((item) => item.collectedAt && localDateKey(new Date(item.collectedAt)) === today);
+  const activePromises = data.promises.filter((item) => {
+    const statusValue = String(item.status || '').toLowerCase();
+    return !['fulfilled', 'paid', 'cancelled', 'done'].includes(statusValue)
+      && !!item.dueDate && String(item.dueDate).slice(0, 10) <= today;
+  });
   // Match the web dashboard definition of debt: positive debtor balances only.
   // Customer credit balances are reported separately and do not reduce debt.
   const customerTotals = totalsByCurrency(customerAccounts, true);
   const advanceTotals = totalsByCurrency(advances);
   const priorities = [...customerAccounts, ...advances]
-    .filter((account) => totalDebtorBalance(account.balances) > 0.001)
-    .sort((a, b) => totalDebtorBalance(b.balances) - totalDebtorBalance(a.balances)).slice(0, 5);
+    .filter((account) => totalActionableDebtorBalance(account.balances) > 0)
+    .sort((a, b) => totalActionableDebtorBalance(b.balances) - totalActionableDebtorBalance(a.balances)).slice(0, 5);
+  const permissions = user?.permissions ?? [];
+  const canViewTasks = canUseMobileFeature(permissions, 'mobile.tasks.view', 'tasks.manage');
+  const canViewCollections = canUseMobileFeature(permissions, 'mobile.collections.view', 'collections.create');
+  const canViewPromises = canUseMobileFeature(permissions, 'mobile.promises.view', 'promises.create');
+  const canViewInventory = canUseMobileFeature(permissions, 'mobile.inventory.view', 'reports.read');
 
   return (
     <ScrollView
@@ -66,10 +78,11 @@ export default function DashboardScreen({ navigation }: any) {
       </View>
 
       <View style={styles.quickGrid}>
-        <Metric icon="checkbox-outline" label="مهام اليوم" value={todayTasks.length} tone="green" onPress={() => navigation.navigate('Tasks')} />
-        <Metric icon="alert-circle-outline" label="متأخرة" value={overdue.length} tone="red" onPress={() => navigation.navigate('Tasks')} />
-        <Metric icon="cash-outline" label="تحصيلات اليوم" value={todayCollections.length} tone="gold" onPress={() => navigation.navigate('CollectionsList')} />
-        <Metric icon="cloud-upload-outline" label="بانتظار المزامنة" value={status.pending} tone="neutral" onPress={() => navigation.navigate('Settings')} />
+        {canViewTasks && <Metric icon="checkbox-outline" label="مهام اليوم" value={todayTasks.length} tone="green" onPress={() => navigation.navigate('Tasks', { initialFilter: 'today' })} />}
+        {canViewTasks && <Metric icon="alert-circle-outline" label="متأخرة" value={overdue.length} tone="red" onPress={() => navigation.navigate('Tasks', { initialFilter: 'overdue' })} />}
+        {canViewCollections && <Metric icon="cash-outline" label="تحصيلات اليوم" value={todayCollections.length} tone="gold" onPress={() => navigation.navigate('CollectionsList')} />}
+        {canViewPromises && <Metric icon="calendar-outline" label="وعود السداد" value={activePromises.length} tone="neutral" onPress={() => navigation.navigate('PromisesList')} />}
+        {canViewInventory && <Metric icon="cube-outline" label="المخزون" value="عرض" tone="green" onPress={() => navigation.navigate('Inventory')} />}
       </View>
 
       <SectionHeader title="محفظة المديونية" subtitle="الأرصدة حسب العملة ونوع الحساب" />
@@ -81,7 +94,7 @@ export default function DashboardScreen({ navigation }: any) {
       <NewDebtCard value={data.newDebt} />
 
       <SectionHeader title="أولوية التواصل" subtitle="أعلى الحسابات رصيداً في نطاق إسنادك" />
-      <View style={styles.debtorRule}><Ionicons name="filter-circle" size={16} color={colors.primary} /><Text style={styles.debtorRuleText}>الحسابات المدينة فقط · الصافي والدائن مستبعدان</Text></View>
+      <View style={styles.debtorRule}><Ionicons name="filter-circle" size={16} color={colors.primary} /><Text style={styles.debtorRuleText}>يستبعد الصافي والدائن وحتى 3,000 YER · 30 SAR · 5 USD</Text></View>
       <View style={styles.priorityCard}>
         {priorities.length === 0 ? <Text style={styles.empty}>لا توجد حسابات مدينة حالياً</Text> : priorities.map((account, index) => (
           <TouchableOpacity
@@ -110,7 +123,7 @@ function Metric({ icon, label, value, tone, onPress }: any) {
   return (
     <TouchableOpacity style={styles.metric} onPress={onPress}>
       <View style={[styles.metricIcon, { backgroundColor: `${toneStyle[tone]}16` }]}><Ionicons name={icon} size={21} color={toneStyle[tone]} /></View>
-      <Text style={styles.metricValue}>{Number(value).toLocaleString('en-US')}</Text>
+      <Text style={styles.metricValue}>{typeof value === 'number' ? value.toLocaleString('en-US') : value}</Text>
       <Text style={styles.metricLabel}>{label}</Text>
     </TouchableOpacity>
   );
@@ -134,7 +147,7 @@ function BalanceSummary({ title, count, totals, icon, onPress }: any) {
 }
 
 function BalanceCompact({ balances }: { balances: unknown }) {
-  const value = largestDebtorBalance(balances);
+  const value = largestActionableDebtorBalance(balances);
   if (!value) return <Text style={styles.net}>صافي</Text>;
   return <View style={styles.compact}><Text style={styles.compactAmount}>{formatBalance(Number(value.balance ?? value.accountingBalance ?? 0))}</Text><Text style={styles.compactCurrency}>{value.currency || value.currencyCode}</Text></View>;
 }

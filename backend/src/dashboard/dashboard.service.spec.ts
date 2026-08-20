@@ -1,4 +1,4 @@
-import { findComparablePreviousImport, summarizeDebtChange } from './dashboard.service';
+import { findComparablePreviousImport, findLatestComparableImportPair, summarizeDebtChange } from './dashboard.service';
 
 const importedAt = new Date('2026-08-10T00:00:00Z');
 const snap = (customerId: string, currencyCode: string, balance: number) =>
@@ -70,5 +70,22 @@ describe('dashboard debt change comparison', () => {
     };
 
     expect(findComparablePreviousImport(latest, [unrelated])).toBeNull();
+  });
+
+  it('excludes newer partial correction batches from the homogeneous pair', () => {
+    const partialNew = { id: 'partial-new', importedAt, fileName: 'delta.csv', snapshots: [snap('a', 'YER', 9)] };
+    const partialOld = { id: 'partial-old', importedAt, fileName: 'correction.csv', snapshots: [snap('a', 'YER', 8)] };
+    const fullNew = {
+      id: 'full-new', importedAt, fileName: 'customers-new.xlsx',
+      snapshots: [snap('a', 'YER', 10), snap('b', 'YER', 20), snap('c', 'YER', 30), snap('d', 'YER', 40)],
+    };
+    const fullOld = {
+      id: 'full-old', importedAt, fileName: 'customers-old.xlsx',
+      snapshots: [snap('a', 'YER', 8), snap('b', 'YER', 19), snap('c', 'YER', 28), snap('d', 'YER', 40)],
+    };
+
+    const pair = findLatestComparableImportPair([partialNew, partialOld, fullNew, fullOld]);
+    expect(pair.latest?.id).toBe('full-new');
+    expect(pair.previous?.id).toBe('full-old');
   });
 });

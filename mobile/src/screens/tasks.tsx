@@ -6,12 +6,30 @@ import { useSync } from '../store/sync-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, shadow } from '../theme';
 import { displayDateFromIso, taskLabel } from '../utils/date-input';
+import { collapseTasksByCustomer } from '../utils/tasks';
+import { useAuth } from '../store/auth-context';
+import { canUseMobileFeature } from '../utils/mobile-permissions';
 
-export default function TasksScreen({ navigation }: any) {
+type TaskFilter = 'today' | 'overdue' | 'stored';
+
+const FILTER_LABELS: Record<TaskFilter, string> = {
+  today: 'اليوم', overdue: 'متأخرة', stored: 'المخزنة',
+};
+
+export default function TasksScreen({ navigation, route }: any) {
   const [localTasks, setLocalTasks] = React.useState<any[]>([]);
   const [refreshing, setRefreshing] = React.useState(false);
   const [search, setSearch] = React.useState('');
+  const [filter, setFilter] = React.useState<TaskFilter>(route?.params?.initialFilter ?? 'today');
   const { triggerSync } = useSync();
+  const { user } = useAuth();
+  const canCreate = canUseMobileFeature(user?.permissions, 'mobile.tasks.create', 'tasks.manage');
+  const focusedTaskId = route?.params?.taskId ? String(route.params.taskId) : null;
+
+  React.useEffect(() => {
+    const requested = route?.params?.initialFilter;
+    if (requested && ['today', 'overdue', 'stored'].includes(requested)) setFilter(requested);
+  }, [route?.params?.initialFilter]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -22,18 +40,21 @@ export default function TasksScreen({ navigation }: any) {
   const query = search.trim().toLowerCase();
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const tasks = localTasks.filter((item) => {
+  const tasks = collapseTasksByCustomer(localTasks.filter((item) => {
     if (!['open', 'pending', '', null, undefined].includes(item.status)) return false;
-    if (item.dueDate && String(item.dueDate).slice(0, 10) > today) return false;
+    const due = item.dueDate ? String(item.dueDate).slice(0, 10) : '';
+    if (filter === 'today' && due !== today) return false;
+    if (filter === 'overdue' && (!due || due >= today)) return false;
+    if (filter === 'stored' && (!due || due <= today)) return false;
     if (!query) return true;
     return [item.customer?.name, item.customerName, item.title, item.priorityReason, item.taskType]
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query));
-  });
+  }), focusedTaskId).sort((a, b) => Number(String(b.id) === focusedTaskId) - Number(String(a.id) === focusedTaskId));
 
   const renderTask = ({ item }: { item: any }) => (
     <TouchableOpacity
-      style={styles.taskItem}
+      style={[styles.taskItem, String(item.id) === focusedTaskId && styles.focusedTask]}
       onPress={() => item.customerId && navigation.navigate('Customer360', { id: item.customerId })}
     >
       <View style={styles.taskIcon}><Ionicons name={String(item.taskType).toLowerCase() === 'visit' ? 'location-outline' : 'call-outline'} size={21} color={colors.gold} /></View>
@@ -62,9 +83,9 @@ export default function TasksScreen({ navigation }: any) {
           <Text style={styles.eyebrow}>الراقي</Text><Text style={styles.title}>المهام</Text>
           <Text style={styles.subtitle}>الإجمالي: {tasks.length}</Text>
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('NewTask')}>
+        {canCreate && <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('NewTask')}>
           <Ionicons name="add" size={17} color={colors.primary} /><Text style={styles.addBtnText}>مهمة</Text>
-        </TouchableOpacity>
+        </TouchableOpacity>}
       </View>
       <View style={styles.searchWrap}>
         <Ionicons name="search-outline" size={20} color={colors.muted} />
@@ -79,14 +100,25 @@ export default function TasksScreen({ navigation }: any) {
         />
         {!!search && <TouchableOpacity onPress={() => setSearch('')}><Ionicons name="close-circle" size={20} color={colors.muted} /></TouchableOpacity>}
       </View>
+      <View style={styles.filters}>
+        {(Object.keys(FILTER_LABELS) as TaskFilter[]).map((value) => (
+          <TouchableOpacity
+            key={value}
+            style={[styles.filterButton, filter === value && styles.filterButtonActive]}
+            onPress={() => setFilter(value)}
+          >
+            <Text style={[styles.filterText, filter === value && styles.filterTextActive]}>{FILTER_LABELS[value]}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
       <FlatList
           data={tasks}
           keyExtractor={(item) => item.id}
           renderItem={renderTask}
           contentContainerStyle={tasks.length === 0 ? styles.empty : undefined}
           ListEmptyComponent={
-            <TouchableOpacity onPress={() => navigation.navigate('NewTask')}>
-              <Text style={styles.emptyText}>لا توجد مهام — اضغط هنا لإنشاء مهمة</Text>
+            <TouchableOpacity disabled={!canCreate} onPress={() => navigation.navigate('NewTask')}>
+              <Text style={styles.emptyText}>لا توجد مهام في تبويب «{FILTER_LABELS[filter]}»{canCreate ? ' — اضغط هنا لإنشاء مهمة' : ''}</Text>
             </TouchableOpacity>
           }
           refreshing={refreshing}
@@ -111,7 +143,13 @@ const styles = StyleSheet.create({
   addBtnText: { color: colors.primary, fontWeight: '900' },
   searchWrap: { marginHorizontal: 14, marginTop: 12, paddingHorizontal: 13, minHeight: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: 'row-reverse', alignItems: 'center', gap: 8, ...shadow },
   searchInput: { flex: 1, color: colors.ink, fontSize: 14, paddingVertical: 10 },
+  filters: { flexDirection: 'row-reverse', gap: 7, marginHorizontal: 14, marginTop: 10 },
+  filterButton: { flex: 1, minHeight: 40, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
+  filterButtonActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  filterText: { color: colors.muted, fontSize: 12, fontWeight: '800' },
+  filterTextActive: { color: '#fff' },
   taskItem: { backgroundColor: colors.surface, marginHorizontal: 14, marginTop: 10, padding: 14, borderRadius: radius.md, flexDirection: 'row-reverse', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: colors.line, ...shadow },
+  focusedTask: { borderColor: colors.gold, borderWidth: 2, backgroundColor: colors.goldSoft },
   taskIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: colors.goldSoft, alignItems: 'center', justifyContent: 'center' },
   taskName: { fontSize: 15, color: colors.ink, fontWeight: '800', textAlign: 'right' },
   taskReason: { fontSize: 12, color: colors.muted, marginTop: 4, textAlign: 'right' },

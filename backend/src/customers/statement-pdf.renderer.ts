@@ -9,7 +9,6 @@ export interface StatementPdfCustomer {
   externalCustomerCode: string;
   organization: { name: string; systemSettings?: { key: string; value: unknown }[] };
 }
-
 export interface StatementPdfSummary {
   periodStartBalance: number;
   periodEndBalance: number;
@@ -35,7 +34,6 @@ export interface StatementPdfOptions {
   printedBy?: string;
 }
 
-const LEFT = 18;
 
 function fmt(value: number, decimals = 2): string {
   return value.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -147,20 +145,27 @@ function drawConfiguredLogo(
   }
 }
 
-function drawPageNumber(document: PDFKit.PDFDocument) {
+function drawPageNumber(document: PDFKit.PDFDocument, printedBy = 'مدير النظام') {
   const pages = document.bufferedPageRange();
   for (let index = pages.start; index < pages.start + pages.count; index += 1) {
     document.switchToPage(index);
+    document.moveTo(18, 798).lineTo(577, 798).lineWidth(0.45).stroke('#111111');
     document.font('Arabic').fontSize(6.5).fillColor('#111111');
     document.font('Latin').text(`${index + 1} / ${pages.count}`, 250, 806, {
       width: 95, height: 10, align: 'center', lineBreak: false,
     });
+    const printer = pdfText(printedBy || 'مدير النظام');
     document.font('Arabic');
-    arabic(document, 'طبع بواسطة: مدير النظام', LEFT, 806, {
-      width: 180, height: 10, align: 'left', lineBreak: false,
+    arabic(document, 'طبع بواسطة:', 88, 806, {
+      width: 80, height: 10, align: 'left', lineBreak: false,
     });
-    arabic(document, 'تاريخ التقرير:', 468, 806, { width: 107, height: 10, align: 'right', lineBreak: false });
-    document.font('Latin').text(dateText(new Date()), 390, 806, { width: 78, height: 10, align: 'right', lineBreak: false });
+    document.fontSize(6.5);
+    tableText(document, printer, 18, 806, {
+      width: 68, height: 10, align: 'left', lineBreak: false, ellipsis: '...',
+    });
+    document.font('Arabic');
+    arabic(document, 'تاريخ التقرير:', 489, 806, { width: 84, height: 10, align: 'right', lineBreak: false });
+    document.font('Latin').text(dateTimeText(new Date()), 386, 806, { width: 101, height: 10, align: 'right', lineBreak: false });
   }
 }
 
@@ -375,59 +380,193 @@ function drawBrandMark(document: PDFKit.PDFDocument, x: number, y: number) {
   document.restore();
 }
 
+function drawLegacyStatementLogo(
+  document: PDFKit.PDFDocument,
+  customer: StatementPdfCustomer,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  try {
+    document.image(path.resolve(__dirname, '../../assets/branding/statement-logo.jpg'), x, y, {
+      fit: [width, height], align: 'center', valign: 'center',
+    });
+    return;
+  } catch {
+    // Fall back to the configured logo when the legacy report asset is absent.
+  }
+  if (!drawConfiguredLogo(document, customer, x, y, width, height)) {
+    drawBrandMark(document, x + Math.max(0, (width - 42) / 2), y + Math.max(0, (height - 34) / 2));
+  }
+}
+
+function currencyArabicName(currency: string): string {
+  if (currency === 'YER') return 'ريال يمني';
+  if (currency === 'SAR') return 'ريال سعودي';
+  if (currency === 'USD') return 'دولار أمريكي';
+  return currency;
+}
+
 function drawBrandedHeader(
   document: PDFKit.PDFDocument,
   customer: StatementPdfCustomer,
   options: StatementPdfOptions,
 ) {
   const brand = resolveBranding(customer.organization.name, customer.organization.systemSettings);
-  document.roundedRect(18, 22, 559, 104, 9).lineWidth(1.5).stroke('#111111');
-  document.font('LatinBold').fontSize(8).fillColor('#111111');
-  document.text('Al-Bena Al-Raqi For Gen. Trading', 28, 28, { width: 205, align: 'left' });
-  document.font('Latin').fontSize(6.8);
-  document.text('Reinforcement Steel - Building Materials\n& Electricity Sanitary Wares\nSana’a - Yemen', 28, 43, { width: 205, align: 'left' });
-  document.font('ArabicBold').fontSize(9);
-  arabic(document, brand.name, 365, 29, { width: 198, align: 'right' });
-  document.font('Arabic').fontSize(7);
-  arabic(document, [brand.subtitle, brand.address].filter(Boolean).join('\n'), 365, 46, { width: 198, align: 'right' });
-  if (brand.phone) document.font('Latin').fontSize(7).text(brand.phone, 365, 91, { width: 198, align: 'right' });
-  if (!drawConfiguredLogo(document, customer, 260, 29, 72, 38)) drawBrandMark(document, 276, 30);
-  document.font('ArabicBold').fontSize(9);
-  arabic(document, brand.name, 240, 67, { width: 115, align: 'center' });
-  document.font('ArabicBold').fontSize(9.5);
-  arabic(document, `${brand.statementTitle} تحليلي قبل الترحيل - رصيد بعد كل عملية`, 145, 78, {
-    width: 305, height: 25, align: 'center',
+  const phone = brand.phone || '695988 - 695989';
+  document.roundedRect(28, 4, 559, 103, 10).lineWidth(1.35).stroke('#111111');
+
+  // Match the Oracle printout: company identity only, without the platform name.
+  document.font('LatinBold').fontSize(8.1).fillColor('#111111');
+  document.text('Al-Bena Al-Raqi For Gen. Trading - 1', 34, 10, {
+    width: 217, height: 12, align: 'left', lineBreak: false,
   });
+  document.fontSize(8);
+  document.text('Reinforcement Steel - Building Materials\n& Electricity Sanitary Wares', 34, 24, {
+    width: 217, height: 28, lineGap: 1, align: 'left',
+  });
+  document.fontSize(7.4);
+  document.text("Sana'a - Hezyis - Near to\nAl-Wahda Marketing", 34, 53, {
+    width: 217, height: 27, lineGap: 1, align: 'left',
+  });
+  document.text(`Tel.:${phone}`, 34, 84, { width: 217, height: 11, align: 'left', lineBreak: false });
+
+  document.font('ArabicBold').fontSize(8.2);
+  arabic(document, 'البناء الراقي للتجارة العامة - المركز الرئيسي', 365, 10, {
+    width: 213, height: 13, align: 'right', lineBreak: false,
+  });
+  arabic(document, 'حديد - مواد بناء و كهرباء - مواد سباكة', 365, 25, {
+    width: 213, height: 13, align: 'right', lineBreak: false,
+  });
+  arabic(document, 'أدوات صحية', 365, 40, { width: 213, height: 12, align: 'right', lineBreak: false });
+  document.fontSize(7.4);
+  arabic(document, 'صنعاء - حزيز - جوار سوق الوحدة', 365, 56, {
+    width: 213, height: 12, align: 'right', lineBreak: false,
+  });
+  arabic(document, 'تلفون:', 535, 84, { width: 43, height: 11, align: 'right', lineBreak: false });
+  document.font('LatinBold').fontSize(7.4).text('695988 - 695989', 430, 84, {
+    width: 101, height: 11, align: 'right', lineBreak: false,
+  });
+
+  drawLegacyStatementLogo(document, customer, 270, 7, 58, 58);
+  document.font('ArabicBold').fontSize(8.7);
+  arabic(document, 'كشف حساب تحليلي قبل الترحيل - رصيد نهاية التقرير', 178, 67, {
+    width: 239, height: 15, align: 'center', lineBreak: false,
+  });
+
   const from = options.fromDate ? dateText(options.fromDate) : 'البداية';
   const to = options.toDate ? dateText(options.toDate) : dateText(new Date());
-  document.font('ArabicBold').fontSize(8);
-  arabic(document, 'من تاريخ', 348, 105, { width: 72, height: 14, align: 'right' });
-  boldText(document, from, 268, 105, { width: 78, height: 14, align: 'center' });
+  document.font('ArabicBold').fontSize(7.3);
+  arabic(document, 'من تاريخ:', 342, 87, { width: 70, height: 11, align: 'right', lineBreak: false });
+  boldText(document, from, 266, 87, { width: 74, height: 11, align: 'center', lineBreak: false });
   document.font('ArabicBold');
-  arabic(document, 'إلى تاريخ', 194, 105, { width: 72, height: 14, align: 'right' });
-  document.font('LatinBold').text(to, 114, 105, { width: 78, height: 14, align: 'center' });
+  arabic(document, 'إلى تاريخ:', 193, 87, { width: 68, height: 11, align: 'right', lineBreak: false });
+  document.font('LatinBold').text(to, 116, 87, { width: 74, height: 11, align: 'center', lineBreak: false });
 
-  document.font('ArabicBold').fontSize(8.5);
-  arabic(document, 'رقم الحساب', 470, 134, { width: 93, align: 'right' });
-  document.font('LatinBold').text(customer.externalCustomerCode, 375, 134, { width: 91, align: 'right' });
-  document.font('ArabicBold');
-  arabic(document, `الحساب التحليلي     ${customer.name}`, 285, 152, { width: 278, align: 'right' });
-  arabic(document, 'العملة', 142, 152, { width: 65, align: 'left' });
-  document.font('LatinBold').text(options.currency, 27, 152, { width: 110, align: 'left' });
+  // A single information band without boxes around each account field.
+  document.rect(32, 115, 555, 45).lineWidth(0.5).stroke('#222222');
+  document.font('ArabicBold').fontSize(7.4).fillColor('#111111');
+  arabic(document, 'رقم الحساب', 507, 119, { width: 64, height: 11, align: 'right', lineBreak: false });
+  document.font('LatinBold').fontSize(8.2).fillColor('#a00000').text('112101001', 433, 119, {
+    width: 69, height: 11, align: 'center', lineBreak: false,
+  });
+  document.font('ArabicBold').fontSize(7.4).fillColor('#111111');
+  arabic(document, 'الحساب التحليلي', 507, 134, { width: 64, height: 11, align: 'right', lineBreak: false });
+  document.font('LatinBold').fontSize(8.2).fillColor('#a00000').text(customer.externalCustomerCode, 433, 134, {
+    width: 69, height: 11, align: 'center', lineBreak: false,
+  });
+  document.font('ArabicBold').fontSize(7.2).fillColor('#111111');
+  arabic(document, 'عملاء الادارة العامة', 305, 119, { width: 110, height: 11, align: 'right', lineBreak: false });
+  arabic(document, customer.name, 270, 134, {
+    width: 145, height: 12, align: 'right', ellipsis: '...', lineBreak: false,
+  });
+  arabic(document, 'العملة :', 181, 146, { width: 55, height: 11, align: 'right', lineBreak: false });
+  document.font('LatinBold').fontSize(8.2).fillColor('#a00000').text(options.currency, 148, 146, {
+    width: 31, height: 11, align: 'center', lineBreak: false,
+  });
+  document.font('ArabicBold').fontSize(7.3).fillColor('#111111');
+  arabic(document, currencyArabicName(options.currency), 96, 146, {
+    width: 48, height: 11, align: 'right', lineBreak: false,
+  });
 }
 
-const BRAND_COLUMNS = [18, 67, 143, 183, 299, 430, 480, 529];
-const BRAND_WIDTHS = [49, 76, 40, 116, 131, 50, 49, 48];
-const BRAND_HEADERS = ['التاريخ', 'نوع المستند', 'رقم المستند', 'رقم المرجع', 'البيان', 'مدين', 'دائن', 'الرصيد'];
+// Physical order on the page is left-to-right, while the report reads right-to-left:
+// الرصيد ← المبلغ (دائن، مدين) ← المرجع ← البيان ← رقم المستند ← النوع ← التاريخ.
+const BRAND_COLUMNS = [32, 96, 162, 233, 287, 418, 457, 539];
+const BRAND_WIDTHS = [64, 66, 71, 54, 131, 39, 82, 48];
 
 function drawBrandedTableHeader(document: PDFKit.PDFDocument, y: number) {
-  document.rect(18, y, 559, 31).fillAndStroke('#c6e2f7', '#111111');
-  document.font('ArabicBold').fontSize(7).fillColor('#111111');
-  BRAND_HEADERS.forEach((label, index) => {
-    arabic(document, label, BRAND_COLUMNS[index] + 2, y + 9, { width: BRAND_WIDTHS[index] - 4, align: 'center' });
-    if (index > 0) document.moveTo(BRAND_COLUMNS[index], y).lineTo(BRAND_COLUMNS[index], y + 31).lineWidth(0.5).stroke('#111111');
+  const height = 31;
+  document.rect(32, y, 555, height).fillAndStroke('#b9d9f2', '#111111');
+  document.font('ArabicBold').fontSize(8).fillColor('#111111');
+
+  const fullHeaders = [
+    { label: 'الرصيد', index: 0 },
+    { label: 'رقم المرجع', index: 3 },
+    { label: 'البيان', index: 4 },
+    { label: 'نوع المستند', index: 6 },
+    { label: 'التاريخ', index: 7 },
+  ];
+  fullHeaders.forEach(({ label, index }) => {
+    document.font('ArabicBold').fontSize(8);
+    arabic(document, label, BRAND_COLUMNS[index] + 2, y + 8, {
+      width: BRAND_WIDTHS[index] - 4, height: 20, align: 'center', lineBreak: true,
+    });
   });
-  return y + 31;
+
+  document.font('ArabicBold').fontSize(6.8);
+  arabic(document, 'رقم', BRAND_COLUMNS[5] + 2, y + 3, {
+    width: BRAND_WIDTHS[5] - 4, height: 11, align: 'center', lineBreak: false,
+  });
+  arabic(document, 'المستند', BRAND_COLUMNS[5] + 2, y + 16, {
+    width: BRAND_WIDTHS[5] - 4, height: 11, align: 'center', lineBreak: false,
+  });
+
+  document.font('ArabicBold').fontSize(8);
+  arabic(document, 'المبلغ', BRAND_COLUMNS[1] + 2, y + 1, {
+    width: BRAND_WIDTHS[1] + BRAND_WIDTHS[2] - 4, height: 12, align: 'center', lineBreak: false,
+  });
+  document.moveTo(BRAND_COLUMNS[1], y + 14).lineTo(BRAND_COLUMNS[3], y + 14).lineWidth(0.45).stroke('#111111');
+  arabic(document, 'دائن', BRAND_COLUMNS[1] + 2, y + 16, { width: BRAND_WIDTHS[1] - 4, height: 12, align: 'center', lineBreak: false });
+  arabic(document, 'مدين', BRAND_COLUMNS[2] + 2, y + 16, { width: BRAND_WIDTHS[2] - 4, height: 12, align: 'center', lineBreak: false });
+
+  for (let index = 1; index < BRAND_COLUMNS.length; index += 1) {
+    const lineTop = index === 2 ? y + 14 : y;
+    document.moveTo(BRAND_COLUMNS[index], lineTop).lineTo(BRAND_COLUMNS[index], y + height)
+      .lineWidth(0.45).stroke('#111111');
+  }
+  return y + height;
+}
+
+function drawBrandedRow(
+  document: PDFKit.PDFDocument,
+  values: string[],
+  y: number,
+  height: number,
+  opening = false,
+) {
+  document.rect(32, y, 555, height).lineWidth(0.32).stroke('#333333');
+  values.forEach((value, index) => {
+    if (index > 0) {
+      document.moveTo(BRAND_COLUMNS[index], y).lineTo(BRAND_COLUMNS[index], y + height)
+        .lineWidth(0.32).stroke('#333333');
+    }
+    document.fontSize(index === 4 ? 7.1 : 6.9).fillColor(opening && index === 4 ? '#9b111e' : '#111111');
+    if (opening && index === 4) document.font('ArabicBold');
+    const align = [0, 1, 2].includes(index) ? 'right' : [4, 6].includes(index) ? 'right' : 'center';
+    tableText(document, value, BRAND_COLUMNS[index] + 2, y + 2, {
+      width: BRAND_WIDTHS[index] - 4,
+      height: height - 3,
+      // Constrain every cell to its calculated row box. Without ellipsis on
+      // long Arabic descriptions PDFKit can flow the remainder onto a new,
+      // unbranded continuation page.
+      ellipsis: '...',
+      align,
+      lineGap: 0,
+    });
+  });
+  return y + height;
 }
 
 async function renderBranded(
@@ -441,57 +580,102 @@ async function renderBranded(
   registerFonts(document);
   const completed = collect(document);
   drawBrandedHeader(document, customer, options);
-  let y = drawBrandedTableHeader(document, 176);
+  let y = drawBrandedTableHeader(document, 160);
   let debitTotal = 0;
   let creditTotal = 0;
+
+  y = drawBrandedRow(document, [
+    fmt(summary.periodStartBalance), '', '', '', 'الرصيد الافتتاحي', '', '',
+    options.fromDate ? dateText(options.fromDate) : (rows[0]?.date ? dateText(rows[0].date) : '-'),
+  ], y, 15, true);
+
   for (const row of rows) {
-    if (y > 720) {
+    document.font('Arabic').fontSize(7.1);
+    const descriptionHeight = document.heightOfString(pdfText(row.description || '-'), {
+      width: BRAND_WIDTHS[4] - 6,
+      features: ['rtla'],
+      lineGap: 0,
+    });
+    const typeHeight = document.heightOfString(pdfText(row.documentType || '-'), {
+      width: BRAND_WIDTHS[6] - 6,
+      features: ['rtla'],
+      lineGap: 0,
+    });
+    const height = Math.min(28, Math.max(15, descriptionHeight + 4, typeHeight + 4));
+    // Leave enough space for PDFKit's line layout so it never auto-creates a
+    // continuation page without the branded header and column headings.
+    if (y + height > 755) {
       document.addPage();
       drawBrandedHeader(document, customer, options);
-      y = drawBrandedTableHeader(document, 176);
+      y = drawBrandedTableHeader(document, 160);
     }
-    document.font('Arabic').fontSize(6.4);
-    const height = Math.min(40, Math.max(20, document.heightOfString(row.description || '-', { width: BRAND_WIDTHS[4] - 6 }) + 7));
     debitTotal += row.debit;
     creditTotal += row.credit;
-    const values = [dateText(row.date), row.documentType || '-', row.documentNumber || '-', row.reference || '-', row.description || '-', row.debit ? fmt(row.debit) : '', row.credit ? fmt(row.credit) : '', fmt(row.runningBalance)];
-    document.rect(18, y, 559, height).lineWidth(0.35).stroke('#333333');
-    document.font('Arabic').fontSize(6.4).fillColor('#111111');
-    values.forEach((value, index) => {
-      if (index > 0) document.moveTo(BRAND_COLUMNS[index], y).lineTo(BRAND_COLUMNS[index], y + height).stroke('#333333');
-      tableText(document, value, BRAND_COLUMNS[index] + 2, y + 4, {
-        width: BRAND_WIDTHS[index] - 4,
-        height: height - 6,
-        ellipsis: index !== 4,
-        align: index === 4 ? 'right' : 'center',
-      });
-    });
-    y += height;
+    y = drawBrandedRow(document, [
+      fmt(row.runningBalance),
+      row.credit ? fmt(row.credit) : '',
+      row.debit ? fmt(row.debit) : '',
+      row.reference || '',
+      row.description || '-',
+      row.documentNumber || '-',
+      row.documentType || '-',
+      dateText(row.date),
+    ], y, height);
   }
-  if (y > 672) {
+
+  if (y + 105 > 755) {
     document.addPage();
     drawBrandedHeader(document, customer, options);
-    y = drawBrandedTableHeader(document, 176);
+    y = drawBrandedTableHeader(document, 160);
   }
-  document.font('ArabicBold').fontSize(8).fillColor('#8b0000');
-  arabic(document, 'إجمالي العمليات', 300, y + 5, { width: 125, align: 'right' });
-  document.font('LatinBold').text(`${rows.length} ${options.currency}`, 230, y + 5, { width: 68, align: 'right' });
-  document.text(fmt(debitTotal), 430, y + 5, { width: 50, align: 'center' });
-  document.text(fmt(creditTotal), 480, y + 5, { width: 49, align: 'center' });
-  document.moveTo(18, y).lineTo(577, y).lineWidth(0.7).stroke('#111111');
-  document.moveTo(18, y + 22).lineTo(577, y + 22).stroke('#111111');
-  document.fillColor('#111111').font('ArabicBold').fontSize(8.5);
-  arabic(document, `إجمالي الرصيد ${summary.periodEndBalance >= 0 ? 'عليكم' : 'لكم'}`, 445, y + 30, { width: 120, align: 'right' });
-  document.fillColor('#8b0000').font('LatinBold').text(fmt(Math.abs(summary.periodEndBalance)), 320, y + 29, { width: 120, align: 'center' });
-  document.fillColor('#111111').font('ArabicBold').fontSize(7.5);
-  arabic(document, brand.statementFooter, 45, y + 55, { width: 520, align: 'right' });
-  const sigY = Math.min(y + 82, 760);
-  ['المحاسب', 'المراجع', 'المدير المالي', 'المدير العام'].forEach((label, index) => {
-    const x = 25 + index * 137;
-    arabic(document, label, x, sigY, { width: 110, align: 'center' });
-    document.moveTo(x + 8, sigY + 24).lineTo(x + 102, sigY + 24).lineWidth(0.4).stroke('#111111');
+
+  const totalsY = y;
+  document.rect(32, totalsY, 555, 16).lineWidth(0.6).stroke('#111111');
+  BRAND_COLUMNS.slice(1).forEach((x) => {
+    document.moveTo(x, totalsY).lineTo(x, totalsY + 16).lineWidth(0.32).stroke('#333333');
   });
-  drawPageNumber(document);
+  document.font('ArabicBold').fontSize(7.4).fillColor('#9b111e');
+  arabic(document, 'العدد:', BRAND_COLUMNS[7] + 2, totalsY + 3, { width: BRAND_WIDTHS[7] - 4, align: 'center' });
+  document.font('LatinBold').fontSize(7.7).text(String(rows.length), BRAND_COLUMNS[6] + 2, totalsY + 3, {
+    width: BRAND_WIDTHS[6] - 4, align: 'center', lineBreak: false,
+  });
+  document.font('ArabicBold').fontSize(7.4);
+  arabic(document, 'إجمالي العمليات', BRAND_COLUMNS[4] + 2, totalsY + 3, {
+    width: BRAND_WIDTHS[4] + BRAND_WIDTHS[5] - 4, align: 'center', lineBreak: false,
+  });
+  document.font('LatinBold').fontSize(7.4).text(options.currency, BRAND_COLUMNS[3] + 2, totalsY + 3, {
+    width: BRAND_WIDTHS[3] - 4, align: 'center', lineBreak: false,
+  });
+  document.font('LatinBold').fontSize(7.4);
+  document.text(fmt(creditTotal), BRAND_COLUMNS[1] + 2, totalsY + 3, { width: BRAND_WIDTHS[1] - 4, align: 'right', lineBreak: false });
+  document.text(fmt(debitTotal), BRAND_COLUMNS[2] + 2, totalsY + 3, { width: BRAND_WIDTHS[2] - 4, align: 'right', lineBreak: false });
+
+  const balanceY = totalsY + 16;
+  document.rect(32, balanceY, 555, 16).lineWidth(0.55).stroke('#111111');
+  [96, 162, 233, 457].forEach((x) => {
+    document.moveTo(x, balanceY).lineTo(x, balanceY + 16).lineWidth(0.32).stroke('#333333');
+  });
+  document.font('ArabicBold').fontSize(7.2).fillColor('#111111');
+  arabic(document, `إجمالي الرصيد ${summary.periodEndBalance >= 0 ? 'عليكم' : 'لكم'}`, 459, balanceY + 3, {
+    width: 124, height: 11, align: 'right', lineBreak: false,
+  });
+  document.font('LatinBold').fontSize(8).fillColor('#9b111e').text(fmt(Math.abs(summary.periodEndBalance)), 164, balanceY + 3, {
+    width: 67, align: 'right', lineBreak: false,
+  });
+
+  document.fillColor('#111111').font('ArabicBold').fontSize(7.2);
+  arabic(document, brand.statementFooter, 38, balanceY + 21, {
+    width: 525, height: 22, align: 'center', lineBreak: true,
+  });
+  const sigY = balanceY + 43;
+  const signatures = ['المدير العام', 'المدير المالي', 'المراجع', 'المحاسب'];
+  signatures.forEach((label, index) => {
+    const x = 25 + index * 137;
+    document.font('ArabicBold').fontSize(7.4).fillColor('#111111');
+    arabic(document, label, x, sigY, { width: 110, align: 'center' });
+    document.moveTo(x + 8, sigY + 23).lineTo(x + 102, sigY + 23).lineWidth(0.4).stroke('#111111');
+  });
+  drawPageNumber(document, options.printedBy);
   document.end();
   return completed;
 }

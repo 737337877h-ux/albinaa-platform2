@@ -4,7 +4,7 @@ let db: SQLite.SQLiteDatabase;
 let dbOpening: Promise<SQLite.SQLiteDatabase> | null = null;
 let ownerTransition: Promise<void> | null = null;
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 11;
 
 const BUSINESS_TABLES = ['customers', 'tasks', 'followups', 'promises', 'collections', 'reservations'] as const;
 type BusinessTable = typeof BUSINESS_TABLES[number];
@@ -32,11 +32,11 @@ async function addColumnIfMissing(
 const TABLE_COLUMNS: Record<BusinessTable, string[]> = {
   customers: ['id', 'fullName', 'accountNumber', 'externalCustomerCode', 'customerType',
     'phonePrimary', 'phoneSecondary', 'whatsapp', 'address', 'geoLat', 'geoLng',
-    'assignedCollectorName', 'balances'],
+    'assignedCollectorName', 'balances', 'balanceHidden', 'accountGroupRole', 'groupBalances', 'childBalances'],
   tasks: ['id', 'customerId', 'customerName', 'title', 'dueDate', 'priority', 'status'],
   followups: ['id', 'customerId', 'customerName', 'typeName', 'resultName', 'notes', 'followupAt'],
   promises: ['id', 'customerId', 'customerName', 'expectedAmount', 'currencyCode', 'dueDate', 'status', 'notes'],
-  collections: ['id', 'customerId', 'customerName', 'amount', 'currencyCode', 'methodName', 'notes', 'collectedAt'],
+  collections: ['id', 'customerId', 'customerName', 'amount', 'currencyCode', 'methodName', 'notes', 'collectedAt', 'receiptAttachment', 'location'],
   reservations: ['id', 'customerId', 'customerName', 'itemName', 'quantity', 'remainingQty', 'unitName', 'totalAmount', 'currencyCode', 'totalTons', 'averageTonPrice', 'reservedAt', 'expiresAt', 'status'],
 };
 
@@ -145,6 +145,18 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => Promise<void>> =
       PRAGMA user_version = 9;
     `);
   },
+  10: async (d) => {
+    await addColumnIfMissing(d, 'collections', 'receiptAttachment', 'TEXT');
+    await addColumnIfMissing(d, 'collections', 'location', 'TEXT');
+    await d.execAsync('PRAGMA user_version = 10;');
+  },
+  11: async (d) => {
+    await addColumnIfMissing(d, 'customers', 'balanceHidden', 'INTEGER NOT NULL DEFAULT 0');
+    await addColumnIfMissing(d, 'customers', 'accountGroupRole', 'TEXT');
+    await addColumnIfMissing(d, 'customers', 'groupBalances', 'TEXT');
+    await addColumnIfMissing(d, 'customers', 'childBalances', 'TEXT');
+    await d.execAsync('PRAGMA user_version = 11;');
+  },
 };
 
 async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
@@ -168,6 +180,10 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
         geoLng REAL,
         assignedCollectorName TEXT,
         balances TEXT,
+        balanceHidden INTEGER NOT NULL DEFAULT 0,
+        accountGroupRole TEXT,
+        groupBalances TEXT,
+        childBalances TEXT,
         updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE TABLE IF NOT EXISTS tasks (
@@ -210,6 +226,8 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
         methodName TEXT,
         notes TEXT,
         collectedAt TEXT,
+        receiptAttachment TEXT,
+        location TEXT,
         updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE TABLE IF NOT EXISTS sync_metadata (
@@ -374,6 +392,21 @@ async function materializeQueuedMutation(
       title: payload.priorityReason || payload.taskType || 'مهمة محلية',
       dueDate: payload.dueDate, priority: payload.taskType, status: 'pending',
     });
+  } else if (endpoint === '/reservations') {
+    const unit = await d.getFirstAsync<{ name: string }>(
+      'SELECT name FROM reference_options WHERE kind = ? AND id = ?',
+      'reservationUnits', payload.unitId,
+    );
+    const quantity = Number(payload.quantity || 0);
+    const unitPrice = Number(payload.unitPrice || 0);
+    await upsertWithDatabase(d, 'reservations', {
+      id, customerId: payload.customerId, customerName,
+      itemName: payload.itemName, quantity, remainingQty: quantity,
+      unitName: unit?.name || 'بانتظار المزامنة',
+      totalAmount: quantity * unitPrice, currencyCode: payload.currencyCode,
+      reservedAt: new Date().toISOString(), expiresAt: payload.expiresAt,
+      status: 'open',
+    });
   }
 }
 
@@ -522,8 +555,20 @@ function normalizeRecord(table: BusinessTable, record: Record<string, any>): Rec
   for (const column of TABLE_COLUMNS[table]) {
     if (record[column] !== undefined) normalized[column] = record[column];
   }
-  if (table === 'customers' && normalized.balances !== undefined && typeof normalized.balances !== 'string') {
-    normalized.balances = JSON.stringify(normalized.balances || []);
+  if (table === 'customers') {
+    for (const column of ['balances', 'groupBalances', 'childBalances']) {
+      if (normalized[column] !== undefined && typeof normalized[column] !== 'string') {
+        normalized[column] = JSON.stringify(normalized[column] || []);
+      }
+    }
+    if (normalized.balanceHidden !== undefined) normalized.balanceHidden = normalized.balanceHidden ? 1 : 0;
+  }
+  if (table === 'collections') {
+    for (const column of ['receiptAttachment', 'location']) {
+      if (normalized[column] !== undefined && normalized[column] !== null && typeof normalized[column] !== 'string') {
+        normalized[column] = JSON.stringify(normalized[column]);
+      }
+    }
   }
   return normalized;
 }

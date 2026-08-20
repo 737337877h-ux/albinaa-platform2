@@ -1,10 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, Platform, Modal, FlatList, TextInput, KeyboardAvoidingView, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, Platform, Modal, FlatList, TextInput, KeyboardAvoidingView, Keyboard, Image } from 'react-native';
 import { enqueueMutation, getCustomerOffline360, updateCustomerContactOffline } from '../db/database';
 import { useFocusEffect } from '@react-navigation/native';
 import Loading from '../components/loading';
 import { parseJsonField } from '../utils/errors';
-import { contactLinks } from '../utils/contact';
+import { contactLinks, uniqueContactNumbers } from '../utils/contact';
 import { useSync } from '../store/sync-context';
 // SDK 57 exposes the imperative contact APIs through the legacy entry point.
 import * as Contacts from 'expo-contacts/legacy';
@@ -13,6 +13,10 @@ import { generateIdempotencyKey } from '../utils/constants';
 import { Ionicons } from '@expo/vector-icons';
 import { loadMessageTemplates, MessageChannel, MessageTemplate, renderMessageTemplate } from '../utils/message-templates';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getBaseUrl } from '../config/api';
+import { getAccessToken } from '../utils/secure-storage';
+import { useAuth } from '../store/auth-context';
+import { canUseMobileFeature } from '../utils/mobile-permissions';
 
 async function openLink(url: string, fallbackMsg: string) {
   try {
@@ -27,6 +31,20 @@ export default function Customer360Screen({ route, navigation }: any) {
   const id = route?.params?.id;
   const routeCustomer = route?.params?.customer;
   const { triggerSync } = useSync();
+  const { user } = useAuth();
+  const permissions = user?.permissions ?? [];
+  const deliveryDirectory = permissions.includes('mobile.delivery.customers.view_all_no_balance');
+  const canViewLocation = deliveryDirectory
+    || canUseMobileFeature(permissions, 'mobile.location.view', 'customers.read');
+  const canUpdateLocation = deliveryDirectory
+    || canUseMobileFeature(permissions, 'mobile.location.update', 'followups.create');
+  const canCreateFollowup = canUseMobileFeature(permissions, 'mobile.followups.create', 'followups.create');
+  const canCreatePromise = canUseMobileFeature(permissions, 'mobile.promises.create', 'promises.create');
+  const canCreateCollection = canUseMobileFeature(permissions, 'mobile.collections.create', 'collections.create');
+  const canRequestAssignment = canUseMobileFeature(permissions, 'mobile.assignment_change.request', 'tasks.manage');
+  const canRequestAdjustment = canUseMobileFeature(permissions, 'mobile.financial_adjustments.request', 'collections.create');
+  const canViewCollectionMedia = canUseMobileFeature(permissions, 'mobile.receipts.view', 'collections.create')
+    || canViewLocation;
   // Keep the row selected by the user visible while a full snapshot is being
   // committed. The database copy replaces it as soon as it is readable.
   const [local, setLocal] = React.useState<any>(routeCustomer || null);
@@ -40,6 +58,11 @@ export default function Customer360Screen({ route, navigation }: any) {
   const [messageChannel, setMessageChannel] = React.useState<Exclude<MessageChannel, 'both'> | null>(null);
   const [assignmentRequestOpen, setAssignmentRequestOpen] = React.useState(false);
   const [assignmentReason, setAssignmentReason] = React.useState('');
+  const [financialRequestOpen, setFinancialRequestOpen] = React.useState(false);
+  const [financialRequestType, setFinancialRequestType] = React.useState<'discount' | 'settlement'>('discount');
+  const [financialAmount, setFinancialAmount] = React.useState('');
+  const [financialReason, setFinancialReason] = React.useState('');
+  const [receiptPreview, setReceiptPreview] = React.useState<{ uri: string; token: string; name: string } | null>(null);
   const [modalKeyboardHeight, setModalKeyboardHeight] = React.useState(0);
   React.useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', (event) => {
@@ -88,18 +111,18 @@ export default function Customer360Screen({ route, navigation }: any) {
   }
 
   const balances = parseJsonField<any[]>(customer.balances, Array.isArray(customer.balances) ? customer.balances : []);
+  const groupBalances = parseJsonField<any[]>(customer.groupBalances, Array.isArray(customer.groupBalances) ? customer.groupBalances : []);
+  const childBalances = parseJsonField<any[]>(customer.childBalances, Array.isArray(customer.childBalances) ? customer.childBalances : []);
   const timeline = Array.isArray(customer.timeline) ? customer.timeline : [];
   const fullName = customer.fullName || customer.name || 'عميل';
   const phone = customer.phonePrimary || customer.phone || '';
   const phoneSecondary = customer.phoneSecondary || '';
-  const whatsapp = customer.whatsapp || phone;
-  const links = contactLinks(phone || phoneSecondary || whatsapp);
-  const secondaryLinks = contactLinks(phoneSecondary);
-  const whatsappLinks = contactLinks(whatsapp);
-  const availablePhones = Array.from(new Set([phone, phoneSecondary].filter(Boolean)));
+  const whatsapp = customer.whatsapp || '';
+  const availablePhones = uniqueContactNumbers([phone, phoneSecondary, whatsapp]);
   const address = customer.address || '';
   const accountCode = customer.accountNumber || customer.externalCustomerCode || '';
   const hasCoordinates = Number.isFinite(Number(customer.geoLat)) && Number.isFinite(Number(customer.geoLng));
+  const recentCollections = Array.isArray(customer.recentCollections) ? customer.recentCollections : [];
 
   const saveToContacts = async () => {
     try {
@@ -193,19 +216,42 @@ export default function Customer360Screen({ route, navigation }: any) {
   const sendTemplate = (template: MessageTemplate) => {
     if (!messageChannel) return;
     const channel = messageChannel;
-    const targetLinks = channel === 'whatsapp' ? (whatsappLinks || links) : (links || secondaryLinks);
-    if (!targetLinks) return;
-    const primaryBalance = balances.find((item: any) => Math.abs(Number(item?.balance ?? item?.accountingBalance ?? 0)) > 0.001) || {};
-    const amount = Math.abs(Number(primaryBalance.balance ?? primaryBalance.accountingBalance ?? 0));
-    const body = renderMessageTemplate(template.body, {
+    const hasAccountGroup = childBalances.some((item: any) => Number(item?.balance ?? 0) > 0.001);
+    const sourceBalances = hasAccountGroup ? groupBalances : balances;
+    const primaryBalance = sourceBalances
+      .filter((item: any) => Number(item?.balance ?? item?.operationalBalance ?? item?.accountingBalance ?? 0) > 0.001)
+      .sort((a: any, b: any) => Number(b?.balance ?? b?.operationalBalance ?? 0) - Number(a?.balance ?? a?.operationalBalance ?? 0))[0] || {};
+    const amount = Math.abs(Number(primaryBalance.balance ?? primaryBalance.operationalBalance ?? primaryBalance.accountingBalance ?? 0));
+    const rendered = renderMessageTemplate(template.body, {
       customerName: fullName,
       customerCode: accountCode || '—',
       balance: amount.toLocaleString('en-US', { maximumFractionDigits: 2 }),
       currency: primaryBalance.currency || primaryBalance.currencyCode || '',
     });
+    const formatTotals = (items: any[]) => items
+      .filter((item) => Number(item?.balance ?? 0) > 0.001)
+      .map((item) => `${Number(item.balance).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${item.currency}`)
+      .join('، ');
+    const body = hasAccountGroup
+      ? `${rendered}\n\nإجمالي الحساب الرئيسي والفرعي: ${formatTotals(groupBalances)}.\nإجمالي الحسابات الفرعية: ${formatTotals(childBalances)}.`
+      : rendered;
     setMessageChannel(null);
     if (channel === 'whatsapp') {
-      openLink(`${targetLinks.whatsapp}?text=${encodeURIComponent(body)}`, 'لا يوجد واتساب');
+      const whatsappTargets = uniqueContactNumbers([whatsapp, phone, phoneSecondary])
+        .map((number) => ({ number, links: contactLinks(number) }))
+        .filter((item) => item.links);
+      const sendWhatsapp = (target: typeof whatsappTargets[number]) => openLink(
+        `${target.links!.whatsapp}?text=${encodeURIComponent(body)}`,
+        'لا يوجد واتساب',
+      );
+      if (whatsappTargets.length <= 1) {
+        if (whatsappTargets[0]) sendWhatsapp(whatsappTargets[0]);
+        return;
+      }
+      Alert.alert('اختر رقم واتساب', fullName, [
+        ...whatsappTargets.map((target) => ({ text: target.number, onPress: () => sendWhatsapp(target) })),
+        { text: 'إلغاء', style: 'cancel' as const },
+      ]);
       return;
     }
     const smsTargets = availablePhones
@@ -245,6 +291,62 @@ export default function Customer360Screen({ route, navigation }: any) {
     }
   };
 
+  const openFinancialRequest = () => {
+    const debtor = balances.find((balance: any) =>
+      Number(balance?.operationalBalance ?? balance?.balance ?? balance?.accountingBalance ?? 0) > 0.001);
+    if (!debtor) {
+      Alert.alert('لا يوجد رصيد مدين', 'لا يمكن تقديم طلب خصم أو تصفية لحساب صفري أو دائن.');
+      return;
+    }
+    setFinancialAmount('');
+    setFinancialReason('');
+    setFinancialRequestType('discount');
+    setFinancialRequestOpen(true);
+  };
+
+  const submitFinancialRequest = async () => {
+    const debtor = balances.find((balance: any) =>
+      Number(balance?.operationalBalance ?? balance?.balance ?? balance?.accountingBalance ?? 0) > 0.001);
+    const currencyCode = debtor?.currency || debtor?.currencyCode;
+    const amount = Number(financialAmount.replace(/,/g, ''));
+    if (!currencyCode || !Number.isFinite(amount) || amount <= 0) {
+      Alert.alert('المبلغ مطلوب', 'أدخل مبلغًا صحيحًا أكبر من صفر.');
+      return;
+    }
+    if (financialReason.trim().length < 5) {
+      Alert.alert('السبب مطلوب', 'اكتب سببًا واضحًا للطلب، خمسة أحرف على الأقل.');
+      return;
+    }
+    try {
+      await enqueueMutation(generateIdempotencyKey(), 'POST', `/customers/${id}/financial-adjustment-requests`, {
+        requestType: financialRequestType,
+        currencyCode,
+        requestedAmount: amount,
+        reason: financialReason.trim(),
+      });
+      setFinancialRequestOpen(false);
+      Alert.alert('تم حفظ الطلب', 'سيصل الطلب إلى الإدارة المالية عند المزامنة، ولن يتغير الرصيد قبل الاعتماد.');
+      triggerSync().catch(() => undefined);
+    } catch (error: any) {
+      Alert.alert('تعذر حفظ الطلب', error?.message || 'حاول مرة أخرى.');
+    }
+  };
+
+  const previewCollectionReceipt = async (collection: any) => {
+    const attachment = parseJsonField<any>(collection.receiptAttachment, collection.receiptAttachment || null);
+    if (!attachment?.id) return;
+    const [baseUrl, token] = await Promise.all([getBaseUrl(), getAccessToken()]);
+    if (!token) {
+      Alert.alert('انتهت الجلسة', 'سجّل الدخول مرة أخرى لمعاينة الإيصال.');
+      return;
+    }
+    setReceiptPreview({
+      uri: `${baseUrl.replace(/\/$/, '')}/mobile/receipts/${attachment.id}`,
+      token,
+      name: attachment.fileName || 'إيصال التحصيل',
+    });
+  };
+
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
@@ -256,7 +358,7 @@ export default function Customer360Screen({ route, navigation }: any) {
         {!!address && <Text style={styles.address}>{address}</Text>}
       </View>
 
-      {(availablePhones.length > 0 || whatsappLinks) && (
+      {availablePhones.length > 0 && (
         <View style={styles.contactRow}>
           <ContactBtn label="اتصال" icon="call" color={colors.secondary} onPress={() => openPhoneAction('call')} />
           <ContactBtn label="رسالة" icon="chatbox" color={colors.primary} onPress={() => setMessageChannel('sms')} />
@@ -267,7 +369,7 @@ export default function Customer360Screen({ route, navigation }: any) {
       {availablePhones.length > 0 && <TouchableOpacity style={styles.saveContact} onPress={saveToContacts}><Text style={styles.saveContactText}>حفظ جميع الأرقام في جهات الاتصال</Text></TouchableOpacity>}
       <TouchableOpacity style={styles.importContact} onPress={openContactPicker}><Text style={styles.importContactText}>اختيار رقم العميل من دفتر الهاتف</Text></TouchableOpacity>
 
-      <View style={styles.locationRow}>
+      {canViewLocation && <View style={styles.locationRow}>
         <Text style={styles.locationLabel}>الموقع</Text>
         <TouchableOpacity
           style={styles.locationBtn}
@@ -288,14 +390,15 @@ export default function Customer360Screen({ route, navigation }: any) {
             {hasCoordinates || address ? 'فتح الموقع في الخريطة' : 'لا يوجد موقع مسجل'}
           </Text>
         </TouchableOpacity>
-      </View>
-      <TouchableOpacity
+      </View>}
+      {canUpdateLocation && <TouchableOpacity
         style={styles.setLocationBtn}
         onPress={() => navigation.navigate('CustomerLocationPicker', { customerId: id, geoLat: customer.geoLat, geoLng: customer.geoLng })}
       >
         <Text style={styles.setLocationText}>{hasCoordinates ? 'تعديل موقع العميل على الخريطة' : 'إضافة موقع العميل من الخريطة'}</Text>
-      </TouchableOpacity>
+      </TouchableOpacity>}
 
+      {!customer.balanceHidden && <>
       <Text style={styles.sectionTitle}>الأرصدة</Text>
       {balances.length === 0 ? (
         <Text style={styles.emptyText}>لا توجد أرصدة</Text>
@@ -322,16 +425,42 @@ export default function Customer360Screen({ route, navigation }: any) {
           );
         })
       )}
+      </>}
 
       <View style={styles.actions}>
-        <ActionBtn title="متابعة" color={colors.gold} textColor={colors.primary} onPress={() => navigation.navigate('NewFollowup', { customerId: id, customerName: fullName })} />
-        <ActionBtn title="وعد سداد" color={colors.primary} onPress={() => navigation.navigate('NewPromise', { customerId: id, customerName: fullName })} />
-        <ActionBtn title="تحصيل" color={colors.danger} onPress={() => navigation.navigate('NewCollection', { customerId: id, customerName: fullName })} />
+        {canCreateFollowup && <ActionBtn title="متابعة" color={colors.gold} textColor={colors.primary} onPress={() => navigation.navigate('NewFollowup', { customerId: id, customerName: fullName })} />}
+        {canCreatePromise && <ActionBtn title="وعد سداد" color={colors.primary} onPress={() => navigation.navigate('NewPromise', { customerId: id, customerName: fullName })} />}
+        {canCreateCollection && <ActionBtn title="تحصيل" color={colors.danger} onPress={() => navigation.navigate('NewCollection', { customerId: id, customerName: fullName })} />}
       </View>
-      <TouchableOpacity style={styles.assignmentRequestBtn} onPress={() => setAssignmentRequestOpen(true)}>
-        <Ionicons name="swap-horizontal-outline" size={18} color={colors.primary} />
-        <Text style={styles.assignmentRequestText}>طلب تغيير الإسناد</Text>
-      </TouchableOpacity>
+      <View style={styles.requestActionsRow}>
+        {canRequestAssignment && <TouchableOpacity style={[styles.assignmentRequestBtn, styles.requestActionHalf]} onPress={() => setAssignmentRequestOpen(true)}>
+          <Ionicons name="swap-horizontal-outline" size={18} color={colors.primary} />
+          <Text style={styles.assignmentRequestText}>طلب تغيير الإسناد</Text>
+        </TouchableOpacity>}
+        {canRequestAdjustment && <TouchableOpacity style={[styles.assignmentRequestBtn, styles.requestActionHalf]} onPress={openFinancialRequest}>
+          <Ionicons name="receipt-outline" size={18} color={colors.primary} />
+          <Text style={styles.assignmentRequestText}>طلب خصم وتصفية</Text>
+        </TouchableOpacity>}
+      </View>
+
+      {canViewCollectionMedia && recentCollections.some((collection: any) => collection.receiptAttachment || collection.location) && (
+        <View style={styles.collectionMediaCard}>
+          <Text style={styles.sectionTitle}>الإيصالات ومواقع التحصيل</Text>
+          {recentCollections.filter((collection: any) => collection.receiptAttachment || collection.location).slice(0, 8).map((collection: any) => {
+            const attachment = parseJsonField<any>(collection.receiptAttachment, collection.receiptAttachment || null);
+            const point = parseJsonField<any>(collection.location, collection.location || null);
+            return (
+              <View key={collection.id} style={styles.collectionMediaRow}>
+                <Text style={styles.collectionMediaLabel}>{Number(collection.amount || 0).toLocaleString('en-US')} {collection.currencyCode || ''}</Text>
+                <View style={styles.collectionMediaActions}>
+                  {attachment?.id && <TouchableOpacity style={styles.mediaMiniBtn} onPress={() => previewCollectionReceipt(collection)}><Text style={styles.mediaMiniText}>معاينة الإيصال</Text></TouchableOpacity>}
+                  {point?.latitude && point?.longitude && <TouchableOpacity style={styles.mediaMiniBtn} onPress={() => openLink(`https://www.google.com/maps?q=${point.latitude},${point.longitude}`, 'تعذر فتح الخريطة')}><Text style={styles.mediaMiniText}>فتح الموقع</Text></TouchableOpacity>}
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
 
       <Text style={styles.sectionTitle}>آخر النشاطات</Text>
       {timeline.length === 0 ? (
@@ -422,6 +551,38 @@ export default function Customer360Screen({ route, navigation }: any) {
           </View></View>
         </KeyboardAvoidingView>
       </Modal>
+      <Modal visible={financialRequestOpen} transparent animationType="slide" statusBarTranslucent onRequestClose={() => setFinancialRequestOpen(false)}>
+        <KeyboardAvoidingView style={styles.assignmentKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.templateShade, { paddingBottom: modalKeyboardHeight }]}><View style={[styles.assignmentSheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
+            <View style={styles.assignmentSheetHead}>
+              <TouchableOpacity onPress={() => setFinancialRequestOpen(false)}><Text style={styles.modalClose}>إغلاق</Text></TouchableOpacity>
+              <Text style={styles.assignmentSheetTitle}>طلب خصم أو تصفية</Text>
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.assignmentContent}>
+              <Text style={styles.assignmentHelp}>الطلب للمراجعة فقط ولا يغيّر رصيد العميل تلقائيًا.</Text>
+              <View style={styles.requestTypeRow}>
+                {(['discount', 'settlement'] as const).map((type) => (
+                  <TouchableOpacity key={type} style={[styles.requestTypeBtn, financialRequestType === type && styles.requestTypeBtnActive]} onPress={() => setFinancialRequestType(type)}>
+                    <Text style={[styles.requestTypeText, financialRequestType === type && styles.requestTypeTextActive]}>{type === 'discount' ? 'خصم' : 'تصفية'}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TextInput style={styles.financialAmountInput} value={financialAmount} onChangeText={setFinancialAmount} keyboardType="decimal-pad" textAlign="right" placeholder="المبلغ المطلوب" placeholderTextColor={colors.muted} />
+              <TextInput style={styles.assignmentReason} value={financialReason} onChangeText={setFinancialReason} multiline maxLength={500} textAlign="right" placeholder="سبب الطلب..." placeholderTextColor={colors.muted} />
+              <TouchableOpacity style={styles.assignmentSubmit} onPress={submitFinancialRequest}><Text style={styles.assignmentSubmitText}>إرسال الطلب</Text></TouchableOpacity>
+            </ScrollView>
+          </View></View>
+        </KeyboardAvoidingView>
+      </Modal>
+      <Modal visible={!!receiptPreview} animationType="slide" onRequestClose={() => setReceiptPreview(null)}>
+        <View style={styles.receiptPreviewScreen}>
+          <View style={styles.modalHead}>
+            <TouchableOpacity onPress={() => setReceiptPreview(null)}><Text style={styles.modalClose}>إغلاق</Text></TouchableOpacity>
+            <Text style={styles.modalTitle}>{receiptPreview?.name || 'الإيصال'}</Text>
+          </View>
+          {receiptPreview && <Image resizeMode="contain" style={styles.receiptPreviewImage} source={{ uri: receiptPreview.uri, headers: { Authorization: `Bearer ${receiptPreview.token}` } }} />}
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -491,6 +652,8 @@ const styles = StyleSheet.create({
   setLocationText: { color: colors.primary, fontSize: 13, fontWeight: '900' },
   actions: { flexDirection: 'row', padding: 16, gap: 8 },
   assignmentRequestBtn: { marginHorizontal: 16, marginBottom: 10, padding: 13, borderRadius: radius.md, borderWidth: 1, borderColor: colors.gold, backgroundColor: colors.goldSoft, flexDirection: 'row-reverse', justifyContent: 'center', alignItems: 'center', gap: 7 },
+  requestActionsRow: { flexDirection: 'row-reverse', marginHorizontal: 10, gap: 8 },
+  requestActionHalf: { flex: 1, marginHorizontal: 0 },
   assignmentRequestText: { color: colors.primary, fontSize: 14, fontWeight: '900' },
   actionBtn: { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center' },
   actionText: { color: '#fff', fontSize: 14, fontWeight: '600' },
@@ -518,6 +681,20 @@ const styles = StyleSheet.create({
   assignmentReason: { minHeight: 110, maxHeight: 170, margin: 18, marginBottom: 10, padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: '#fff', color: colors.ink, textAlignVertical: 'top' },
   assignmentSubmit: { marginHorizontal: 18, padding: 14, borderRadius: radius.md, backgroundColor: colors.gold, alignItems: 'center' },
   assignmentSubmitText: { color: colors.primary, fontWeight: '900', fontSize: 15 },
+  requestTypeRow: { flexDirection: 'row-reverse', gap: 10, marginHorizontal: 18, marginTop: 16 },
+  requestTypeBtn: { flex: 1, padding: 12, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, alignItems: 'center', backgroundColor: '#fff' },
+  requestTypeBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  requestTypeText: { color: colors.ink, fontWeight: '800' },
+  requestTypeTextActive: { color: '#fff' },
+  financialAmountInput: { marginHorizontal: 18, marginTop: 14, padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: '#fff', color: colors.ink, fontSize: 18, fontWeight: '800' },
+  collectionMediaCard: { marginHorizontal: 16, marginBottom: 12, padding: 12, borderRadius: radius.md, backgroundColor: '#fff', borderWidth: 1, borderColor: colors.line },
+  collectionMediaRow: { paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.line, gap: 8 },
+  collectionMediaLabel: { color: colors.ink, fontWeight: '800', textAlign: 'right' },
+  collectionMediaActions: { flexDirection: 'row-reverse', gap: 8 },
+  mediaMiniBtn: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: radius.sm, backgroundColor: colors.primarySoft },
+  mediaMiniText: { color: colors.primary, fontSize: 12, fontWeight: '900' },
+  receiptPreviewScreen: { flex: 1, backgroundColor: '#0b1715' },
+  receiptPreviewImage: { flex: 1, width: '100%' },
   templateItem: { marginHorizontal: 14, marginTop: 10, padding: 14, backgroundColor: '#fff', borderWidth: 1, borderColor: colors.line, borderRadius: radius.md },
   templateName: { color: colors.ink, fontSize: 14, fontWeight: '900', textAlign: 'right' }, templateBody: { color: colors.muted, fontSize: 11, lineHeight: 17, marginTop: 5, textAlign: 'right' },
   editTemplates: { margin: 14, backgroundColor: colors.goldSoft, padding: 13, borderRadius: radius.md, alignItems: 'center' }, editTemplatesText: { color: colors.primary, fontWeight: '900' },

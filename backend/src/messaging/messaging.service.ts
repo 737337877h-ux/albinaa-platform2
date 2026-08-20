@@ -40,14 +40,16 @@ export class MessagingService {
     const customers = ids.length ? await this.prisma.customer.findMany({
       where: { id: { in: ids }, organizationId: actor.organizationId, status: 'active' },
       select: {
-        id: true, name: true, externalCustomerCode: true, phonePrimary: true, whatsapp: true,
+        id: true, name: true, externalCustomerCode: true, phonePrimary: true, phoneSecondary: true, whatsapp: true,
         assignments: { where: { effectiveTo: null }, take: 1, include: { collector: { include: { user: { select: { fullName: true } } } } } },
       },
     }) : [];
     const byId = new Map(customers.map((customer) => [customer.id, customer]));
     return report.customers.map((row) => {
       const customer = byId.get(String(row.customerId));
-      const destination = cleanPhone(dto.channel === 'whatsapp' ? customer?.whatsapp ?? customer?.phonePrimary : customer?.phonePrimary);
+      const destination = cleanPhone(dto.channel === 'whatsapp'
+        ? customer?.whatsapp ?? customer?.phonePrimary ?? customer?.phoneSecondary
+        : customer?.phonePrimary ?? customer?.phoneSecondary ?? customer?.whatsapp);
       const message = render(dto.messageBody, {
         customerName: customer?.name ?? String(row.customerName),
         customerCode: customer?.externalCustomerCode ?? String(row.customerCode ?? '—'),

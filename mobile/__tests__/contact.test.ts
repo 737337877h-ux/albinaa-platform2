@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { contactLinks, normalizePhone } from '../src/utils/contact';
+import { contactLinks, normalizePhone, uniqueContactNumbers } from '../src/utils/contact';
 
 describe('customer contact links', () => {
   it.each([
@@ -17,5 +17,10 @@ describe('customer contact links', () => {
       sms: 'sms:+967777123456',
       whatsapp: 'https://wa.me/967777123456',
     });
+  });
+
+  it('uses every unique phone field as a contact target', () => {
+    expect(uniqueContactNumbers(['777123456', '733123456', '+967 777 123 456']))
+      .toEqual(['777123456', '733123456']);
   });
 });

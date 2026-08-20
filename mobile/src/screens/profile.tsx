@@ -3,9 +3,11 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-nati
 import { useAuth } from '../store/auth-context';
 import { APP_VERSION } from '../utils/constants';
 import { colors, radius, shadow } from '../theme';
+import { canUseMobileFeature } from '../utils/mobile-permissions';
 
 export default function ProfileScreen({ navigation }: any) {
   const { user } = useAuth();
+  const permissions = user?.permissions ?? [];
 
   return (
     <ScrollView style={styles.container}>
@@ -28,11 +30,11 @@ export default function ProfileScreen({ navigation }: any) {
         <Text style={styles.settingsText}>إعدادات الاتصال والمزامنة والتنبيهات</Text>
       </TouchableOpacity>
       <View style={styles.quickRow}>
-        <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('FollowupsList')}><Text style={styles.quickText}>المتابعات</Text></TouchableOpacity>
-        <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('PromisesList')}><Text style={styles.quickText}>وعود السداد</Text></TouchableOpacity>
+        {canUseMobileFeature(permissions, 'mobile.followups.view', 'followups.create') && <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('FollowupsList')}><Text style={styles.quickText}>المتابعات</Text></TouchableOpacity>}
+        {canUseMobileFeature(permissions, 'mobile.promises.view', 'promises.create') && <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('PromisesList')}><Text style={styles.quickText}>وعود السداد</Text></TouchableOpacity>}
       </View>
-      <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('MessageTemplates')}><Text style={styles.templatesText}>قوالب واتساب والرسائل النصية</Text></TouchableOpacity>
-      <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('Reservations')}><Text style={styles.templatesText}>حجوزات البضاعة ومتوسط سعر الطن</Text></TouchableOpacity>
+      {canUseMobileFeature(permissions, 'mobile.messages.view', 'followups.create') && <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('MessageTemplates')}><Text style={styles.templatesText}>قوالب واتساب والرسائل النصية</Text></TouchableOpacity>}
+      {canUseMobileFeature(permissions, 'mobile.reservations.view', 'reservations.read') && <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('Reservations')}><Text style={styles.templatesText}>حجوزات البضاعة ومتوسط سعر الطن</Text></TouchableOpacity>}
 
       <View style={styles.section}>
         <InfoRow label="إصدار التطبيق" value={APP_VERSION} />

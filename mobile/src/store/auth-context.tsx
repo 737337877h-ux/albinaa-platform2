@@ -17,6 +17,7 @@ interface AuthState {
   login: (username: string, password: string, rememberMe?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   unlockOffline: () => Promise<boolean>;
+  refreshUser: () => Promise<AuthUser | null>;
   cachedUser: AuthUser | null;
 }
 
@@ -27,6 +28,7 @@ const AuthContext = createContext<AuthState>({
   login: async () => {},
   logout: async () => {},
   unlockOffline: async () => false,
+  refreshUser: async () => null,
   cachedUser: null,
 });
 
@@ -131,8 +133,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true;
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    if (!await getAccessToken()) return null;
+    const current = await getMe();
+    await ensureDataOwner(`${current.organizationId}:${current.id}`);
+    await setCachedUser(current);
+    setLocalCachedUser(current);
+    setUser(current);
+    return current;
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, cachedUser, isLoading, isAuthenticated: !!user, login, logout, unlockOffline }}>
+    <AuthContext.Provider value={{ user, cachedUser, isLoading, isAuthenticated: !!user, login, logout, unlockOffline, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

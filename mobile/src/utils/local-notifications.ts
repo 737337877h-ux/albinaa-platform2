@@ -6,6 +6,8 @@ import { getAll, getMutationQueueStats } from '../db/database';
 const CHANNEL_ID = 'albinaa-reminders';
 const SOUND_KEY = 'albinaa.notification_sound';
 const ENABLED_KEY = 'albinaa.notifications_enabled';
+const OVERDUE_NOTIFIED_DAY_KEY = 'albinaa.overdue_notified_day';
+const BLOCKED_NOTIFIED_DAY_KEY = 'albinaa.blocked_sync_notified_day';
 export type NotificationSoundPreference = 'news' | 'default' | 'silent';
 
 export async function getNotificationSoundPreference(): Promise<NotificationSoundPreference> {
@@ -39,12 +41,19 @@ async function ensureNotificationChannel(value?: NotificationSoundPreference): P
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldPlaySound: true,
+    shouldPlaySound: (await getNotificationSoundPreference()) !== 'silent',
     shouldSetBadge: true,
     shouldShowBanner: true,
     shouldShowList: true,
   }),
 });
+
+function localDayKey(value = new Date()): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 export interface ReminderPlanItem {
   id: string;
@@ -77,7 +86,7 @@ export function buildReminderPlan(
 
   if (overdueTasks.length > 0) {
     plan.push({
-      id: 'overdue-tasks',
+      id: `overdue-tasks:${localDayKey(now)}`,
       title: 'مهام تحصيل متأخرة',
       body: `لديك ${overdueTasks.length} مهمة تحتاج إلى متابعة الآن.`,
       at: soon,
@@ -118,7 +127,7 @@ export function buildReminderPlan(
 
   if (blockedMutations > 0) {
     plan.push({
-      id: 'blocked-sync',
+      id: `blocked-sync:${localDayKey(now)}`,
       title: 'عمليات تحتاج إلى مراجعة',
       body: `توجد ${blockedMutations} عملية لم يقبلها الخادم. افتح حالة المزامنة لمراجعتها.`,
       at: new Date(now.getTime() + 20_000),
@@ -163,9 +172,27 @@ export async function rescheduleOfflineReminders(): Promise<number> {
     getMutationQueueStats(),
   ]);
   const plan = buildReminderPlan(tasks, promises, new Date(), queue.blocked);
+  const todayKey = localDayKey();
+  const [overdueNotifiedDay, blockedNotifiedDay] = await Promise.all([
+    SecureStore.getItemAsync(OVERDUE_NOTIFIED_DAY_KEY),
+    SecureStore.getItemAsync(BLOCKED_NOTIFIED_DAY_KEY),
+  ]);
+  const effectivePlan = plan.filter((item) => {
+    if (item.id.startsWith('overdue-tasks:') && overdueNotifiedDay === todayKey) return false;
+    if (item.id.startsWith('blocked-sync:') && blockedNotifiedDay === todayKey) return false;
+    return true;
+  });
   const soundPreference = await getNotificationSoundPreference();
-  await Notifications.cancelAllScheduledNotificationsAsync();
-  for (const item of plan) {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  const desiredIds = new Set(plan.map((item) => item.id));
+  for (const existing of scheduled) {
+    if (!desiredIds.has(existing.identifier)) {
+      await Notifications.cancelScheduledNotificationAsync(existing.identifier);
+    }
+  }
+  const existingIds = new Set(scheduled.map((item) => item.identifier));
+  for (const item of effectivePlan) {
+    if (existingIds.has(item.id)) continue;
     await Notifications.scheduleNotificationAsync({
       identifier: item.id,
       content: {
@@ -180,6 +207,12 @@ export async function rescheduleOfflineReminders(): Promise<number> {
         channelId: Platform.OS === 'android' ? CHANNEL_ID : undefined,
       },
     });
+    if (item.id.startsWith('overdue-tasks:')) {
+      await SecureStore.setItemAsync(OVERDUE_NOTIFIED_DAY_KEY, todayKey);
+    }
+    if (item.id.startsWith('blocked-sync:')) {
+      await SecureStore.setItemAsync(BLOCKED_NOTIFIED_DAY_KEY, todayKey);
+    }
   }
-  return plan.length;
+  return effectivePlan.length;
 }

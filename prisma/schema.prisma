@@ -49,6 +49,21 @@ model Organization {
   handoverVouchers         CollectionHandoverVoucher[]
   messageCampaigns         MessageCampaign[]
   assignmentChangeRequests AssignmentChangeRequest[]
+  financialAdjustmentRequests FinancialAdjustmentRequest[]
+  oracleInventorySyncRuns  OracleInventorySyncRun[]
+  oracleActiveSnapshots    OracleInventoryActiveSnapshot[]
+  oracleItemGroups         OracleItemGroupMirror[]
+  oracleItems              OracleItemMirror[]
+  oracleItemUnits          OracleItemUnitMirror[]
+  oracleWarehouseGroups    OracleWarehouseGroupMirror[]
+  oracleWarehouses         OracleWarehouseMirror[]
+  oracleStockBalances      OracleStockBalanceMirror[]
+  oracleBranchMappings     OracleBranchMapping[]
+  oracleSyncIssues         OracleSyncIssue[]
+  oracleCustomerSyncRuns   OracleCustomerSyncRun[]
+  oracleCustomers          OracleCustomerMirror[]
+  oracleCustomerCurrencies OracleCustomerCurrencyMirror[]
+  oracleCustomerBalances   OracleCustomerBalanceMirror[]
 
   @@map("organizations")
 }
@@ -68,6 +83,7 @@ model Branch {
   handoverVouchers CollectionHandoverVoucher[]
   receiptSequence  BranchReceiptSequence[]
   voucherSequence  BranchVoucherSequence[]
+  oracleMappings   OracleBranchMapping[]
 
   @@unique([organizationId, name], map: "uq_branches_org_name")
   @@map("branches")
@@ -125,6 +141,11 @@ model User {
   authSessions                     AuthSession[]
   assignmentChangeRequestsMade     AssignmentChangeRequest[]    @relation("AssignmentChangeRequester")
   assignmentChangeRequestsReviewed AssignmentChangeRequest[]    @relation("AssignmentChangeReviewer")
+  financialAdjustmentRequestsMade     FinancialAdjustmentRequest[] @relation("FinancialAdjustmentRequester")
+  financialAdjustmentRequestsReviewed FinancialAdjustmentRequest[] @relation("FinancialAdjustmentReviewer")
+  oracleSyncRunsTriggered          OracleInventorySyncRun[]     @relation("OracleSyncTriggeredBy")
+  oracleCustomerSyncRunsTriggered  OracleCustomerSyncRun[]      @relation("OracleCustomerSyncTriggeredBy")
+  oracleBranchMappingsVerified     OracleBranchMapping[]        @relation("OracleBranchMappingVerifiedBy")
 
   @@unique([organizationId, username], map: "uq_users_org_username")
   @@map("users")
@@ -329,6 +350,7 @@ model Customer {
   agingSnapshots           AgingSnapshot[]
   messageDispatches        MessageDispatch[]
   assignmentChangeRequests AssignmentChangeRequest[]
+  financialAdjustmentRequests FinancialAdjustmentRequest[]
 
   @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
   @@index([organizationId, nameNormalized], map: "idx_customers_name_norm")
@@ -450,6 +472,32 @@ model AssignmentChangeRequest {
   @@index([organizationId, status, createdAt], map: "idx_assignment_change_requests_status")
   @@index([customerId, status], map: "idx_assignment_change_requests_customer")
   @@map("assignment_change_requests")
+}
+
+model FinancialAdjustmentRequest {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  String    @map("organization_id") @db.Uuid
+  customerId      String    @map("customer_id") @db.Uuid
+  requestedBy     String    @map("requested_by") @db.Uuid
+  requestType     String    @map("request_type")
+  currencyCode    String    @map("currency_code")
+  requestedAmount Decimal   @map("requested_amount") @db.Decimal(18, 4)
+  reason          String
+  status          String    @default("pending")
+  reviewedBy      String?   @map("reviewed_by") @db.Uuid
+  reviewNotes     String?   @map("review_notes")
+  reviewedAt      DateTime? @map("reviewed_at") @db.Timestamptz()
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  requester    User         @relation("FinancialAdjustmentRequester", fields: [requestedBy], references: [id])
+  reviewer     User?        @relation("FinancialAdjustmentReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([organizationId, status, createdAt], map: "idx_financial_adjustment_requests_status")
+  @@index([customerId, status], map: "idx_financial_adjustment_requests_customer")
+  @@map("financial_adjustment_requests")
 }
 
 model CustomerCreditPolicy {
@@ -1368,4 +1416,565 @@ model AnalyticalMovement {
 
   @@index([accountId, currencyCode, txDate], map: "idx_analytical_movements_account")
   @@map("analytical_movements")
+}
+
+// ---------------------------------------------------------------------------
+// Oracle inventory mirror — additive, versioned, and read-only to consumers.
+// Each extraction is isolated by sync_run_id and becomes visible only when the
+// active snapshot pointer is switched after validation.
+// ---------------------------------------------------------------------------
+model OracleInventorySyncRun {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId    String    @map("organization_id") @db.Uuid
+  sourceSchema      String    @map("source_schema") @db.VarChar(30)
+  mode              String    @default("full_snapshot") @db.VarChar(30)
+  status            String    @default("extracting") @db.VarChar(20)
+  previousRunId     String?   @map("previous_run_id") @db.Uuid
+  triggeredBy       String?   @map("triggered_by") @db.Uuid
+  startedAt         DateTime  @default(now()) @map("started_at") @db.Timestamptz()
+  extractedAt       DateTime? @map("extracted_at") @db.Timestamptz()
+  validatedAt       DateTime? @map("validated_at") @db.Timestamptz()
+  publishedAt       DateTime? @map("published_at") @db.Timestamptz()
+  sourceCounts      Json?     @map("source_counts") @db.JsonB
+  loadedCounts      Json?     @map("loaded_counts") @db.JsonB
+  validationSummary Json?     @map("validation_summary") @db.JsonB
+  manifestHash      String?   @map("manifest_hash") @db.VarChar(64)
+  errorSummary      Json?     @map("error_summary") @db.JsonB
+
+  organization      Organization                    @relation(fields: [organizationId], references: [id])
+  previousRun       OracleInventorySyncRun?         @relation("OracleSyncPrevious", fields: [previousRunId], references: [id])
+  nextRuns          OracleInventorySyncRun[]        @relation("OracleSyncPrevious")
+  triggeredByUser   User?                           @relation("OracleSyncTriggeredBy", fields: [triggeredBy], references: [id])
+  activeSnapshots   OracleInventoryActiveSnapshot[] @relation("OracleActiveRun")
+  previousSnapshots OracleInventoryActiveSnapshot[] @relation("OraclePreviousRun")
+  itemGroups        OracleItemGroupMirror[]
+  items             OracleItemMirror[]
+  itemUnits         OracleItemUnitMirror[]
+  warehouseGroups   OracleWarehouseGroupMirror[]
+  warehouses        OracleWarehouseMirror[]
+  stockBalances     OracleStockBalanceMirror[]
+  issues            OracleSyncIssue[]
+
+  @@index([organizationId, startedAt], map: "idx_oracle_sync_runs_org_started")
+  @@index([organizationId, status], map: "idx_oracle_sync_runs_org_status")
+  @@map("oracle_inventory_sync_runs")
+}
+
+model OracleInventoryActiveSnapshot {
+  organizationId String   @map("organization_id") @db.Uuid
+  sourceSchema   String   @map("source_schema") @db.VarChar(30)
+  activeRunId    String   @map("active_run_id") @db.Uuid
+  previousRunId  String?  @map("previous_run_id") @db.Uuid
+  activatedAt    DateTime @default(now()) @map("activated_at") @db.Timestamptz()
+
+  organization Organization            @relation(fields: [organizationId], references: [id])
+  activeRun    OracleInventorySyncRun  @relation("OracleActiveRun", fields: [activeRunId], references: [id])
+  previousRun  OracleInventorySyncRun? @relation("OraclePreviousRun", fields: [previousRunId], references: [id])
+
+  @@id([organizationId, sourceSchema])
+  @@index([activeRunId], map: "idx_oracle_active_snapshots_run")
+  @@map("oracle_inventory_active_snapshots")
+}
+
+model OracleItemGroupMirror {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId          String    @map("sync_run_id") @db.Uuid
+  organizationId     String    @map("organization_id") @db.Uuid
+  externalGroupCode  String    @map("external_group_code") @db.VarChar(10)
+  nameAr             String    @map("name_ar") @db.VarChar(100)
+  nameEn             String?   @map("name_en") @db.VarChar(100)
+  parentExternalCode String?   @map("parent_external_code") @db.VarChar(30)
+  sourceUpdatedAt    DateTime? @map("source_updated_at") @db.Timestamp(0)
+  sourceHash         String    @map("source_hash") @db.VarChar(64)
+  loadedAt           DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun      OracleInventorySyncRun @relation(fields: [syncRunId], references: [id])
+  organization Organization           @relation(fields: [organizationId], references: [id])
+  items        OracleItemMirror[]
+
+  @@unique([syncRunId, externalGroupCode], map: "uq_oracle_item_groups_run_code")
+  @@map("oracle_item_groups_mirror")
+}
+
+model OracleItemMirror {
+  id                           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId                    String    @map("sync_run_id") @db.Uuid
+  organizationId               String    @map("organization_id") @db.Uuid
+  externalItemCode             String    @map("external_item_code") @db.VarChar(30)
+  nameAr                       String    @map("name_ar") @db.VarChar(100)
+  externalGroupCode            String    @map("external_group_code") @db.VarChar(10)
+  referencePrimaryCost         Decimal?  @map("reference_primary_cost") @db.Decimal(38, 16)
+  referenceWeightedAverageCost Decimal?  @map("reference_weighted_average_cost") @db.Decimal(38, 16)
+  isInactive                   Boolean   @default(false) @map("is_inactive")
+  isService                    Boolean   @default(false) @map("is_service")
+  sourceUpdatedAt              DateTime? @map("source_updated_at") @db.Timestamp(0)
+  sourceHash                   String    @map("source_hash") @db.VarChar(64)
+  loadedAt                     DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun      OracleInventorySyncRun @relation(fields: [syncRunId], references: [id])
+  organization Organization           @relation(fields: [organizationId], references: [id])
+  group        OracleItemGroupMirror  @relation(fields: [syncRunId, externalGroupCode], references: [syncRunId, externalGroupCode])
+  units        OracleItemUnitMirror[]
+
+  @@unique([syncRunId, externalItemCode], map: "uq_oracle_items_run_code")
+  @@index([syncRunId, externalGroupCode], map: "idx_oracle_items_run_group")
+  @@map("oracle_items_mirror")
+}
+
+model OracleItemUnitMirror {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId        String    @map("sync_run_id") @db.Uuid
+  organizationId   String    @map("organization_id") @db.Uuid
+  externalItemCode String    @map("external_item_code") @db.VarChar(30)
+  unitName         String    @map("unit_name") @db.VarChar(10)
+  packageSize      Decimal   @map("package_size") @db.Decimal(38, 16)
+  isMainUnit       Boolean   @default(false) @map("is_main_unit")
+  isSaleUnit       Boolean   @default(false) @map("is_sale_unit")
+  isPurchaseUnit   Boolean   @default(false) @map("is_purchase_unit")
+  isStockUnit      Boolean   @default(false) @map("is_stock_unit")
+  isPriceUnit      Boolean   @default(false) @map("is_price_unit")
+  noSale           Boolean   @default(false) @map("no_sale")
+  barcode          String?   @db.VarChar(30)
+  unitLevel        Int?      @map("unit_level")
+  usesSerialNumber Boolean   @default(false) @map("uses_serial_number")
+  isInactive       Boolean   @default(false) @map("is_inactive")
+  inactiveReason   String?   @map("inactive_reason") @db.VarChar(250)
+  sourceUpdatedAt  DateTime? @map("source_updated_at") @db.Timestamp(0)
+  sourceHash       String    @map("source_hash") @db.VarChar(64)
+  loadedAt         DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun      OracleInventorySyncRun     @relation(fields: [syncRunId], references: [id])
+  organization Organization               @relation(fields: [organizationId], references: [id])
+  item         OracleItemMirror           @relation(fields: [syncRunId, externalItemCode], references: [syncRunId, externalItemCode])
+  stockRows    OracleStockBalanceMirror[]
+
+  @@unique([syncRunId, externalItemCode, unitName], map: "uq_oracle_item_units_run_item_unit")
+  @@unique([syncRunId, externalItemCode, packageSize], map: "uq_oracle_item_units_run_item_size")
+  @@index([syncRunId, barcode], map: "idx_oracle_item_units_run_barcode")
+  @@map("oracle_item_units_mirror")
+}
+
+model OracleWarehouseGroupMirror {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId         String    @map("sync_run_id") @db.Uuid
+  organizationId    String    @map("organization_id") @db.Uuid
+  externalGroupCode String    @map("external_group_code") @db.VarChar(30)
+  nameAr            String    @map("name_ar") @db.VarChar(100)
+  nameEn            String?   @map("name_en") @db.VarChar(100)
+  sourceUpdatedAt   DateTime? @map("source_updated_at") @db.Timestamp(0)
+  sourceHash        String    @map("source_hash") @db.VarChar(64)
+  loadedAt          DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun      OracleInventorySyncRun     @relation(fields: [syncRunId], references: [id])
+  organization Organization               @relation(fields: [organizationId], references: [id])
+  warehouses   OracleWarehouseMirror[]
+  stockRows    OracleStockBalanceMirror[]
+
+  @@unique([syncRunId, externalGroupCode], map: "uq_oracle_wh_groups_run_code")
+  @@map("oracle_warehouse_groups_mirror")
+}
+
+model OracleWarehouseMirror {
+  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId                 String    @map("sync_run_id") @db.Uuid
+  organizationId            String    @map("organization_id") @db.Uuid
+  externalWarehouseCode     String    @map("external_warehouse_code") @db.VarChar(30)
+  nameAr                    String    @map("name_ar") @db.VarChar(100)
+  nameEn                    String?   @map("name_en") @db.VarChar(100)
+  locationText              String?   @map("location_text") @db.VarChar(100)
+  phone                     String?   @db.VarChar(30)
+  isInactive                Boolean   @default(false) @map("is_inactive")
+  keeperName                String?   @map("keeper_name") @db.VarChar(100)
+  externalGroupCode         String?   @map("external_group_code") @db.VarChar(30)
+  warehouseType             Int?      @map("warehouse_type")
+  noSale                    Boolean   @default(false) @map("no_sale")
+  checkAvailableQuantity    Boolean   @default(false) @map("check_available_quantity")
+  externalBranchCode        String?   @map("external_branch_code") @db.VarChar(30)
+  mainExternalWarehouseCode String?   @map("main_external_warehouse_code") @db.VarChar(30)
+  latitudeRaw               String?   @map("latitude_raw") @db.VarChar(100)
+  longitudeRaw              String?   @map("longitude_raw") @db.VarChar(100)
+  sourceUpdatedAt           DateTime? @map("source_updated_at") @db.Timestamp(0)
+  sourceHash                String    @map("source_hash") @db.VarChar(64)
+  loadedAt                  DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun         OracleInventorySyncRun      @relation(fields: [syncRunId], references: [id])
+  organization    Organization                @relation(fields: [organizationId], references: [id])
+  warehouseGroup  OracleWarehouseGroupMirror? @relation(fields: [syncRunId, externalGroupCode], references: [syncRunId, externalGroupCode])
+  mainWarehouse   OracleWarehouseMirror?      @relation("OracleWarehouseHierarchy", fields: [syncRunId, mainExternalWarehouseCode], references: [syncRunId, externalWarehouseCode])
+  childWarehouses OracleWarehouseMirror[]     @relation("OracleWarehouseHierarchy")
+  stockRows       OracleStockBalanceMirror[]
+
+  @@unique([syncRunId, externalWarehouseCode], map: "uq_oracle_warehouses_run_code")
+  @@index([syncRunId, externalBranchCode], map: "idx_oracle_warehouses_run_branch")
+  @@map("oracle_warehouses_mirror")
+}
+
+model OracleStockBalanceMirror {
+  id                         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId                  String    @map("sync_run_id") @db.Uuid
+  organizationId             String    @map("organization_id") @db.Uuid
+  externalItemCode           String    @map("external_item_code") @db.VarChar(30)
+  unitName                   String    @map("unit_name") @db.VarChar(10)
+  packageSize                Decimal   @map("package_size") @db.Decimal(38, 16)
+  externalWarehouseCode      String    @map("external_warehouse_code") @db.VarChar(30)
+  externalWarehouseGroupCode String?   @map("external_warehouse_group_code") @db.VarChar(30)
+  warehouseGroupKey          String    @map("warehouse_group_key") @db.VarChar(30)
+  availableQuantity          Decimal   @map("available_quantity") @db.Decimal(38, 16)
+  primaryCost                Decimal?  @map("primary_cost") @db.Decimal(38, 16)
+  weightedAverageCost        Decimal?  @map("weighted_average_cost") @db.Decimal(38, 16)
+  isInactive                 Boolean   @default(false) @map("is_inactive")
+  sourceUpdatedAt            DateTime? @map("source_updated_at") @db.Timestamp(0)
+  sourceHash                 String    @map("source_hash") @db.VarChar(64)
+  loadedAt                   DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun        OracleInventorySyncRun      @relation(fields: [syncRunId], references: [id])
+  organization   Organization                @relation(fields: [organizationId], references: [id])
+  itemUnit       OracleItemUnitMirror        @relation(fields: [syncRunId, externalItemCode, unitName], references: [syncRunId, externalItemCode, unitName])
+  warehouse      OracleWarehouseMirror       @relation(fields: [syncRunId, externalWarehouseCode], references: [syncRunId, externalWarehouseCode], map: "fk_oracle_stock_warehouse")
+  warehouseGroup OracleWarehouseGroupMirror? @relation(fields: [syncRunId, externalWarehouseGroupCode], references: [syncRunId, externalGroupCode], map: "fk_oracle_stock_warehouse_group")
+
+  @@unique([syncRunId, externalItemCode, unitName, packageSize, externalWarehouseCode, warehouseGroupKey], map: "uq_oracle_stock_run_key")
+  @@index([syncRunId, externalWarehouseCode, externalItemCode], map: "idx_oracle_stock_run_wh_item")
+  @@index([syncRunId, externalItemCode], map: "idx_oracle_stock_run_item")
+  @@map("oracle_stock_balances_mirror")
+}
+
+model OracleBranchMapping {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId     String    @map("organization_id") @db.Uuid
+  sourceSchema       String    @map("source_schema") @db.VarChar(30)
+  externalBranchCode String    @map("external_branch_code") @db.VarChar(30)
+  platformBranchId   String    @map("platform_branch_id") @db.Uuid
+  verifiedAt         DateTime? @map("verified_at") @db.Timestamptz()
+  verifiedBy         String?   @map("verified_by") @db.Uuid
+  isActive           Boolean   @default(true) @map("is_active")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  platformBranch Branch       @relation(fields: [platformBranchId], references: [id])
+  verifier       User?        @relation("OracleBranchMappingVerifiedBy", fields: [verifiedBy], references: [id])
+
+  @@unique([organizationId, sourceSchema, externalBranchCode], map: "uq_oracle_branch_map_org_schema_code")
+  @@index([platformBranchId, isActive], map: "idx_oracle_branch_map_platform_active")
+  @@map("oracle_branch_mappings")
+}
+
+model OracleSyncIssue {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId      String   @map("sync_run_id") @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  severity       String   @db.VarChar(10)
+  entityType     String   @map("entity_type") @db.VarChar(40)
+  externalKey    String?  @map("external_key") @db.VarChar(250)
+  ruleCode       String   @map("rule_code") @db.VarChar(80)
+  message        String   @db.Text
+  details        Json?    @map("details_json") @db.JsonB
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  syncRun      OracleInventorySyncRun @relation(fields: [syncRunId], references: [id])
+  organization Organization           @relation(fields: [organizationId], references: [id])
+
+  @@index([syncRunId, severity], map: "idx_oracle_sync_issues_run_severity")
+  @@index([syncRunId, ruleCode], map: "idx_oracle_sync_issues_run_rule")
+  @@map("oracle_sync_issues")
+}
+
+// ---------------------------------------------------------------------------
+// Oracle customer and balance mirror — Batch F.
+// This is deliberately separate from operational Customer/CustomerBalance.
+// A loaded run remains validating and cannot affect customer-facing data.
+// ---------------------------------------------------------------------------
+model OracleCustomerSyncRun {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId     String    @map("organization_id") @db.Uuid
+  sourceSchema       String    @map("source_schema") @db.VarChar(30)
+  status             String    @default("extracting") @db.VarChar(20)
+  triggeredBy        String?   @map("triggered_by") @db.Uuid
+  startedAt          DateTime  @default(now()) @map("started_at") @db.Timestamptz()
+  extractedAt        DateTime? @map("extracted_at") @db.Timestamptz()
+  validatedAt        DateTime? @map("validated_at") @db.Timestamptz()
+  sourceCounts       Json?     @map("source_counts") @db.JsonB
+  loadedCounts       Json?     @map("loaded_counts") @db.JsonB
+  validationSummary  Json?     @map("validation_summary") @db.JsonB
+  platformComparison Json?     @map("platform_comparison") @db.JsonB
+  manifestHash       String?   @map("manifest_hash") @db.VarChar(64)
+  errorSummary       Json?     @map("error_summary") @db.JsonB
+
+  organization    Organization                   @relation(fields: [organizationId], references: [id])
+  triggeredByUser User?                          @relation("OracleCustomerSyncTriggeredBy", fields: [triggeredBy], references: [id])
+  customers       OracleCustomerMirror[]
+  currencies      OracleCustomerCurrencyMirror[]
+  balances        OracleCustomerBalanceMirror[]
+
+  @@index([organizationId, startedAt], map: "idx_oracle_cust_runs_org_started")
+  @@index([organizationId, status], map: "idx_oracle_cust_runs_org_status")
+  @@map("oracle_customer_sync_runs")
+}
+
+model OracleCustomerMirror {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId             String    @map("sync_run_id") @db.Uuid
+  organizationId        String    @map("organization_id") @db.Uuid
+  externalCustomerCode  String    @map("external_customer_code") @db.VarChar(30)
+  accountNumber         String?   @map("account_number") @db.VarChar(30)
+  nameAr                String    @map("name_ar") @db.VarChar(250)
+  phone                 String?   @db.VarChar(100)
+  mobile                String?   @db.VarChar(100)
+  address               String?   @db.Text
+  externalRegionCode    String?   @map("external_region_code") @db.VarChar(30)
+  latitudeRaw           String?   @map("latitude_raw") @db.VarChar(100)
+  longitudeRaw          String?   @map("longitude_raw") @db.VarChar(100)
+  relationshipStartDate DateTime? @map("relationship_start_date") @db.Date
+  isInactive            Boolean   @default(false) @map("is_inactive")
+  externalBranchCode    String?   @map("external_branch_code") @db.VarChar(30)
+  externalCollectorCode String?   @map("external_collector_code") @db.VarChar(30)
+  sourceCreatedAt       DateTime? @map("source_created_at") @db.Timestamp(0)
+  sourceUpdatedAt       DateTime? @map("source_updated_at") @db.Timestamp(0)
+  sourceHash            String    @map("source_hash") @db.VarChar(64)
+  loadedAt              DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun      OracleCustomerSyncRun        @relation(fields: [syncRunId], references: [id])
+  organization Organization                 @relation(fields: [organizationId], references: [id])
+  currencies   OracleCustomerCurrencyMirror[]
+  balances     OracleCustomerBalanceMirror[]
+
+  @@unique([syncRunId, externalCustomerCode], map: "uq_oracle_customers_run_code")
+  @@index([organizationId, externalCustomerCode], map: "idx_oracle_customers_org_code")
+  @@map("oracle_customers_mirror")
+}
+
+model OracleCustomerCurrencyMirror {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId            String   @map("sync_run_id") @db.Uuid
+  organizationId       String   @map("organization_id") @db.Uuid
+  externalCustomerCode String   @map("external_customer_code") @db.VarChar(30)
+  currencyCode         String   @map("currency_code") @db.VarChar(10)
+  isInactive           Boolean  @default(false) @map("is_inactive")
+  creditLimit          Decimal  @default(0) @map("credit_limit") @db.Decimal(38, 16)
+  invoiceLimit         Decimal  @default(0) @map("invoice_limit") @db.Decimal(38, 16)
+  sourceHash           String   @map("source_hash") @db.VarChar(64)
+  loadedAt             DateTime @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun      OracleCustomerSyncRun @relation(fields: [syncRunId], references: [id])
+  organization Organization          @relation(fields: [organizationId], references: [id])
+  customer     OracleCustomerMirror  @relation(fields: [syncRunId, externalCustomerCode], references: [syncRunId, externalCustomerCode])
+
+  @@unique([syncRunId, externalCustomerCode, currencyCode], map: "uq_oracle_cust_curr_run_key")
+  @@index([syncRunId, currencyCode], map: "idx_oracle_cust_curr_run_currency")
+  @@map("oracle_customer_currencies_mirror")
+}
+
+model OracleCustomerBalanceMirror {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId             String    @map("sync_run_id") @db.Uuid
+  organizationId        String    @map("organization_id") @db.Uuid
+  externalCustomerCode  String    @map("external_customer_code") @db.VarChar(30)
+  currencyCode          String    @map("currency_code") @db.VarChar(10)
+  transactionCount      Int       @map("transaction_count")
+  openingDebitLocal     Decimal   @map("opening_debit_local") @db.Decimal(38, 16)
+  openingCreditLocal    Decimal   @map("opening_credit_local") @db.Decimal(38, 16)
+  balanceLocal          Decimal   @map("balance_local") @db.Decimal(38, 16)
+  openingDebitForeign   Decimal   @map("opening_debit_foreign") @db.Decimal(38, 16)
+  openingCreditForeign  Decimal   @map("opening_credit_foreign") @db.Decimal(38, 16)
+  balanceForeign        Decimal   @map("balance_foreign") @db.Decimal(38, 16)
+  firstTransactionDate  DateTime? @map("first_transaction_date") @db.Date
+  lastTransactionDate   DateTime? @map("last_transaction_date") @db.Date
+  sourceHash            String    @map("source_hash") @db.VarChar(64)
+  loadedAt              DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun         OracleCustomerSyncRun        @relation(fields: [syncRunId], references: [id])
+  organization    Organization                 @relation(fields: [organizationId], references: [id])
+  customer         OracleCustomerMirror         @relation(fields: [syncRunId, externalCustomerCode], references: [syncRunId, externalCustomerCode], map: "oracle_customer_balances_mirror_customer_fkey")
+
+  @@unique([syncRunId, externalCustomerCode, currencyCode], map: "uq_oracle_cust_balance_run_key")
+  @@index([syncRunId, currencyCode], map: "idx_oracle_cust_balance_run_currency")
+  @@map("oracle_customer_balances_mirror")
+}
+
+// Oracle detailed movements mirror. It is isolated from operational ledgers and
+// stock documents; every loaded run remains validating until explicitly reviewed.
+model OracleMovementSyncRun {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId    String    @map("organization_id") @db.Uuid
+  sourceSchema      String    @map("source_schema") @db.VarChar(30)
+  status            String    @default("extracting") @db.VarChar(20)
+  triggeredBy       String?   @map("triggered_by") @db.Uuid
+  startedAt         DateTime  @default(now()) @map("started_at") @db.Timestamptz()
+  extractedAt       DateTime? @map("extracted_at") @db.Timestamptz()
+  sourceCounts      Json?     @map("source_counts") @db.JsonB
+  loadedCounts      Json?     @map("loaded_counts") @db.JsonB
+  validationSummary Json?     @map("validation_summary") @db.JsonB
+  manifestHash      String?   @map("manifest_hash") @db.VarChar(64)
+  errorSummary      Json?     @map("error_summary") @db.JsonB
+
+  customerMovements  OracleCustomerMovementMirror[]
+  inventoryMovements OracleInventoryMovementMirror[]
+
+  @@index([organizationId, startedAt], map: "idx_oracle_movement_runs_org_started")
+  @@map("oracle_movement_sync_runs")
+}
+
+model OracleCustomerMovementMirror {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId            String    @map("sync_run_id") @db.Uuid
+  organizationId       String    @map("organization_id") @db.Uuid
+  sourceFingerprint    String    @map("source_fingerprint") @db.VarChar(64)
+  sourceHash           String    @map("source_hash") @db.VarChar(64)
+  duplicateOrdinal     Int       @map("duplicate_ordinal")
+  externalCustomerCode String    @map("external_customer_code") @db.VarChar(30)
+  currencyCode         String    @map("currency_code") @db.VarChar(10)
+  documentDate         DateTime  @map("document_date") @db.Date
+  documentType         String    @map("document_type") @db.VarChar(20)
+  documentJvType       String?   @map("document_jv_type") @db.VarChar(20)
+  documentNumber       String?   @map("document_number") @db.VarChar(50)
+  documentSerial       String?   @map("document_serial") @db.VarChar(50)
+  recordNumber         String?   @map("record_number") @db.VarChar(50)
+  referenceNumber      String?   @map("reference_number") @db.VarChar(100)
+  description          String?   @db.Text
+  debitLocal           Decimal   @map("debit_local") @db.Decimal(38, 16)
+  creditLocal          Decimal   @map("credit_local") @db.Decimal(38, 16)
+  debitForeign         Decimal   @map("debit_foreign") @db.Decimal(38, 16)
+  creditForeign        Decimal   @map("credit_foreign") @db.Decimal(38, 16)
+  sourceCreatedAt      DateTime? @map("source_created_at") @db.Timestamp(0)
+  sourceUpdatedAt      DateTime? @map("source_updated_at") @db.Timestamp(0)
+  loadedAt             DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun OracleMovementSyncRun @relation(fields: [syncRunId], references: [id])
+
+  @@unique([syncRunId, sourceFingerprint], map: "uq_oracle_customer_movements_run_fingerprint")
+  @@index([syncRunId, externalCustomerCode, currencyCode, documentDate], map: "idx_oracle_customer_movements_lookup")
+  @@map("oracle_customer_movements_mirror")
+}
+
+model OracleInventoryMovementMirror {
+  id                            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId                     String    @map("sync_run_id") @db.Uuid
+  organizationId                String    @map("organization_id") @db.Uuid
+  sourceFingerprint             String    @map("source_fingerprint") @db.VarChar(64)
+  sourceHash                    String    @map("source_hash") @db.VarChar(64)
+  duplicateOrdinal              Int       @map("duplicate_ordinal")
+  documentType                  String    @map("document_type") @db.VarChar(20)
+  billDocumentType              String?   @map("bill_document_type") @db.VarChar(20)
+  documentNumber                String    @map("document_number") @db.VarChar(50)
+  documentSerial                String    @map("document_serial") @db.VarChar(50)
+  recordNumber                  String?   @map("record_number") @db.VarChar(50)
+  documentSequence              String    @map("document_sequence") @db.VarChar(50)
+  serialNumber                  String    @map("serial_number") @db.VarChar(50)
+  movementDate                  DateTime  @map("movement_date") @db.Date
+  externalItemCode              String    @map("external_item_code") @db.VarChar(30)
+  unitName                      String    @map("unit_name") @db.VarChar(30)
+  packageSize                   Decimal   @map("package_size") @db.Decimal(38, 16)
+  itemQuantity                  Decimal   @map("item_quantity") @db.Decimal(38, 16)
+  freeQuantity                  Decimal   @map("free_quantity") @db.Decimal(38, 16)
+  primaryQuantity               Decimal   @map("primary_quantity") @db.Decimal(38, 16)
+  primaryFreeQuantity           Decimal   @map("primary_free_quantity") @db.Decimal(38, 16)
+  inOut                         Int       @map("in_out")
+  externalWarehouseCode         String    @map("external_warehouse_code") @db.VarChar(30)
+  externalWarehouseGroupCode    String?   @map("external_warehouse_group_code") @db.VarChar(30)
+  itemCost                      Decimal?  @map("item_cost") @db.Decimal(38, 16)
+  stockCost                     Decimal?  @map("stock_cost") @db.Decimal(38, 16)
+  currencyCode                  String?   @map("currency_code") @db.VarChar(10)
+  externalCustomerCode          String?   @map("external_customer_code") @db.VarChar(30)
+  externalVendorCode            String?   @map("external_vendor_code") @db.VarChar(30)
+  description                   String?   @db.Text
+  referenceNumber               String?   @map("reference_number") @db.VarChar(100)
+  barcode                       String?   @db.VarChar(100)
+  companyNumber                 String?   @map("company_number") @db.VarChar(20)
+  branchNumber                  String?   @map("branch_number") @db.VarChar(20)
+  branchYear                    String?   @map("branch_year") @db.VarChar(20)
+  sourceCreatedAt               DateTime? @map("source_created_at") @db.Timestamp(0)
+  sourceUpdatedAt               DateTime? @map("source_updated_at") @db.Timestamp(0)
+  loadedAt                      DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+
+  syncRun OracleMovementSyncRun @relation(fields: [syncRunId], references: [id])
+
+  @@unique([syncRunId, sourceFingerprint], map: "uq_oracle_inventory_movements_run_fingerprint")
+  @@index([syncRunId, externalItemCode, movementDate], map: "idx_oracle_inventory_movements_item")
+  @@index([syncRunId, externalWarehouseCode, movementDate], map: "idx_oracle_inventory_movements_warehouse")
+  @@map("oracle_inventory_movements_mirror")
+}
+
+// Only explicitly approved inventory movements are copied here. Historical
+// mirror rows remain isolated and are never published implicitly.
+model PublishedInventoryMovement {
+  id                            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId                String    @map("organization_id") @db.Uuid
+  sourceSchema                  String    @map("source_schema") @db.VarChar(30)
+  sourceRunId                   String    @map("source_run_id") @db.Uuid
+  sourceFingerprint             String    @map("source_fingerprint") @db.VarChar(64)
+  publicationBatchId            String    @map("publication_batch_id") @db.Uuid
+  externalItemCode              String    @map("external_item_code") @db.VarChar(30)
+  movementDate                  DateTime  @map("movement_date") @db.Date
+  documentType                  String    @map("document_type") @db.VarChar(20)
+  documentNumber                String    @map("document_number") @db.VarChar(50)
+  documentSequence              String    @map("document_sequence") @db.VarChar(50)
+  serialNumber                  String    @map("serial_number") @db.VarChar(50)
+  unitName                      String    @map("unit_name") @db.VarChar(30)
+  packageSize                   Decimal   @map("package_size") @db.Decimal(38, 16)
+  itemQuantity                  Decimal   @map("item_quantity") @db.Decimal(38, 16)
+  freeQuantity                  Decimal   @map("free_quantity") @db.Decimal(38, 16)
+  primaryQuantity               Decimal   @map("primary_quantity") @db.Decimal(38, 16)
+  primaryFreeQuantity           Decimal   @map("primary_free_quantity") @db.Decimal(38, 16)
+  inOut                         Int       @map("in_out")
+  externalWarehouseCode         String    @map("external_warehouse_code") @db.VarChar(30)
+  externalWarehouseGroupCode    String?   @map("external_warehouse_group_code") @db.VarChar(30)
+  description                   String?   @db.Text
+  referenceNumber               String?   @map("reference_number") @db.VarChar(100)
+  barcode                       String?   @db.VarChar(100)
+  publishedBy                   String    @map("published_by") @db.Uuid
+  publishedAt                   DateTime  @default(now()) @map("published_at") @db.Timestamptz()
+  reversedAt                    DateTime? @map("reversed_at") @db.Timestamptz()
+
+  @@index([organizationId, externalItemCode, movementDate], map: "idx_published_inventory_movements_item")
+  @@index([organizationId, externalWarehouseCode, movementDate], map: "idx_published_inventory_movements_warehouse")
+  @@map("published_inventory_movements")
+}
+
+// Guardrail ledger for automatic publication from the read-only Oracle mirror.
+// A baseline row can never be auto-published; quarantined rows require review.
+model OracleMovementPublicationBatch {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  sourceSchema   String    @map("source_schema") @db.VarChar(30)
+  sourceRunId    String    @map("source_run_id") @db.Uuid
+  mode           String    @default("automatic") @db.VarChar(20)
+  status         String    @default("processing") @db.VarChar(20)
+  triggeredBy    String?   @map("triggered_by") @db.Uuid
+  startedAt      DateTime  @default(now()) @map("started_at") @db.Timestamptz()
+  completedAt    DateTime? @map("completed_at") @db.Timestamptz()
+  counts         Json?     @db.JsonB
+  errorSummary   Json?     @map("error_summary") @db.JsonB
+
+  ledgerRows OracleMovementPublicationLedger[]
+
+  @@index([organizationId, startedAt], map: "idx_oracle_movement_publication_batches_org_started")
+  @@map("oracle_movement_publication_batches")
+}
+
+model OracleMovementPublicationLedger {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId       String    @map("organization_id") @db.Uuid
+  sourceSchema         String    @map("source_schema") @db.VarChar(30)
+  movementKind         String    @map("movement_kind") @db.VarChar(20)
+  sourceFingerprint    String    @map("source_fingerprint") @db.VarChar(64)
+  sourceHash           String    @map("source_hash") @db.VarChar(64)
+  sourceRunId          String    @map("source_run_id") @db.Uuid
+  status               String    @db.VarChar(30)
+  reasonCode           String?   @map("reason_code") @db.VarChar(50)
+  businessKey          String?   @map("business_key") @db.Text
+  publicationBatchId   String?   @map("publication_batch_id") @db.Uuid
+  platformEntityId     String?   @map("platform_entity_id") @db.Uuid
+  details              Json?     @db.JsonB
+  firstSeenAt          DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
+  lastSeenAt           DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz()
+  publishedAt          DateTime? @map("published_at") @db.Timestamptz()
+  reversedAt           DateTime? @map("reversed_at") @db.Timestamptz()
+
+  publicationBatch OracleMovementPublicationBatch? @relation(fields: [publicationBatchId], references: [id])
+
+  @@unique([organizationId, sourceSchema, movementKind, sourceFingerprint], map: "uq_oracle_movement_publication_ledger_fingerprint")
+  @@index([organizationId, status, movementKind, lastSeenAt], map: "idx_oracle_movement_publication_ledger_review")
+  @@index([publicationBatchId], map: "idx_oracle_movement_publication_ledger_batch")
+  @@map("oracle_movement_publication_ledger")
 }

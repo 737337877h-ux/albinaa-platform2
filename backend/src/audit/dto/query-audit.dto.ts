@@ -27,6 +27,10 @@ export class QueryAuditDto {
   @IsOptional() @IsString()
   userId?: string;
 
+  @ApiPropertyOptional({ description: 'بحث جزئي باسم المستخدم' })
+  @IsOptional() @IsString()
+  userSearch?: string;
+
   @ApiPropertyOptional()
   @IsOptional() @IsDateString()
   from?: string;

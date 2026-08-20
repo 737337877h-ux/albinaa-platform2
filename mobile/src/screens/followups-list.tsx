@@ -3,8 +3,12 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native
 import { useFocusEffect } from '@react-navigation/native';
 import { getAll } from '../db/database';
 import { colors, radius, shadow } from '../theme';
+import { useAuth } from '../store/auth-context';
+import { canUseMobileFeature } from '../utils/mobile-permissions';
 
 export default function FollowupsListScreen({ navigation }: any) {
+  const { user } = useAuth();
+  const canCreate = canUseMobileFeature(user?.permissions, 'mobile.followups.create', 'followups.create');
   const [localFollowups, setLocalFollowups] = useState<any[]>([]);
 
   useFocusEffect(
@@ -42,9 +46,9 @@ export default function FollowupsListScreen({ navigation }: any) {
           <Text style={styles.title}>المتابعات</Text>
           <Text style={styles.subtitle}>اليوم: {todayFollowups.length} | الإجمالي: {all.length}</Text>
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('NewFollowup')}>
+        {canCreate && <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('NewFollowup')}>
           <Text style={styles.addBtnText}>+ متابعة</Text>
-        </TouchableOpacity>
+        </TouchableOpacity>}
       </View>
 
       {todayFollowups.length > 0 && (

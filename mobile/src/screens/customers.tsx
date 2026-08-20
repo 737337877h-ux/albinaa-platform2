@@ -26,6 +26,7 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
   const [excludeSettled, setExcludeSettled] = React.useState(true);
   const [loading, setLoading] = React.useState(true);
   const { user } = useAuth();
+  const deliveryDirectory = !!user?.permissions?.includes('mobile.delivery.customers.view_all_no_balance');
   const showCollector = !!user?.permissions?.includes('customers.read_all');
 
   useFocusEffect(React.useCallback(() => {
@@ -45,14 +46,14 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
       const isAdvance = account.customerType === 'advance';
       if ((kind === 'advance') !== isAdvance) return false;
       if (query && !searchableCustomerText(account).includes(query)) return false;
-      return !excludeSettled || totalAbsoluteBalance(account.balances) > 0.001;
+      return deliveryDirectory || !excludeSettled || totalAbsoluteBalance(account.balances) > 0.001;
     });
     return result.sort((a, b) => {
-      if (sort === 'balance') return totalAbsoluteBalance(b.balances) - totalAbsoluteBalance(a.balances);
+      if (!deliveryDirectory && sort === 'balance') return totalAbsoluteBalance(b.balances) - totalAbsoluteBalance(a.balances);
       if (sort === 'recent') return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
       return String(a.fullName || '').localeCompare(String(b.fullName || ''), 'ar');
     });
-  }, [accounts, excludeSettled, kind, search, sort]);
+  }, [accounts, deliveryDirectory, excludeSettled, kind, search, sort]);
 
   if (loading) return <Loading />;
   const title = kind === 'advance' ? 'حسابات السلف' : 'العملاء';
@@ -88,10 +89,10 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
       </View>
 
       <View style={styles.filters}>
-        <Filter label="أعلى رصيد" active={sort === 'balance'} onPress={() => setSort('balance')} />
+        {!deliveryDirectory && <Filter label="أعلى رصيد" active={sort === 'balance'} onPress={() => setSort('balance')} />}
         <Filter label="الاسم" active={sort === 'name'} onPress={() => setSort('name')} />
         <Filter label="الأحدث" active={sort === 'recent'} onPress={() => setSort('recent')} />
-        <Filter label="استبعاد الصافي" icon="remove-circle-outline" active={excludeSettled} onPress={() => setExcludeSettled((v) => !v)} />
+        {!deliveryDirectory && <Filter label="استبعاد الصافي" icon="remove-circle-outline" active={excludeSettled} onPress={() => setExcludeSettled((v) => !v)} />}
       </View>
 
       <FlatList
@@ -106,6 +107,7 @@ export function AccountsScreen({ navigation, kind }: { navigation: any; kind: Ac
           <AccountRow
             account={item}
             showCollector={showCollector}
+            hideBalances={Boolean(item.balanceHidden)}
             onPress={() => navigation.navigate('Customer360', { id: String(item.id), customer: item })}
           />
         )}
@@ -130,7 +132,7 @@ function Filter({ label, icon, active, onPress }: { label: string; icon?: keyof 
   );
 }
 
-function AccountRow({ account, showCollector, onPress }: { account: any; showCollector: boolean; onPress: () => void }) {
+function AccountRow({ account, showCollector, hideBalances, onPress }: { account: any; showCollector: boolean; hideBalances: boolean; onPress: () => void }) {
   const balances = parseBalances(account.balances).filter((b) => Math.abs(Number(b.balance ?? b.accountingBalance ?? 0)) > 0.001);
   const code = account.accountNumber || account.externalCustomerCode || '—';
   return (
@@ -148,7 +150,7 @@ function AccountRow({ account, showCollector, onPress }: { account: any; showCol
           {!!account.phonePrimary && <Text style={styles.phone}>{account.phonePrimary}</Text>}
         </View>
       </View>
-      <View style={styles.balanceStack}>
+      {!hideBalances && <View style={styles.balanceStack}>
         {balances.length ? balances.slice(0, 2).map((balance, index) => (
           <View key={`${balance.currency || balance.currencyCode}-${index}`} style={styles.balanceLine}>
             <Text style={[styles.balanceAmount, Number(balance.balance ?? balance.accountingBalance ?? 0) < 0 && styles.creditBalance]}>{formatBalance(Math.abs(Number(balance.balance ?? balance.accountingBalance ?? 0)))}</Text>
@@ -156,7 +158,7 @@ function AccountRow({ account, showCollector, onPress }: { account: any; showCol
           </View>
         )) : <Text style={styles.zero}>صافي</Text>}
         <Ionicons name="chevron-back" size={17} color={colors.muted} />
-      </View>
+      </View>}
     </TouchableOpacity>
   );
 }

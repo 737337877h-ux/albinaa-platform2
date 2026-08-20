@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, StreamableFile, UploadedFile, UseInterceptors,
+  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, StreamableFile, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -15,6 +15,7 @@ import { SyncRequestDto } from './dto/sync-request.dto';
 import { UploadReceiptDto } from './dto/upload-receipt.dto';
 import { UpdateCustomerFieldDto } from './dto/update-customer-field.dto';
 import { MobileService } from './mobile.service';
+import { OracleInventoryItemsQueryDto, OracleInventorySourceQueryDto } from '../oracle-inventory-sync/dto/oracle-inventory-query.dto';
 
 const ALLOWED_MIME_TYPES = [
   'image/jpeg',
@@ -142,5 +143,27 @@ export class MobileController {
   @ApiOperation({ summary: 'عرض عميل 360 مبسط للجوال' })
   findCustomer360(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.mobile.findCustomer360(user, id);
+  }
+
+  @Get('inventory/summary')
+  @ApiOperation({ summary: 'ملخص المخزون المنشور لتطبيق الجوال — قراءة فقط' })
+  inventorySummary(@CurrentUser() user: AuthUser, @Query() query: OracleInventorySourceQueryDto) {
+    return this.mobile.mobileInventorySummary(user, query);
+  }
+
+  @Get('inventory/items')
+  @ApiOperation({ summary: 'بحث أصناف المخزون المنشور لتطبيق الجوال — قراءة فقط' })
+  inventoryItems(@CurrentUser() user: AuthUser, @Query() query: OracleInventoryItemsQueryDto) {
+    return this.mobile.mobileInventoryItems(user, query);
+  }
+
+  @Get('inventory/items/:code')
+  @ApiOperation({ summary: 'تفاصيل ورصيد صنف منشور لتطبيق الجوال — قراءة فقط' })
+  inventoryItem(
+    @CurrentUser() user: AuthUser,
+    @Param('code') code: string,
+    @Query() query: OracleInventorySourceQueryDto,
+  ) {
+    return this.mobile.mobileInventoryItem(user, code, query);
   }
 }

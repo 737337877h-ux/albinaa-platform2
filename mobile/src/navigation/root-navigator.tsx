@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,10 +28,17 @@ import CustomerLocationPickerScreen from '../screens/customer-location-picker';
 import MessageTemplatesScreen from '../screens/message-templates';
 import PromisesListScreen from '../screens/promises-list';
 import ReservationsScreen from '../screens/reservations';
+import NewReservationScreen from '../screens/new-reservation';
+import InventoryScreen from '../screens/inventory';
+import InventoryItemScreen from '../screens/inventory-item';
 import { colors } from '../theme';
+import * as Notifications from 'expo-notifications';
+import { notificationNavigationTarget } from '../utils/notification-navigation';
+import { canUseMobileFeature } from '../utils/mobile-permissions';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
+const navigationRef = createNavigationContainerRef<any>();
 
 function TabIcon({ name, focused }: { name: string; focused: boolean }) {
   const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -68,8 +75,14 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
 }
 
 function MainTabs() {
+  const { user } = useAuth();
   const insets = useSafeAreaInsets();
   const bottomInset = Math.max(insets.bottom, 10);
+  const permissions = user?.permissions ?? [];
+  const canViewTasks = canUseMobileFeature(permissions, 'mobile.tasks.view', 'tasks.manage');
+  const canViewCustomers = permissions.includes('mobile.delivery.customers.view_all_no_balance')
+    || canUseMobileFeature(permissions, 'mobile.customers.view', 'customers.read');
+  const canViewAdvances = canUseMobileFeature(permissions, 'mobile.advances.view', 'customers.read');
   return (
     <Tab.Navigator screenOptions={({ route }) => ({
       headerStyle: { backgroundColor: colors.primary },
@@ -96,9 +109,9 @@ function MainTabs() {
       },
     })}>
       <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ title: 'الرئيسية', headerShown: false }} />
-      <Tab.Screen name="Tasks" component={TasksScreen} options={{ title: 'المهام' }} />
-      <Tab.Screen name="Customers" component={CustomersScreen} options={{ title: 'العملاء', headerShown: false }} />
-      <Tab.Screen name="Advances" component={AdvancesScreen} options={{ title: 'السلف', headerShown: false }} />
+      {canViewTasks && <Tab.Screen name="Tasks" component={TasksScreen} options={{ title: 'المهام' }} />}
+      {canViewCustomers && <Tab.Screen name="Customers" component={CustomersScreen} options={{ title: 'العملاء', headerShown: false }} />}
+      {canViewAdvances && <Tab.Screen name="Advances" component={AdvancesScreen} options={{ title: 'السلف', headerShown: false }} />}
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'حسابي' }} />
     </Tab.Navigator>
   );
@@ -106,10 +119,25 @@ function MainTabs() {
 
 export default function RootNavigator() {
   const { isAuthenticated, isLoading } = useAuth();
+  React.useEffect(() => {
+    if (!isAuthenticated) return;
+    const open = (data: Record<string, any> = {}) => {
+      if (!navigationRef.isReady()) return;
+      const target = notificationNavigationTarget(String(data.kind || ''), data);
+      navigationRef.navigate(target.route, target.params);
+    };
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      open(response.notification.request.content.data as Record<string, any>);
+    });
+    Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) open(response.notification.request.content.data as Record<string, any>);
+    }).catch(() => undefined);
+    return () => subscription.remove();
+  }, [isAuthenticated]);
   if (isLoading) return <Loading />;
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       {isAuthenticated ? (
         <Stack.Navigator screenOptions={{ headerStyle: { backgroundColor: colors.primary }, headerTintColor: '#fff', headerTitleStyle: { fontFamily: 'Tajawal', fontWeight: '800', fontSize: 20 }, headerTitleAlign: 'center' }}>
           <Stack.Screen name="Main" component={MainTabs} options={{ headerShown: false }} />
@@ -126,6 +154,9 @@ export default function RootNavigator() {
           <Stack.Screen name="MessageTemplates" component={MessageTemplatesScreen} options={{ title: 'قوالب الرسائل' }} />
           <Stack.Screen name="PromisesList" component={PromisesListScreen} options={{ title: 'وعود السداد' }} />
           <Stack.Screen name="Reservations" component={ReservationsScreen} options={{ title: 'حجوزات البضاعة' }} />
+          <Stack.Screen name="NewReservation" component={NewReservationScreen} options={{ title: 'إضافة حجز بضاعة' }} />
+          <Stack.Screen name="Inventory" component={InventoryScreen} options={{ title: 'المخزون' }} />
+          <Stack.Screen name="InventoryItem" component={InventoryItemScreen} options={{ title: 'تفاصيل الصنف' }} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'الإشعارات' }} />
         </Stack.Navigator>
       ) : (

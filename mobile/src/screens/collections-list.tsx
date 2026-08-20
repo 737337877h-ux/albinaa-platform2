@@ -3,8 +3,12 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native
 import { useFocusEffect } from '@react-navigation/native';
 import { getAll } from '../db/database';
 import { colors, radius, shadow } from '../theme';
+import { useAuth } from '../store/auth-context';
+import { canUseMobileFeature } from '../utils/mobile-permissions';
 
 export default function CollectionsListScreen({ navigation }: any) {
+  const { user } = useAuth();
+  const canCreate = canUseMobileFeature(user?.permissions, 'mobile.collections.create', 'collections.create');
   const [localCollections, setLocalCollections] = useState<any[]>([]);
 
   useFocusEffect(
@@ -42,9 +46,9 @@ export default function CollectionsListScreen({ navigation }: any) {
           <Text style={styles.title}>التحصيلات</Text>
           <Text style={styles.subtitle}>اليوم: {todayCollections.length} | إجمالي اليوم: {todayTotal.toLocaleString('en-US')}</Text>
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('NewCollection')}>
+        {canCreate && <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('NewCollection')}>
           <Text style={styles.addBtnText}>+ تحصيل</Text>
-        </TouchableOpacity>
+        </TouchableOpacity>}
       </View>
 
       {todayCollections.length > 0 && (

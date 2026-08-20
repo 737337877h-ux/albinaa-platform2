@@ -4,6 +4,7 @@ import {
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { isActionableDebtorBalance } from '../common/debt-followup-policy';
 import { PrismaService } from '../prisma/prisma.service';
 import { PromisesService } from '../promises/promises.service';
 import { CompleteTaskDto, TASK_COMPLETE_RESULT_LABELS } from './dto/complete-task.dto';
@@ -32,8 +33,10 @@ export const TASK_TYPE_PRIORITY: Record<string, number> = {
   escalation_visit_90: 2.5,
   followup_overdue: 3,
   risk_critical: 4,
+  account_group_risk_critical: 4,
   escalation_call_60: 4.5,
   risk_high: 5,
+  account_group_risk_high: 5,
   large_debt_7plus: 6,
   escalation_message_30: 6.5,
   debt_120plus: 7,
@@ -75,6 +78,12 @@ export function escalationForAging(buckets: {
 
 export function priorityOfTaskType(taskType: string): number {
   return TASK_TYPE_PRIORITY[taskType] ?? 100;
+}
+
+function isAccountGroupTaskType(taskType: string): boolean {
+  return taskType === 'account_group_priority'
+    || taskType === 'account_group_risk_critical'
+    || taskType === 'account_group_risk_high';
 }
 
 /** مفتاح منع التكرار المعتمد (PR 5): عميل + عملة + نوع المهمة + تاريخ الاستحقاق + المصدر. */
@@ -140,6 +149,56 @@ export class TasksService {
       where: { organizationId_key: { organizationId: orgId, key } },
     });
     return row ? ((row.value as any) ?? fallback) : fallback;
+  }
+
+  /**
+   * CustomerBalance is the last imported Oracle snapshot.  Collections and
+   * other post-import events live in OperationalLedger, so work queues must
+   * use the combined balance rather than the stale snapshot alone.
+   */
+  private async operationalDebtorBalances(orgId: string, customerIds?: string[]) {
+    if (customerIds && customerIds.length === 0) return [];
+    const balances = await this.prisma.customerBalance.findMany({
+      where: {
+        customer: { organizationId: orgId },
+        ...(customerIds ? { customerId: { in: customerIds } } : {}),
+      },
+      select: {
+        customerId: true,
+        currencyCode: true,
+        accountingBalance: true,
+        lastImportJob: { select: { importedAt: true } },
+        customer: { select: { customerType: true, status: true } },
+      },
+    });
+    const ids = [...new Set(balances.map((balance) => balance.customerId))];
+    const ledger = ids.length === 0 ? [] : await this.prisma.operationalLedger.findMany({
+      where: { customerId: { in: ids } },
+      select: { customerId: true, currencyCode: true, amountSigned: true, createdAt: true },
+    });
+    const cutoffByKey = new Map(balances.map((balance) => [
+      `${balance.customerId}|${balance.currencyCode}`,
+      balance.lastImportJob?.importedAt?.getTime() ?? Number.NEGATIVE_INFINITY,
+    ]));
+    const deltaByKey = new Map<string, number>();
+    for (const entry of ledger) {
+      const key = `${entry.customerId}|${entry.currencyCode}`;
+      const cutoff = cutoffByKey.get(key);
+      if (cutoff == null || entry.createdAt.getTime() <= cutoff) continue;
+      deltaByKey.set(key, (deltaByKey.get(key) ?? 0) + Number(entry.amountSigned));
+    }
+    return balances.map((balance) => ({
+      customerId: balance.customerId,
+      currencyCode: balance.currencyCode,
+      accountingBalance: Number(balance.accountingBalance),
+      operationalBalance: Number(balance.accountingBalance)
+        + (deltaByKey.get(`${balance.customerId}|${balance.currencyCode}`) ?? 0),
+      customerType: balance.customer.customerType,
+      customerStatus: balance.customer.status,
+    })).filter((balance) => isActionableDebtorBalance(
+      balance.operationalBalance,
+      balance.currencyCode,
+    ));
   }
 
   private async resolveCollector(user: AuthUser, collectorIdParam?: string) {
@@ -236,6 +295,39 @@ export class TasksService {
     return this.dynamicToday(user, collector, orgId, today);
   }
 
+  /** برنامج المهام المجدولة، منفصل عن توصيات «قرار اليوم». */
+  async scheduled(
+    user: AuthUser,
+    bucket: 'today' | 'overdue',
+    collectorIdParam?: string,
+  ) {
+    const orgId = user.organizationId;
+    const collector = await this.resolveCollectorOrNull(user, collectorIdParam);
+    const isAdmin = user.permissions.includes('customers.read_all');
+    const today = startOfLocalDayUtc(new Date());
+    const tomorrow = new Date(today.getTime() + 86_400_000);
+    const dueDate = bucket === 'today' ? { gte: today, lt: tomorrow } : { lt: today };
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        status: 'open',
+        dueDate,
+        customer: { organizationId: orgId },
+        ...(collectorIdParam
+          ? { assignedTo: collectorIdParam }
+          : isAdmin
+            ? {}
+            : collector
+              ? { assignedTo: collector.id }
+              : { assignedTo: 'no-access' }),
+      },
+      include: {
+        customer: { select: { id: true, name: true, phonePrimary: true, externalCustomerCode: true, customerType: true } },
+      },
+      orderBy: { dueDate: 'asc' },
+    });
+    return this.boardFromTasks(user, collector?.id ?? null, isAdmin, today, tasks);
+  }
+
   /**
    * بناء لوحة اليوم من المهام المخزنة المفتوحة المستحقة اليوم، مرتبة حسب الأولوية
    * (TASK_TYPE_PRIORITY) ثم المبلغ المتوقع تنازليًا.
@@ -253,7 +345,7 @@ export class TasksService {
   ) {
     const customerIds = [...new Set(tasks.map((t) => t.customerId).filter((x): x is string => !!x))];
     const groupPrimaryIds = [...new Set(tasks
-      .filter((task) => task.taskType === 'account_group_priority' && task.customerId)
+      .filter((task) => isAccountGroupTaskType(task.taskType) && task.customerId)
       .map((task) => task.customerId as string))];
     const groupLinks = groupPrimaryIds.length > 0
       ? await this.prisma.customerAccountLink.findMany({
@@ -262,39 +354,25 @@ export class TasksService {
       })
       : [];
     const groupMemberIds = [...new Set([...groupPrimaryIds, ...groupLinks.map((link) => link.childCustomerId)])];
-    const [balances, followups, portfolioCustomerBalances, groupMemberBalances] = await Promise.all([
-      this.prisma.customerBalance.findMany({
-        where: { customerId: { in: customerIds }, accountingBalance: { gt: 0 } },
-        select: { customerId: true, currencyCode: true, accountingBalance: true },
-      }),
+    const [allOperationalBalances, followups] = await Promise.all([
+      this.operationalDebtorBalances(user.organizationId),
       this.prisma.followup.findMany({
         where: { customerId: { in: customerIds }, deletedAt: null },
         select: { customerId: true, followupAt: true },
         orderBy: { followupAt: 'desc' },
       }),
-      this.prisma.customerBalance.findMany({
-        where: {
-          accountingBalance: { gt: 0 },
-          customer: {
-            organizationId: user.organizationId,
-            status: 'active',
-            OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
-          },
-        },
-        select: { customerId: true, currencyCode: true, accountingBalance: true },
-      }),
-      groupMemberIds.length > 0
-        ? this.prisma.customerBalance.findMany({
-          where: { customerId: { in: groupMemberIds }, accountingBalance: { gt: 0 } },
-          select: { customerId: true, currencyCode: true, accountingBalance: true },
-        })
-        : Promise.resolve([]),
     ]);
+    const customerIdSet = new Set(customerIds);
+    const groupMemberIdSet = new Set(groupMemberIds);
+    const balances = allOperationalBalances.filter((balance) => customerIdSet.has(balance.customerId));
+    const groupMemberBalances = allOperationalBalances.filter((balance) => groupMemberIdSet.has(balance.customerId));
+    const portfolioCustomerBalances = allOperationalBalances.filter((balance) =>
+      balance.customerStatus === 'active' && balance.customerType !== 'advance');
 
     const balByCustomer = new Map<string, { currency: string; balance: number }[]>();
     for (const b of balances) {
       const list = balByCustomer.get(b.customerId) ?? [];
-      list.push({ currency: b.currencyCode, balance: Number(b.accountingBalance) });
+      list.push({ currency: b.currencyCode, balance: b.operationalBalance });
       balByCustomer.set(b.customerId, list);
     }
     const primaryByMember = new Map<string, string>();
@@ -307,7 +385,7 @@ export class TasksService {
       const byCurrency = groupBalancesByPrimary.get(primaryId) ?? new Map<string, number>();
       byCurrency.set(
         balance.currencyCode,
-        (byCurrency.get(balance.currencyCode) ?? 0) + Number(balance.accountingBalance),
+        (byCurrency.get(balance.currencyCode) ?? 0) + balance.operationalBalance,
       );
       groupBalancesByPrimary.set(primaryId, byCurrency);
     }
@@ -316,7 +394,7 @@ export class TasksService {
       if (!lastFollowupOf.has(f.customerId)) lastFollowupOf.set(f.customerId, f.followupAt);
     }
 
-    const items = tasks.map((t) => ({
+    const candidateItems = tasks.map((t) => ({
       customerId: t.customerId ?? '',
       customerName: t.customer?.name ?? '',
       phone: t.customer?.phonePrimary ?? null,
@@ -329,18 +407,28 @@ export class TasksService {
       assignedTo: t.assignedTo,
       expectedAmount: t.expectedAmount === null ? undefined : Number(t.expectedAmount),
       currency: t.expectedCurrency ?? undefined,
-      balances: t.taskType === 'account_group_priority'
+      balances: isAccountGroupTaskType(t.taskType)
         ? [...(groupBalancesByPrimary.get(t.customerId ?? '') ?? new Map<string, number>()).entries()]
           .map(([currency, balance]) => ({ currency, balance }))
         : balByCustomer.get(t.customerId ?? '') ?? [],
       lastFollowupAt: lastFollowupOf.get(t.customerId ?? '') ?? null,
     })).filter((item) => item.balances.length > 0);
+    candidateItems.sort((a, b) => a.priority - b.priority
+      || (b.expectedAmount ?? 0) - (a.expectedAmount ?? 0));
+    // A collector must see one actionable card per account. Keep the highest
+    // priority task and retain all positive currency balances on that card.
+    const seenCustomers = new Set<string>();
+    const items = candidateItems.filter((item) => {
+      if (!item.customerId || seenCustomers.has(item.customerId)) return false;
+      seenCustomers.add(item.customerId);
+      return true;
+    });
     items.sort((a, b) => a.priority - b.priority
       || (b.expectedAmount ?? 0) - (a.expectedAmount ?? 0));
 
     const expectedTargets = new Map<string, number>();
     for (const i of items) {
-      if (i.taskType !== 'account_group_priority' && i.expectedAmount && i.currency) {
+      if (!isAccountGroupTaskType(i.taskType) && i.expectedAmount && i.currency) {
         const positiveBalance = i.balances.find((b) => b.currency === i.currency)?.balance;
         const capped = positiveBalance == null ? i.expectedAmount : Math.min(i.expectedAmount, positiveBalance);
         const key = `${i.customerId}|${i.currency}`;
@@ -358,7 +446,7 @@ export class TasksService {
     const accountClassByCustomer = new Map(items.map((item) => [item.customerId, item.accountClass]));
     for (const balance of balances) {
       const currency = balance.currencyCode;
-      const amount = Number(balance.accountingBalance);
+      const amount = balance.operationalBalance;
       totalBalanceByCurrency[currency] = (totalBalanceByCurrency[currency] ?? 0) + amount;
       const target = accountClassByCustomer.get(balance.customerId) === 'advance'
         ? advanceBalanceByCurrency
@@ -368,7 +456,7 @@ export class TasksService {
     const portfolioCustomerDebtByCurrency: Record<string, number> = {};
     for (const balance of portfolioCustomerBalances) {
       portfolioCustomerDebtByCurrency[balance.currencyCode] =
-        (portfolioCustomerDebtByCurrency[balance.currencyCode] ?? 0) + Number(balance.accountingBalance);
+        (portfolioCustomerDebtByCurrency[balance.currencyCode] ?? 0) + balance.operationalBalance;
     }
     const excludedCustomerDebtByCurrency: Record<string, number> = {};
     for (const [currency, portfolioAmount] of Object.entries(portfolioCustomerDebtByCurrency)) {
@@ -436,7 +524,7 @@ export class TasksService {
       assignments,
       scores,
       agingSummaries,
-      balances,
+      snapshotBalances,
       latestDebitTransactions,
       followups,
       followupResults,
@@ -503,6 +591,11 @@ export class TasksService {
         select: { primaryCustomerId: true, childCustomerId: true },
       }),
     ]);
+    // Replace the imported snapshot balances with the live operational view.
+    // The snapshot query remains in the batch above for compatibility with
+    // existing Prisma mocks and can be removed in a later cleanup.
+    void snapshotBalances;
+    const balances = await this.operationalDebtorBalances(orgId);
 
     // الإسناد الحالي لكل عميل (مفتاح الدمج مع collector)
     const collectorByCustomer = new Map<string, string>();
@@ -559,9 +652,9 @@ export class TasksService {
     const balancesByCcy = new Map<string, number[]>();
     for (const b of balances) {
       const key = `${b.customerId}|${b.currencyCode}`;
-      balanceByKey.set(key, Number(b.accountingBalance));
+      balanceByKey.set(key, Number(b.operationalBalance));
       const list = balancesByCcy.get(b.currencyCode) ?? [];
-      list.push(Number(b.accountingBalance));
+      list.push(Number(b.operationalBalance));
       balancesByCcy.set(b.currencyCode, list);
     }
     const topBalanceThresholdByCcy = new Map<string, number>();
@@ -761,16 +854,33 @@ export class TasksService {
         }
       }
       const collectorId = collectorByCustomer.get(primaryCustomerId) ?? null;
+      const riskOrder: Record<string, number> = { critical: 3, high: 2, medium: 1, low: 0 };
+      const groupRisk = [...memberIds]
+        .map((memberId) => riskByCustomer.get(memberId))
+        .filter((risk): risk is { score: number; riskLevel: string } => !!risk)
+        .sort((left, right) => (riskOrder[right.riskLevel] ?? -1) - (riskOrder[left.riskLevel] ?? -1)
+          || right.score - left.score)[0];
+      const groupTaskType = groupRisk?.riskLevel === 'critical'
+        ? 'account_group_risk_critical'
+        : groupRisk?.riskLevel === 'high'
+          ? 'account_group_risk_high'
+          : 'account_group_priority';
+      const groupRiskText = groupRisk?.riskLevel === 'critical'
+        ? ` — مخاطر المجموعة حرجة (${groupRisk.score})`
+        : groupRisk?.riskLevel === 'high'
+          ? ` — مخاطر المجموعة مرتفعة (${groupRisk.score})`
+          : '';
       for (const [currency, amount] of totals) {
-        const key = queueTaskKey(primaryCustomerId, currency, 'account_group_priority', today);
-        if (existingKeys.has(key)) continue;
+        const alreadyExists = ['account_group_priority', 'account_group_risk_critical', 'account_group_risk_high']
+          .some((type) => existingKeys.has(queueTaskKey(primaryCustomerId, currency, type, today)));
+        if (alreadyExists) continue;
         rows.push({
           customerId: primaryCustomerId,
           assignedTo: collectorId,
           createdBy: user.id,
-          taskType: 'account_group_priority',
+          taskType: groupTaskType,
           dueDate: today,
-          priorityReason: `حساب رئيسي — إجمالي مديونية المجموعة (${fmtAmount(amount)} ${currency})${collectorId ? '' : ' — غير مسند لمحصل حالي'}`,
+          priorityReason: `حساب رئيسي — إجمالي مديونية المجموعة (${fmtAmount(amount)} ${currency})${groupRiskText}${collectorId ? '' : ' — غير مسند لمحصل حالي'}`,
           expectedAmount: amount,
           expectedCurrency: currency,
           status: 'open',
@@ -849,6 +959,16 @@ export class TasksService {
         scores: { orderBy: { computedAt: 'desc' }, take: 1 },
       },
     });
+    const operationalBalances = await this.operationalDebtorBalances(
+      orgId,
+      assigned.map((customer) => customer.id),
+    );
+    const operationalByCustomer = new Map<string, { currency: string; balance: number }[]>();
+    for (const balance of operationalBalances) {
+      const list = operationalByCustomer.get(balance.customerId) ?? [];
+      list.push({ currency: balance.currencyCode, balance: balance.operationalBalance });
+      operationalByCustomer.set(balance.customerId, list);
+    }
 
     // 1) مهام الوعود المفتوحة المستحقة اليوم أو المتأخرة (تشمل التصعيدات)
     const promiseTasks = await this.prisma.task.findMany({
@@ -870,16 +990,15 @@ export class TasksService {
     }[] = [];
     const included = new Set<string>();
     const balancesOf = (id: string) => {
-      const c = assigned.find((x) => x.id === id);
-      return (c?.balances ?? []).map((b) => ({
-        currency: b.currencyCode, balance: Number(b.accountingBalance),
-      }));
+      return operationalByCustomer.get(id) ?? [];
     };
     const lastFollowupOf = (id: string) =>
       assigned.find((x) => x.id === id)?.followups[0]?.followupAt ?? null;
 
     for (const t of promiseTasks) {
       if (!t.customerId) continue;
+      const taskBalances = balancesOf(t.customerId);
+      if (taskBalances.length === 0) continue;
       items.push({
         customerId: t.customerId,
         customerName: t.customer?.name ?? '',
@@ -889,7 +1008,7 @@ export class TasksService {
         taskId: t.id,
         expectedAmount: t.expectedAmount === null ? undefined : Number(t.expectedAmount),
         currency: t.expectedCurrency ?? undefined,
-        balances: balancesOf(t.customerId),
+        balances: taskBalances,
         lastFollowupAt: lastFollowupOf(t.customerId),
       });
       included.add(t.customerId);
@@ -897,7 +1016,7 @@ export class TasksService {
 
     // 2) لم تتم متابعتهم منذ X يومًا (وعليهم رصيد مدين)
     for (const c of assigned) {
-      if (included.has(c.id) || c.balances.length === 0) continue;
+      if (included.has(c.id) || balancesOf(c.id).length === 0) continue;
       const last = c.followups[0]?.followupAt ?? null;
       if (!last || last < staleBefore) {
         items.push({
@@ -915,10 +1034,10 @@ export class TasksService {
     // 3) الرصيد المرتفع: أعلى X% من مدينِي المحصل لكل عملة
     const debtorsByCcy = new Map<string, { id: string; bal: number }[]>();
     for (const c of assigned) {
-      for (const b of c.balances) {
-        const list = debtorsByCcy.get(b.currencyCode) ?? [];
-        list.push({ id: c.id, bal: Number(b.accountingBalance) });
-        debtorsByCcy.set(b.currencyCode, list);
+      for (const b of balancesOf(c.id)) {
+        const list = debtorsByCcy.get(b.currency) ?? [];
+        list.push({ id: c.id, bal: b.balance });
+        debtorsByCcy.set(b.currency, list);
       }
     }
     for (const [ccy, list] of debtorsByCcy) {
@@ -939,7 +1058,7 @@ export class TasksService {
 
     // 4) المخاطر العالية (قواعد قابلة للتفسير — الذكاء الاصطناعي مرحلة لاحقة)
     for (const c of assigned) {
-      if (included.has(c.id)) continue;
+      if (included.has(c.id) || balancesOf(c.id).length === 0) continue;
       const risk = c.scores[0]?.riskLevel;
       if (risk === 'high' || risk === 'critical') {
         items.push({
@@ -1012,7 +1131,21 @@ export class TasksService {
       },
       orderBy: { dueDate: 'asc' },
     });
-    return tasks
+    const [actionableBalance] = await this.operationalDebtorBalances(user.organizationId, [customerId]);
+    if (!actionableBalance) return [];
+
+    const today = startOfLocalDayUtc(new Date());
+    const tomorrow = new Date(today.getTime() + 86_400_000);
+    const selected = new Map<string, typeof tasks[number]>();
+    for (const task of tasks) {
+      const bucket = task.dueDate < today ? 'overdue' : task.dueDate < tomorrow ? 'today' : 'upcoming';
+      const current = selected.get(bucket);
+      if (!current || priorityOfTaskType(task.taskType) < priorityOfTaskType(current.taskType)) {
+        selected.set(bucket, task);
+      }
+    }
+
+    return [...selected.values()]
       .map((t) => ({
         id: t.id,
         customerId: t.customerId ?? '',
@@ -1032,16 +1165,48 @@ export class TasksService {
   }
 
   /** قائمة المهام المخزنة (المفتوحة افتراضيًا) للمحصل أو للإدارة. */
-  async list(user: AuthUser, collectorIdParam?: string, status = 'open') {
+  async list(
+    user: AuthUser,
+    collectorIdParam?: string,
+    status = 'open',
+    bucket: 'today' | 'overdue' | 'upcoming' | 'all' = 'all',
+  ) {
     const collector = await this.resolveCollector(user, collectorIdParam);
-    return this.prisma.task.findMany({
-      where: { assignedTo: collector.id, status },
+    const today = startOfLocalDayUtc(new Date());
+    const tomorrow = new Date(today.getTime() + 86_400_000);
+    const dueDate = bucket === 'today'
+      ? { gte: today, lt: tomorrow }
+      : bucket === 'overdue'
+        ? { lt: today }
+        : bucket === 'upcoming'
+          ? { gte: tomorrow }
+          : undefined;
+    const tasks = await this.prisma.task.findMany({
+      where: { assignedTo: collector.id, status, ...(dueDate ? { dueDate } : {}) },
       include: {
         customer: { select: { id: true, name: true, externalCustomerCode: true } },
         sourcePromise: { select: { id: true, dueDate: true, expectedAmount: true, currencyCode: true } },
       },
       orderBy: { dueDate: 'asc' },
     });
+    if (status !== 'open') return tasks;
+
+    const customerIds = [...new Set(tasks
+      .map((task) => task.customerId)
+      .filter((id): id is string => !!id))];
+    const actionableBalances = await this.operationalDebtorBalances(user.organizationId, customerIds);
+    const actionableCustomers = new Set(actionableBalances.map((balance) => balance.customerId));
+    const selected = new Map<string, typeof tasks[number]>();
+    for (const task of tasks) {
+      if (!task.customerId || !actionableCustomers.has(task.customerId)) continue;
+      const current = selected.get(task.customerId);
+      if (!current || priorityOfTaskType(task.taskType) < priorityOfTaskType(current.taskType)) {
+        selected.set(task.customerId, task);
+      }
+    }
+    return [...selected.values()].sort((a, b) =>
+      a.dueDate.getTime() - b.dueDate.getTime()
+      || priorityOfTaskType(a.taskType) - priorityOfTaskType(b.taskType));
   }
 
   async complete(user: AuthUser, taskId: string) {

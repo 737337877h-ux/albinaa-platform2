@@ -68,6 +68,8 @@ export function taskLabel(value: unknown): string {
     followup_overdue: 'متابعة متأخرة', risk_critical: 'مخاطر حرجة', risk_high: 'مخاطر مرتفعة',
     large_debt_7plus: 'مديونية كبيرة +7 أيام', debt_120plus: 'دين تجاوز 120 يومًا',
     high_balance_no_followup: 'رصيد مرتفع دون متابعة', account_group_priority: 'حساب رئيسي ذو أولوية',
+    account_group_risk_critical: 'حساب رئيسي — مخاطر المجموعة حرجة',
+    account_group_risk_high: 'حساب رئيسي — مخاطر المجموعة مرتفعة',
     repeated_no_answer: 'لا يرد بشكل متكرر', needs_visit: 'يحتاج زيارة',
     followup_periodic_medium: 'متابعة دورية متوسطة', followup_normal: 'متابعة عادية',
     escalation_message_30: 'رسالة تصعيد +30 يومًا', escalation_call_60: 'اتصال تصعيد +60 يومًا',

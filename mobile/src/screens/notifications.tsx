@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchNotifications, markNotificationRead, markAllNotificationsRead } from '../api/endpoints';
 import Loading from '../components/loading';
 import { colors, radius, shadow } from '../theme';
+import { notificationNavigationTarget } from '../utils/notification-navigation';
 
 export interface NotificationItem {
   id: string;
@@ -90,20 +91,7 @@ function formatBody(item: NotificationItem): string {
 }
 
 function getNavigationTarget(item: NotificationItem): { route: string; params: Record<string, any> } | null {
-  const p = item.payload || {};
-  switch (item.kind) {
-    case 'followup_due':
-    case 'promise_due':
-    case 'promise_overdue':
-    case 'customer_transferred':
-    case 'collection_created':
-      if (p.customerId) return { route: 'Customer360', params: { id: p.customerId } };
-      return null;
-    case 'task_new':
-      return { route: 'Tasks', params: {} };
-    default:
-      return null;
-  }
+  return notificationNavigationTarget(item.kind, item.payload || {});
 }
 
 export default function NotificationsScreen() {

@@ -72,6 +72,23 @@ export class NotificationsService {
 
   private pushMessage(kind: string, payload: Record<string, unknown>) {
     const customerName = typeof payload.customerName === 'string' ? payload.customerName : '';
+    if (kind === 'finance_alert' && payload.event === 'financial_adjustment_requested') {
+      const type = payload.requestType === 'settlement' ? 'تصفية' : 'خصم';
+      const amount = payload.amount != null ? Number(payload.amount).toLocaleString('en-US') : '';
+      const currency = typeof payload.currency === 'string' ? payload.currency : '';
+      return {
+        title: `طلب ${type} يحتاج المراجعة`,
+        body: `${customerName || 'عميل'}${amount ? ` — ${amount} ${currency}` : ''}`,
+      };
+    }
+    if (kind === 'finance_alert' && payload.event === 'financial_adjustment_reviewed') {
+      const type = payload.requestType === 'settlement' ? 'التصفية' : 'الخصم';
+      const decision = payload.decision === 'approved' ? 'اعتماد' : 'رفض';
+      return {
+        title: `تم ${decision} طلب ${type}`,
+        body: customerName || 'تمت معالجة الطلب المالي',
+      };
+    }
     const messages: Record<string, [string, string]> = {
       followup_due: ['متابعة مستحقة', customerName ? `حان موعد متابعة ${customerName}` : 'لديك متابعة مستحقة'],
       promise_due: ['وعد سداد مستحق', customerName ? `حان موعد وعد السداد للعميل ${customerName}` : 'لديك وعد سداد مستحق'],

@@ -1,5 +1,15 @@
 export interface BalanceValue { currency?: string; currencyCode?: string; balance?: number; accountingBalance?: number }
 
+const FOLLOWUP_LIMITS: Record<string, number> = {
+  YER: 3_000, YR: 3_000, SAR: 30, SR: 30, USD: 5,
+};
+
+export function isActionableBalance(item: BalanceValue): boolean {
+  const amount = Number(item.balance ?? item.accountingBalance ?? 0);
+  const currency = String(item.currency ?? item.currencyCode ?? '').trim().toUpperCase();
+  return Number.isFinite(amount) && amount > (FOLLOWUP_LIMITS[currency] ?? 0) + 0.00005;
+}
+
 export function parseBalances(value: unknown): BalanceValue[] {
   if (Array.isArray(value)) return value;
   if (typeof value !== 'string' || !value) return [];
@@ -21,9 +31,20 @@ export function totalDebtorBalance(value: unknown): number {
   }, 0);
 }
 
+export function totalActionableDebtorBalance(value: unknown): number {
+  return parseBalances(value).reduce((sum, item) =>
+    isActionableBalance(item) ? sum + Number(item.balance ?? item.accountingBalance ?? 0) : sum, 0);
+}
+
 export function largestDebtorBalance(value: unknown): BalanceValue | null {
   return parseBalances(value)
     .filter((item) => Number(item.balance ?? item.accountingBalance ?? 0) > 0.001)
+    .sort((a, b) => Number(b.balance ?? b.accountingBalance ?? 0) - Number(a.balance ?? a.accountingBalance ?? 0))[0] ?? null;
+}
+
+export function largestActionableDebtorBalance(value: unknown): BalanceValue | null {
+  return parseBalances(value)
+    .filter(isActionableBalance)
     .sort((a, b) => Number(b.balance ?? b.accountingBalance ?? 0) - Number(a.balance ?? a.accountingBalance ?? 0))[0] ?? null;
 }
 

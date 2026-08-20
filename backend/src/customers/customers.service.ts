@@ -19,6 +19,8 @@ import { UpdateCreditPolicyDto } from './dto/update-credit-policy.dto';
 import { UpdateCreditLimitDto } from './dto/update-credit-limit.dto';
 import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
+import { CreateFinancialAdjustmentRequestDto } from './dto/create-financial-adjustment-request.dto';
+import { ReviewFinancialAdjustmentRequestDto } from './dto/review-financial-adjustment-request.dto';
 import { renderCustomerStatementPdf } from './statement-pdf.renderer';
 
 /**
@@ -190,18 +192,35 @@ export class CustomersService {
       });
     }
 
+    const operationalDeltas = await this.operationalDeltasForList(customers as any[]);
+    const items = customers.map((c: any) => this.shapeListItem(c, operationalDeltas));
+    if (q.sortBy === 'balance' && q.currency) {
+      const direction = q.sortDir === 'desc' ? -1 : 1;
+      items.sort((a: any, b: any) => {
+        const left = Number(a.balances.find((balance: any) => balance.currency === q.currency)?.balance ?? 0);
+        const right = Number(b.balances.find((balance: any) => balance.currency === q.currency)?.balance ?? 0);
+        return (left - right) * direction;
+      });
+    }
     return {
       page,
       limit,
       total,
       totalPages: Math.ceil(total / limit),
-      items: customers.map((c: any) => this.shapeListItem(c)),
+      items,
     };
   }
 
   private listInclude() {
     return {
-      balances: { select: { currencyCode: true, accountingBalance: true, updatedAt: true } },
+      balances: {
+        select: {
+          currencyCode: true,
+          accountingBalance: true,
+          updatedAt: true,
+          lastImportJob: { select: { importedAt: true } },
+        },
+      },
       assignments: {
         where: { effectiveTo: null },
         include: { collector: { include: { user: { select: { fullName: true } } } } },
@@ -215,7 +234,33 @@ export class CustomersService {
     } satisfies Prisma.CustomerInclude;
   }
 
-  private shapeListItem(c: any) {
+  private async operationalDeltasForList(customers: any[]): Promise<Map<string, number>> {
+    const ids = customers.map((customer) => customer.id);
+    if (ids.length === 0) return new Map();
+    const cutoffs = new Map<string, number>();
+    for (const customer of customers) {
+      for (const balance of customer.balances ?? []) {
+        cutoffs.set(
+          `${customer.id}|${balance.currencyCode}`,
+          balance.lastImportJob?.importedAt?.getTime() ?? Number.NEGATIVE_INFINITY,
+        );
+      }
+    }
+    const entries = await this.prisma.operationalLedger.findMany({
+      where: { customerId: { in: ids } },
+      select: { customerId: true, currencyCode: true, amountSigned: true, createdAt: true },
+    });
+    const result = new Map<string, number>();
+    for (const entry of entries) {
+      const key = `${entry.customerId}|${entry.currencyCode}`;
+      const cutoff = cutoffs.get(key);
+      if (cutoff == null || entry.createdAt.getTime() <= cutoff) continue;
+      result.set(key, (result.get(key) ?? 0) + Number(entry.amountSigned));
+    }
+    return result;
+  }
+
+  private shapeListItem(c: any, operationalDeltas: Map<string, number> = new Map()) {
     return {
       id: c.id,
       externalCustomerCode: c.externalCustomerCode,
@@ -238,7 +283,8 @@ export class CustomersService {
         : null,
       balances: c.balances.map((b: any) => ({
         currency: b.currencyCode,
-        balance: Number(b.accountingBalance),
+        balance: Number(b.accountingBalance)
+          + (operationalDeltas.get(`${c.id}|${b.currencyCode}`) ?? 0),
         updatedAt: b.updatedAt,
       })),
     };
@@ -336,6 +382,8 @@ export class CustomersService {
       whatsapp: c.whatsapp,
       region: c.region,
       address: c.address,
+      geoLat: c.geoLat === null ? null : Number(c.geoLat),
+      geoLng: c.geoLng === null ? null : Number(c.geoLng),
       branch: c.branch,
       customerType: c.customerType,
       status: c.status,
@@ -528,6 +576,172 @@ export class CustomersService {
     return result;
   }
 
+  async media(user: AuthUser, id: string) {
+    await this.assertAccess(user, id);
+    const collections = await this.prisma.collection.findMany({
+      where: { customerId: id },
+      select: {
+        id: true,
+        receiptNumber: true,
+        referenceNumber: true,
+        amount: true,
+        currencyCode: true,
+        collectedAt: true,
+      },
+      orderBy: { collectedAt: 'desc' },
+    });
+    const collectionIds = collections.map((collection) => collection.id);
+    const [attachments, gps] = await Promise.all([
+      collectionIds.length === 0 ? Promise.resolve([]) : this.prisma.attachment.findMany({
+        where: { entityTable: 'collections', entityId: { in: collectionIds } },
+        select: { id: true, entityId: true, fileName: true, uploadedAt: true },
+        orderBy: { uploadedAt: 'desc' },
+      }),
+      collectionIds.length === 0 ? Promise.resolve([]) : this.prisma.gpsLog.findMany({
+        where: { entityTable: 'collections', entityId: { in: collectionIds } },
+        include: { user: { select: { fullName: true } } },
+        orderBy: { timestamp: 'desc' },
+      }),
+    ]);
+    const collectionById = new Map(collections.map((collection) => [collection.id, collection]));
+    return {
+      receipts: attachments.map((attachment) => ({
+        ...attachment,
+        collection: collectionById.get(attachment.entityId) ?? null,
+        previewPath: `/mobile/receipts/${attachment.id}`,
+      })),
+      locations: gps.map((point) => ({
+        id: point.id,
+        collectionId: point.entityId,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        accuracy: point.accuracy,
+        timestamp: point.timestamp,
+        collectorName: point.user.fullName,
+        collection: point.entityId ? collectionById.get(point.entityId) ?? null : null,
+      })),
+    };
+  }
+
+  async createFinancialAdjustmentRequest(
+    actor: AuthUser,
+    customerId: string,
+    dto: CreateFinancialAdjustmentRequestDto,
+    req?: Request,
+  ) {
+    const customer = await this.assertAccess(actor, customerId);
+    const currencyCode = dto.currencyCode.toUpperCase();
+    const balances = await this.balances(actor, customerId);
+    const current = balances.find((balance) => balance.currency === currencyCode)?.operationalBalance ?? 0;
+    if (current <= 0.00005) {
+      throw new BadRequestException('لا يمكن طلب خصم أو تصفية لحساب صفري أو دائن');
+    }
+    if (dto.requestedAmount > current + 0.00005) {
+      throw new BadRequestException('المبلغ المطلوب أكبر من الرصيد المدين الحالي');
+    }
+    const pending = await this.prisma.financialAdjustmentRequest.findFirst({
+      where: { customerId, requestType: dto.requestType, status: 'pending' },
+      select: { id: true },
+    });
+    if (pending) throw new ConflictException('يوجد طلب مماثل قيد المراجعة لهذا العميل');
+    const created = await this.prisma.financialAdjustmentRequest.create({
+      data: {
+        organizationId: actor.organizationId,
+        customerId,
+        requestedBy: actor.id,
+        requestType: dto.requestType,
+        currencyCode,
+        requestedAmount: dto.requestedAmount,
+        reason: dto.reason.trim(),
+      },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'financial_adjustment_requested',
+      entityTable: 'financial_adjustment_requests',
+      entityId: created.id,
+      newValue: { ...dto, currencyCode, customerId, currentBalance: current },
+      req,
+    });
+    await this.notifications.notifyByPermission(
+      actor.organizationId,
+      'finance.alerts.receive',
+      'finance_alert',
+      {
+        event: 'financial_adjustment_requested',
+        requestId: created.id,
+        customerId,
+        customerName: customer.name,
+        requestType: dto.requestType,
+        amount: dto.requestedAmount,
+        currency: currencyCode,
+        requesterName: actor.fullName,
+        reason: dto.reason.trim(),
+        href: `/admin/financial-adjustments?requestId=${created.id}`,
+      },
+    );
+    return created;
+  }
+
+  async listFinancialAdjustmentRequests(actor: AuthUser, status = 'pending') {
+    return this.prisma.financialAdjustmentRequest.findMany({
+      where: { organizationId: actor.organizationId, status },
+      include: {
+        customer: { select: { id: true, name: true, externalCustomerCode: true } },
+        requester: { select: { id: true, fullName: true } },
+        reviewer: { select: { id: true, fullName: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async reviewFinancialAdjustmentRequest(
+    actor: AuthUser,
+    requestId: string,
+    dto: ReviewFinancialAdjustmentRequestDto,
+    req?: Request,
+  ) {
+    const current = await this.prisma.financialAdjustmentRequest.findFirst({
+      where: { id: requestId, organizationId: actor.organizationId },
+      include: { customer: { select: { name: true } } },
+    });
+    if (!current) throw new NotFoundException('طلب الخصم أو التصفية غير موجود');
+    if (current.status !== 'pending') throw new ConflictException('تمت معالجة هذا الطلب سابقًا');
+    const updated = await this.prisma.financialAdjustmentRequest.update({
+      where: { id: requestId },
+      data: {
+        status: dto.decision,
+        reviewedBy: actor.id,
+        reviewedAt: new Date(),
+        reviewNotes: dto.reviewNotes?.trim() || null,
+      },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: `financial_adjustment_${dto.decision}`,
+      entityTable: 'financial_adjustment_requests',
+      entityId: requestId,
+      oldValue: { status: current.status },
+      newValue: { status: dto.decision, reviewNotes: dto.reviewNotes },
+      req,
+    });
+    await this.notifications.notifyUser(current.requestedBy, 'finance_alert', {
+      event: 'financial_adjustment_reviewed',
+      requestId,
+      customerId: current.customerId,
+      customerName: current.customer.name,
+      requestType: current.requestType,
+      amount: current.requestedAmount,
+      currency: current.currencyCode,
+      reason: current.reason,
+      decision: dto.decision,
+      reviewerName: actor.fullName,
+      reviewNotes: dto.reviewNotes?.trim() || null,
+      href: `/admin/financial-adjustments?requestId=${requestId}&status=${dto.decision}`,
+    });
+    return updated;
+  }
+
   // --------------------------------------------------------------------------
   // كشف الحساب: حركات بعملة واحدة + رصيد جارٍ صحيح حتى مع التصفية بالتاريخ
   // --------------------------------------------------------------------------
@@ -706,11 +920,13 @@ export class CustomersService {
     if (dto.name) (data as any).nameNormalized = normalizeName(dto.name);
 
     const customer = await this.prisma.customer.update({ where: { id }, data });
+    const locationChanged = dto.geoLat !== undefined || dto.geoLng !== undefined;
     await this.audit.log({
-      userId: actor.id, action: 'customer_updated', entityTable: 'customers', entityId: id,
+      userId: actor.id, action: locationChanged ? 'customer_location_updated' : 'customer_updated', entityTable: 'customers', entityId: id,
       oldValue: {
         name: before.name, phonePrimary: before.phonePrimary,
         region: before.region, address: before.address,
+        geoLat: before.geoLat, geoLng: before.geoLng,
       },
       newValue: dto, req,
     });

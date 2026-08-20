@@ -31,6 +31,8 @@ import { AgingModule } from './aging/aging.module';
 import { ReportsModule } from './reports/reports.module';
 import { SearchModule } from './search/search.module';
 import { AccountingPeriodsModule } from './accounting-periods/accounting-periods.module';
+import { OracleInventorySyncModule } from './oracle-inventory-sync/oracle-inventory-sync.module';
+import { OracleMonitoringModule } from './oracle-monitoring/oracle-monitoring.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -69,6 +71,8 @@ import { IdempotencyInterceptor } from './common/interceptors/idempotency.interc
     ReportsModule,
     SearchModule,
     AccountingPeriodsModule,
+    OracleInventorySyncModule,
+    OracleMonitoringModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },         // 1) Rate limiting

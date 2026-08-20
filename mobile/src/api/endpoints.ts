@@ -17,6 +17,7 @@ export interface SyncResponse {
     collectionMethods: NamedOption[];
     followupTypes: NamedOption[];
     followupResults: NamedOption[];
+    reservationUnits: ReservationUnit[];
   };
 }
 
@@ -32,6 +33,13 @@ export interface GpsPoint {
 export interface NamedOption {
   id: string;
   name: string;
+}
+
+export interface ReservationUnit {
+  id: string;
+  code: string;
+  nameAr: string;
+  weightKg: number | null;
 }
 
 export async function fetchSync(lastSyncToken?: string) {
@@ -89,6 +97,21 @@ export async function fetchCustomers(query?: string) {
 export async function fetchCustomer360(id: string) {
   const client = await getClient();
   return client.get(`/mobile/customers/${id}`);
+}
+
+export async function fetchInventorySummary() {
+  const client = await getClient();
+  return client.get('/mobile/inventory/summary');
+}
+
+export async function fetchInventoryItems(search = '', page = 1) {
+  const client = await getClient();
+  return client.get('/mobile/inventory/items', { params: { search: search || undefined, page, limit: 30 } });
+}
+
+export async function fetchInventoryItem(code: string) {
+  const client = await getClient();
+  return client.get(`/mobile/inventory/items/${encodeURIComponent(code)}`);
 }
 
 export async function fetchCollectionMethods() {
@@ -155,6 +178,28 @@ export interface Currency {
 export async function fetchCurrencies() {
   const client = await getClient();
   return client.get<Currency[]>('/currencies');
+}
+
+export async function fetchReservationUnits() {
+  const client = await getClient();
+  return client.get<ReservationUnit[]>('/reservations/units');
+}
+
+export async function createReservation(data: {
+  customerId: string;
+  itemName: string;
+  itemType?: string;
+  quantity: number;
+  unitId: string;
+  unitPrice: number;
+  currencyCode: string;
+  warehouse?: string;
+  documentNumber?: string;
+  notes?: string;
+  expiresAt?: string;
+}) {
+  const client = await getClient();
+  return client.post('/reservations', data);
 }
 
 export async function fetchNotifications() {
