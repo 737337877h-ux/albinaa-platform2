@@ -45,12 +45,15 @@ describe('api config', () => {
       'http://172.16.2.20:18001',
       'http://172.31.255.1',
       'http://albinaa.local:18001',
+      'https://desktop-tajgfbm.tail16c86c.ts.net/api',
     ])('accepts private LAN address %s', (url) => {
       expect(isLocalNetworkUrl(url)).toBe(true);
     });
 
     it.each([
       'https://api.albinaa.com',
+      'https://desktop-tajgfbm.another-tailnet.ts.net/api',
+      'http://desktop-tajgfbm.tail16c86c.ts.net/api',
       'http://172.32.0.1',
       'http://8.8.8.8',
     ])('rejects non-LAN address %s', (url) => {

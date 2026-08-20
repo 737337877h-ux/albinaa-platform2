@@ -4,6 +4,7 @@ const STORAGE_KEY = 'albinaa.api_base_url';
 const LAN_ONLY_KEY = 'albinaa.sync_lan_only';
 const DEFAULT_DEV_URL = 'http://localhost:3000';
 const DEFAULT_PROD_URL = 'https://api.albinaa.com';
+const APPROVED_TAILNET_DNS_SUFFIXES = ['.tail16c86c.ts.net'] as const;
 
 /**
  * ترتيب الأولوية:
@@ -63,7 +64,12 @@ export function isValidBaseUrl(url: string): boolean {
 
 export function isLocalNetworkUrl(url: string): boolean {
   try {
-    const host = new URL(url.trim()).hostname.toLowerCase();
+    const parsed = new URL(url.trim());
+    const host = parsed.hostname.toLowerCase();
+    if (
+      parsed.protocol === 'https:'
+      && APPROVED_TAILNET_DNS_SUFFIXES.some((suffix) => host.endsWith(suffix))
+    ) return true;
     if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local')) return true;
     const parts = host.split('.').map(Number);
     if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
