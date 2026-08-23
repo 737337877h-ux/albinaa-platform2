@@ -6,6 +6,8 @@ import { Bell } from 'lucide-react';
 import { api, tokenStore } from '@/lib/api';
 import { fmtDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { notificationHref } from '@/lib/notification-target';
+import { financialAdjustmentDecisionAr, financialAdjustmentTypeAr } from '@/lib/financial-adjustment';
 
 interface NotificationItem {
   id: string; kind: string; readAt: string | null; createdAt: string;
@@ -20,6 +22,15 @@ function describe(n: NotificationItem): string {
     case 'collection_created': return `تحصيل جديد من ${p.customerName ?? ''}`;
     case 'collection_reversal_requested': return `طلب عكس تحصيل: ${p.amount ?? ''} ${p.currency ?? ''}`;
     case 'finance_alert': {
+      if (p.event === 'financial_adjustment_requested') {
+        const type = financialAdjustmentTypeAr(p.requestType);
+        const amount = p.amount != null ? Number(p.amount).toLocaleString('en-US') : '';
+        return `طلب ${type} يحتاج المراجعة — ${String(p.customerName ?? 'عميل')}${amount ? ` — ${amount} ${String(p.currency ?? '')}` : ''}`;
+      }
+      if (p.event === 'financial_adjustment_reviewed') {
+        const type = financialAdjustmentTypeAr(p.requestType);
+        return `طلب ${type} ${financialAdjustmentDecisionAr(p.decision)} — ${String(p.customerName ?? 'عميل')}`;
+      }
       const labels: Record<string, string> = {
         collection_reversed: 'تم عكس تحصيل',
         manual_balance_adjustment: 'تم تعديل رصيد يدويًا',
@@ -30,6 +41,7 @@ function describe(n: NotificationItem): string {
       return `تنبيه مالي: ${labels[String(p.event)] ?? 'عملية حساسة'}`;
     }
     case 'scheduled_job_failed': return `تعطلت مهمة مجدولة: ${p.job ?? ''}`;
+    case 'oracle_exception_movement_published': return String(p.message ?? 'نُشرت حركة Oracle استثنائية مع حفظ سجل المراجعة');
     case 'customer_transferred': return `نُقل إليك العميل ${p.customerName ?? ''}`;
     default: return n.kind;
   }
@@ -84,7 +96,7 @@ export function NotificationsMenu() {
               {data.items.map((n) => (
                 <li key={n.id}>
                   <Link
-                    href="/notifications"
+                    href={notificationHref(n)}
                     onClick={() => setOpen(false)}
                     className={cn(
                       'block px-4 py-2.5 text-sm hover:bg-concrete-50 dark:hover:bg-white/5',

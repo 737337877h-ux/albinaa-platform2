@@ -13,6 +13,9 @@ const LABELS: Record<string, string> = {
   collections: 'التحصيلات',
   imports: 'استيراد Excel',
   reservations: 'حجوزات البضاعة',
+  inventory: 'المخزون',
+  'inventory-transfers': 'التحويلات المخزنية',
+  items: 'الأصناف',
   tasks: 'عمل اليوم',
   notifications: 'الإشعارات',
   reconciliation: 'مطابقة الصندوق',
@@ -27,6 +30,8 @@ const LABELS: Record<string, string> = {
   currencies: 'العملات',
   settings: 'الإعدادات',
   audit: 'سجل العمليات',
+  'oracle-monitoring': 'مراقبة ربط Oracle',
+  exceptions: 'مراجعة الاستثناءات',
 };
 
 export function Breadcrumb() {

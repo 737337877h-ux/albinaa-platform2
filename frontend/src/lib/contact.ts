@@ -16,9 +16,36 @@ export function contactLinks(phone?: string | null, message?: string) {
 
   const encoded = message?.trim() ? encodeURIComponent(message.trim()) : '';
 
+  const sms = `sms:+${normalized}${encoded ? `?body=${encoded}` : ''}`;
+
   return {
     tel: `tel:+${normalized}`,
-    sms: `sms:+${normalized}${encoded ? `?body=${encoded}` : ''}`,
+    sms,
+    // Phone Link can corrupt Arabic text passed in the URI. The Windows flow
+    // copies the Unicode message separately and opens only the recipient.
+    smsWindows: `sms:+${normalized}`,
     whatsapp: `https://wa.me/${normalized}${encoded ? `?text=${encoded}` : ''}`,
+    whatsappWindows: `whatsapp://send?phone=${normalized}${encoded ? `&text=${encoded}` : ''}`,
   };
+}
+
+export interface LabeledContactNumber {
+  label: string;
+  value: string;
+  normalized: string;
+}
+
+/** Return every valid customer number once, even when stored in multiple fields. */
+export function uniqueContactNumbers(
+  entries: Array<{ label: string; value?: string | null }>,
+): LabeledContactNumber[] {
+  const seen = new Set<string>();
+  const result: LabeledContactNumber[] = [];
+  for (const entry of entries) {
+    const normalized = normalizePhone(entry.value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push({ label: entry.label, value: entry.value!.trim(), normalized });
+  }
+  return result;
 }

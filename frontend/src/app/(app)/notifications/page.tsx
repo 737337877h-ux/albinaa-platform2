@@ -10,6 +10,8 @@ import { PageHeader } from '@/components/app-shell';
 import { DataState } from '@/components/ui/data-state';
 import { toast } from '@/components/ui/toast';
 import { Badge, Button, Card, Pagination } from '@/components/ui/primitives';
+import { notificationHref } from '@/lib/notification-target';
+import { financialAdjustmentDecisionAr, financialAdjustmentTypeAr, isFinancialAdjustmentEvent } from '@/lib/financial-adjustment';
 
 /* ────────────────────────────── Types ────────────────────────────────── */
 
@@ -41,6 +43,7 @@ const KIND_AR: Record<string, { label: string; tone: KindTone }> = {
   collection_reversal_requested: { label: 'طلب عكس تحصيل', tone: 'debt' },
   finance_alert: { label: 'تنبيه مالي فوري', tone: 'debt' },
   scheduled_job_failed: { label: 'فشل مهمة مجدولة', tone: 'debt' },
+  oracle_exception_movement_published: { label: 'حركة Oracle استثنائية', tone: 'hazard' },
   customer_transferred: { label: 'نقل عميل', tone: 'neutral' },
 };
 
@@ -51,8 +54,7 @@ function describe(n: NotificationItem): { title: string; text: string; href?: st
     p.amount != null && p.currency
       ? `${fmtMoney(p.amount as number)} ${String(p.currency)}`
       : null;
-  const customerHref =
-    typeof p.customerId === 'string' && p.customerId ? `/customers/${p.customerId}` : undefined;
+  const customerHref = notificationHref(n);
 
   switch (n.kind) {
     case 'promise_due':
@@ -84,6 +86,22 @@ function describe(n: NotificationItem): { title: string; text: string; href?: st
         href: '/collections/reconciliation',
       };
     case 'finance_alert': {
+      if (p.event === 'financial_adjustment_requested') {
+        const type = financialAdjustmentTypeAr(p.requestType);
+        return {
+          title: `طلب ${type} يحتاج موافقة مالية`,
+          text: `${customerName || 'عميل'}${money ? ` — ${money}` : ''}${p.requesterName ? ` — مقدم الطلب: ${p.requesterName}` : ''}${p.reason ? ` — السبب: ${p.reason}` : ''}`,
+          href: notificationHref(n),
+        };
+      }
+      if (p.event === 'financial_adjustment_reviewed') {
+        const type = financialAdjustmentTypeAr(p.requestType);
+        return {
+          title: `تمت معالجة طلب ${type}`,
+          text: `${customerName || 'عميل'} — الحالة: ${financialAdjustmentDecisionAr(p.decision)}${money ? ` — ${money}` : ''}${p.reviewerName ? ` — المراجع: ${p.reviewerName}` : ''}${p.reviewNotes ? ` — الملاحظات: ${p.reviewNotes}` : ''}`,
+          href: notificationHref(n),
+        };
+      }
       const labels: Record<string, string> = {
         collection_reversed: 'تم عكس تحصيل',
         manual_balance_adjustment: 'تم تعديل رصيد يدويًا',
@@ -104,6 +122,12 @@ function describe(n: NotificationItem): { title: string; text: string; href?: st
         text: `فشلت المهمة ${p.job ?? ''}${p.message ? ` — ${p.message}` : ''}`,
         href: typeof p.href === 'string' ? p.href : '/admin/audit',
       };
+    case 'oracle_exception_movement_published':
+      return {
+        title: String(p.title ?? 'نشر حركة Oracle استثنائية'),
+        text: String(p.message ?? 'نُشرت حركة تاريخية أو معدلة وفق Oracle مع حفظ سجل المراجعة.'),
+        href: notificationHref(n),
+      };
     case 'customer_transferred':
       return {
         title: 'نُقل إليك عميل',
@@ -111,7 +135,7 @@ function describe(n: NotificationItem): { title: string; text: string; href?: st
         href: customerHref,
       };
     default:
-      return { title: n.kind, text: '' };
+      return { title: n.kind, text: '', href: notificationHref(n) };
   }
 }
 
@@ -203,7 +227,7 @@ export default function NotificationsPage() {
               const desc = describe(n);
               const unread = !n.readAt;
               return (
-                <li key={n.id} className={cn('flex items-start gap-3 px-4 py-3.5', unread && 'bg-pine-50/40 dark:bg-pine-900/15')}>
+                <li key={n.id} className={cn('relative flex cursor-pointer items-start gap-3 px-4 py-3.5 hover:bg-concrete-50 dark:hover:bg-white/5', unread && 'bg-pine-50/40 dark:bg-pine-900/15')}>
                   <span
                     aria-hidden
                     className={cn(
@@ -225,14 +249,15 @@ export default function NotificationsPage() {
                     <p className="mt-1 text-sm text-concrete-600 dark:text-concrete-400">
                       {desc.text}
                     </p>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-concrete-400">
+                    <Link href={notificationHref(n)} onClick={() => { if (unread) readMut.mutate(n.id); }} className="absolute inset-0" aria-label={`فتح ${desc.title}`} />
+                    <div className="relative z-10 mt-1.5 flex flex-wrap items-center gap-2 text-xs text-concrete-400">
                       <span>{fmtDateTime(n.createdAt)}</span>
                       {desc.href && (
                         <Link
-                          href={desc.href}
+                          href={notificationHref(n)}
                           className="font-medium text-pine-700 hover:underline dark:text-pine-100"
                         >
-                          عرض العميل
+                          {isFinancialAdjustmentEvent(n.payload?.event) ? 'عرض الطلب وتفاصيله' : 'عرض العميل'}
                         </Link>
                       )}
                     </div>

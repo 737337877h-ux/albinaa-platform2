@@ -96,6 +96,40 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   ]},
 ];
 
+const MOBILE_PERMISSION_GROUPS: PermissionGroup[] = [
+  { label: 'الرئيسية والعمل', prefix: 'mobile.', items: [
+    { code: 'mobile.dashboard.view', label: 'عرض الصفحة الرئيسية' },
+    { code: 'mobile.tasks.view', label: 'عرض المهام' },
+    { code: 'mobile.tasks.create', label: 'إنشاء مهمة' },
+    { code: 'mobile.notifications.view', label: 'عرض الإشعارات' },
+  ] },
+  { label: 'الحسابات', prefix: 'mobile.', items: [
+    { code: 'mobile.customers.view', label: 'عرض العملاء' },
+    { code: 'mobile.delivery.customers.view_all_no_balance', label: 'مندوب التوصيل: عرض كل العملاء والمواقع دون الأرصدة' },
+    { code: 'mobile.advances.view', label: 'عرض السلف' },
+    { code: 'mobile.assignment_change.request', label: 'طلب تغيير الإسناد' },
+    { code: 'mobile.financial_adjustments.request', label: 'طلب خصم أو تصفية' },
+  ] },
+  { label: 'التحصيل والمتابعة', prefix: 'mobile.', items: [
+    { code: 'mobile.collections.view', label: 'عرض التحصيلات' },
+    { code: 'mobile.collections.create', label: 'تسجيل تحصيل' },
+    { code: 'mobile.followups.view', label: 'عرض المتابعات' },
+    { code: 'mobile.followups.create', label: 'تسجيل متابعة' },
+    { code: 'mobile.promises.view', label: 'عرض وعود السداد' },
+    { code: 'mobile.promises.create', label: 'تسجيل وعد سداد' },
+  ] },
+  { label: 'البضاعة والميدان', prefix: 'mobile.', items: [
+    { code: 'mobile.reservations.view', label: 'عرض البضاعة المحجوزة' },
+    { code: 'mobile.reservations.create', label: 'إضافة حجز بضاعة' },
+    { code: 'mobile.inventory.view', label: 'عرض الأصناف والمخزون' },
+    { code: 'mobile.receipts.view', label: 'معاينة صور الإيصالات' },
+    { code: 'mobile.receipts.upload', label: 'رفع صورة إيصال' },
+    { code: 'mobile.location.view', label: 'عرض الموقع' },
+    { code: 'mobile.location.update', label: 'تحديث الموقع' },
+    { code: 'mobile.messages.view', label: 'قوالب الرسائل' },
+  ] },
+];
+
 const createRoleSchema = z.object({
   name: z.string().min(2, 'اسم الدور يجب أن يكون حرفين على الأقل').max(100, 'اسم الدور طويل جداً'),
 });
@@ -115,6 +149,7 @@ export default function RolesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editRole, setEditRole] = useState<RoleListItem | null>(null);
   const [deleteRole, setDeleteRole] = useState<RoleListItem | null>(null);
+  const [permissionScope, setPermissionScope] = useState<'platform' | 'mobile'>('platform');
 
   const rolesQuery = useQuery<RoleListItem[]>({
     queryKey: ['roles'],
@@ -125,6 +160,12 @@ export default function RolesPage() {
   const rolePermsQuery = useQuery<RolePermissions>({
     queryKey: ['roles', selectedRoleId, 'permissions'],
     queryFn: () => api<RolePermissions>(`/roles/${selectedRoleId}/permissions`),
+    enabled: canManage && !!selectedRoleId,
+  });
+
+  const permissionsQuery = useQuery<Permission[]>({
+    queryKey: ['permissions'],
+    queryFn: () => api<Permission[]>('/permissions'),
     enabled: canManage && !!selectedRoleId,
   });
 
@@ -200,8 +241,9 @@ export default function RolesPage() {
 
   const roles = rolesQuery.data ?? [];
   const selectedRole = roles.find((r) => r.id === selectedRoleId);
-  const allPerms = rolePermsQuery.data?.permissions ?? [];
-  const activePermCodes = new Set(allPerms.map((p) => p.code));
+  const allPerms = permissionsQuery.data ?? [];
+  const activePermCodes = new Set((rolePermsQuery.data?.permissions ?? []).map((p) => p.code));
+  const visibleGroups = permissionScope === 'mobile' ? MOBILE_PERMISSION_GROUPS : PERMISSION_GROUPS;
 
   const togglePermission = (permId: string, currentlyHas: boolean) => {
     if (!selectedRoleId) return;
@@ -329,20 +371,26 @@ export default function RolesPage() {
                 </div>
               </div>
               <DataState
-                isLoading={rolePermsQuery.isLoading}
-                isError={rolePermsQuery.isError}
-                error={rolePermsQuery.error}
-                onRetry={() => rolePermsQuery.refetch()}
-                isFetching={rolePermsQuery.isFetching}
+                isLoading={rolePermsQuery.isLoading || permissionsQuery.isLoading}
+                isError={rolePermsQuery.isError || permissionsQuery.isError}
+                error={rolePermsQuery.error ?? permissionsQuery.error}
+                onRetry={() => { rolePermsQuery.refetch(); permissionsQuery.refetch(); }}
+                isFetching={rolePermsQuery.isFetching || permissionsQuery.isFetching}
                 isEmpty={false}
                 skeletonClassName="h-64"
               >
-                <div className="divide-y divide-concrete-100 dark:divide-white/10">
-                  {PERMISSION_GROUPS.map((group) => {
-                    const groupPerms = allPerms.filter((p) => p.code.startsWith(group.prefix));
+                <div>
+                  <div className="flex gap-2 border-b border-concrete-100 p-3 dark:border-white/10">
+                    <Button variant={permissionScope === 'platform' ? 'primary' : 'secondary'} onClick={() => setPermissionScope('platform')}>صلاحيات المنصة</Button>
+                    <Button variant={permissionScope === 'mobile' ? 'primary' : 'secondary'} onClick={() => setPermissionScope('mobile')}>صلاحيات التطبيق</Button>
+                  </div>
+                  <div className="divide-y divide-concrete-100 dark:divide-white/10">
+                  {visibleGroups.map((group, groupIndex) => {
+                    const itemCodes = new Set(group.items.map((item) => item.code));
+                    const groupPerms = allPerms.filter((p) => itemCodes.has(p.code));
                     if (groupPerms.length === 0) return null;
                     return (
-                      <div key={group.prefix} className="px-4 py-3">
+                      <div key={`${permissionScope}-${group.label}-${groupIndex}`} className="px-4 py-3">
                         <h4 className="mb-2 text-xs font-semibold text-concrete-500 dark:text-concrete-400">
                           {group.label}
                         </h4>
@@ -378,6 +426,7 @@ export default function RolesPage() {
                       </div>
                     );
                   })}
+                  </div>
                 </div>
               </DataState>
             </>

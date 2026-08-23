@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageCircle, MessageSquare, Send } from 'lucide-react';
 import { api } from '@/lib/api';
-import { contactLinks } from '@/lib/contact';
+import { contactLinks, uniqueContactNumbers } from '@/lib/contact';
 import { DEFAULT_MESSAGE_TEMPLATES, MessageChannel, parseMessageTemplates, renderMessageTemplate } from '@/lib/messaging';
 import { Dialog } from '@/components/ui/dialog';
 import { Button, Field, Select, Textarea } from '@/components/ui/primitives';
@@ -12,14 +12,17 @@ import { toast } from '@/components/ui/toast';
 interface SettingItem { key: string; value: unknown }
 
 export function MessageTemplateDialog({
-  open, onClose, initialChannel, customerId, customerName, customerCode, phone, whatsapp, balance, currency,
+  open, onClose, initialChannel, customerId, customerName, customerCode, phone, phoneSecondary, whatsapp, balance, currency,
   debtAgeDays, collectorName, reservationNumber, dueDate,
+  groupBalances, childBalances,
 }: {
   open: boolean; onClose: () => void; initialChannel: Exclude<MessageChannel, 'both'>;
   customerId: string;
-  customerName: string; customerCode?: string | null; phone?: string | null; whatsapp?: string | null;
+  customerName: string; customerCode?: string | null; phone?: string | null; phoneSecondary?: string | null; whatsapp?: string | null;
   balance?: number | null; currency?: string | null; debtAgeDays?: number | null;
   collectorName?: string | null; reservationNumber?: string | null; dueDate?: string | null;
+  groupBalances?: { currency: string; balance: number }[];
+  childBalances?: { currency: string; balance: number }[];
 }) {
   const qc = useQueryClient();
   const settings = useQuery<SettingItem[]>({
@@ -32,51 +35,86 @@ export function MessageTemplateDialog({
   const [channel, setChannel] = useState<'whatsapp' | 'sms'>(initialChannel);
   const [templateId, setTemplateId] = useState(DEFAULT_MESSAGE_TEMPLATES[0].id);
   const [message, setMessage] = useState('');
+  const [selectedPhone, setSelectedPhone] = useState('');
   const [opening, setOpening] = useState(false);
   const available = templates.filter((t) => t.channel === 'both' || t.channel === channel);
+  const windowsSetting = settings.data?.find((s) => s.key === 'messaging.whatsappWindows.enabled')?.value;
+  const phoneLinkSetting = settings.data?.find((s) => s.key === 'messaging.phoneLink.enabled')?.value;
+  const useWindowsWhatsApp = windowsSetting === undefined
+    || windowsSetting === true
+    || String(windowsSetting).toLowerCase() === 'true';
+  const useWindowsPhoneLink = phoneLinkSetting === undefined
+    || phoneLinkSetting === true
+    || String(phoneLinkSetting).toLowerCase() === 'true';
+  const contactNumbers = useMemo(() => uniqueContactNumbers(channel === 'whatsapp'
+    ? [
+        { label: 'رقم واتساب', value: whatsapp },
+        { label: 'الهاتف الأساسي', value: phone },
+        { label: 'الهاتف الآخر', value: phoneSecondary },
+      ]
+    : [
+        { label: 'الهاتف الأساسي', value: phone },
+        { label: 'الهاتف الآخر', value: phoneSecondary },
+        { label: 'رقم واتساب', value: whatsapp },
+      ]), [channel, phone, phoneSecondary, whatsapp]);
 
   useEffect(() => { if (open) setChannel(initialChannel); }, [open, initialChannel]);
+  useEffect(() => {
+    if (!contactNumbers.some((item) => item.value === selectedPhone)) {
+      setSelectedPhone(contactNumbers[0]?.value ?? '');
+    }
+  }, [contactNumbers, selectedPhone]);
   useEffect(() => {
     const selected = available.find((t) => t.id === templateId) ?? available[0];
     if (!selected) return;
     if (selected.id !== templateId) setTemplateId(selected.id);
-    setMessage(renderMessageTemplate(selected.body, {
+    const rendered = renderMessageTemplate(selected.body, {
       customerName, customerCode, balance, currency, debtAgeDays, companyName: 'البناء الراقي',
       collectorName, reservationNumber, dueDate,
-    }));
-  }, [templateId, channel, open, settings.data]); // eslint-disable-line react-hooks/exhaustive-deps
+    });
+    const positiveGroup = (groupBalances ?? []).filter((item) => item.balance > 0.00005);
+    const positiveChildren = (childBalances ?? []).filter((item) => item.balance > 0.00005);
+    const formatTotals = (items: { currency: string; balance: number }[]) => items
+      .map((item) => `${item.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${item.currency}`)
+      .join('، ');
+    setMessage(positiveChildren.length > 0
+      ? `${rendered}\n\nإجمالي الحساب الرئيسي والفرعي: ${formatTotals(positiveGroup)}.\nإجمالي الحسابات الفرعية: ${formatTotals(positiveChildren)}.`
+      : rendered);
+  }, [templateId, channel, open, settings.data, groupBalances, childBalances]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async () => {
-    const target = channel === 'whatsapp' ? (whatsapp ?? phone) : phone;
-    const links = contactLinks(target, message);
-    const url = channel === 'whatsapp' ? links?.whatsapp : links?.sms;
+    const links = contactLinks(selectedPhone, message);
+    const url = channel === 'whatsapp'
+      ? (useWindowsWhatsApp ? links?.whatsappWindows : links?.whatsapp)
+      : (useWindowsPhoneLink ? links?.smsWindows : links?.sms);
     if (!url) return;
-    const popup = channel === 'whatsapp' ? window.open('', '_blank') : null;
-    if (popup) popup.opener = null;
     setOpening(true);
     try {
-      await api('/followups/contact-event', {
+      if (channel === 'sms' && useWindowsPhoneLink) {
+        await navigator.clipboard.writeText(message.trim());
+      }
+      // Start the request, then launch while this call is still inside the
+      // user's click gesture. Waiting first makes browsers block app protocols.
+      const recordContact = api('/followups/contact-event', {
         method: 'POST',
         body: JSON.stringify({ customerId, channel, message, templateId }),
         headers: { 'Idempotency-Key': crypto.randomUUID() },
       });
+      window.location.assign(url);
+      await recordContact;
       await qc.invalidateQueries({ queryKey: ['followups', customerId] });
-      if (popup) {
-        popup.location.href = url;
-      } else {
-        window.location.href = url;
-      }
-      toast('تم تسجيل التواصل وفتح تطبيق الإرسال', 'ok');
+      toast(channel === 'sms' && useWindowsPhoneLink
+        ? 'تم نسخ الرسالة دون تشويه؛ الصقها في Phone Link ثم أرسلها'
+        : 'تم تسجيل التواصل وفتح تطبيق الإرسال', 'ok');
       onClose();
     } catch (err) {
-      popup?.close();
       toast(err instanceof Error ? err.message : 'تعذر تسجيل التواصل', 'err');
     } finally {
       setOpening(false);
     }
   };
 
-  const hasTarget = !!contactLinks(channel === 'whatsapp' ? (whatsapp ?? phone) : phone);
+  const hasTarget = !!contactLinks(selectedPhone);
   return (
     <Dialog open={open} onClose={onClose} title="إرسال رسالة للعميل">
       <div className="space-y-4">
@@ -93,9 +131,28 @@ export function MessageTemplateDialog({
             {available.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </Select>
         </Field>
+        <Field label="رقم المستلم" hint="يمكن استخدام أي رقم هاتف مسجل في بيان العميل.">
+          <Select value={selectedPhone} onChange={(e) => setSelectedPhone(e.target.value)}>
+            {contactNumbers.map((item) => (
+              <option key={item.normalized} value={item.value}>{item.label} — {item.value}</option>
+            ))}
+          </Select>
+        </Field>
         <Field label="نص الرسالة" hint="يمكن تعديل النص قبل فتح تطبيق الإرسال.">
           <Textarea rows={7} value={message} onChange={(e) => setMessage(e.target.value)} />
         </Field>
+        {channel === 'whatsapp' && (
+          <p className="text-xs text-concrete-500">
+            {useWindowsWhatsApp
+              ? 'سيُفتح تطبيق WhatsApp المثبّت على Windows، وستبقى أنت المسؤول عن الضغط على إرسال.'
+              : 'سيُفتح WhatsApp عبر الويب. يمكن تفعيل تطبيق Windows من الإعدادات.'}
+          </p>
+        )}
+        {channel === 'sms' && useWindowsPhoneLink && (
+          <p className="text-xs text-concrete-500">
+            سيُنسخ النص العربي كما هو وتُفتح محادثة الرقم في Phone Link؛ الصق الرسالة ثم اضغط إرسال.
+          </p>
+        )}
         {!hasTarget && <p className="text-sm text-debt-600">لا يوجد رقم صالح لهذا العميل.</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>إلغاء</Button>

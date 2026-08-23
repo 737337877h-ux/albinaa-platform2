@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { CheckCircle2, Clock, AlertTriangle, ArrowUpCircle, TrendingUp, Phone } from 'lucide-react';
@@ -8,7 +8,7 @@ import { useCan } from '@/lib/auth';
 import { fmtDate, fmtMoney, CCY_AR, TASK_STATUS_AR, TASK_TYPE_AR } from '@/lib/format';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
-import { Badge, Button, Card, Empty, Money, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, Empty, Money, Pagination, Skeleton } from '@/components/ui/primitives';
 import { Table, TRow, TD } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsPanel } from '@/components/ui/tabs';
 
@@ -97,18 +97,22 @@ export default function TasksPage() {
   const [tab, setTab] = useState('today');
   const [taskFilter, setTaskFilter] = useState<string>('open');
   const [completeId, setCompleteId] = useState<string | null>(null);
+  const [todayPage, setTodayPage] = useState(1);
+  const [storedPage, setStoredPage] = useState(1);
+  const pageSize = 25;
 
   /* ──── Today Board ──── */
+  const boardBucket = tab === 'overdue' ? 'overdue' : 'today';
   const today = useQuery<TodayResponse>({
-    queryKey: ['tasks-today'],
-    queryFn: () => api<TodayResponse>('/tasks/today'),
-    enabled: canManage,
+    queryKey: ['tasks-scheduled', boardBucket],
+    queryFn: () => api<TodayResponse>(`/tasks/scheduled?bucket=${boardBucket}`),
+    enabled: canManage && tab !== 'stored',
   });
 
   /* ──── Stored Tasks ──── */
   const tasks = useQuery<StoredTask[]>({
     queryKey: ['tasks', taskFilter],
-    queryFn: () => api<StoredTask[]>(`/tasks?status=${taskFilter}`),
+    queryFn: () => api<StoredTask[]>(`/tasks?status=${taskFilter}&bucket=${taskFilter === 'open' ? 'upcoming' : 'all'}`),
     enabled: canManage && tab === 'stored',
     retry: false,
   });
@@ -124,6 +128,22 @@ export default function TasksPage() {
       t.priorityReason?.toLowerCase().includes(s)
     );
   }) ?? [];
+  const todayItems = today.data?.items ?? [];
+  const todayTotalPages = Math.max(1, Math.ceil(todayItems.length / pageSize));
+  const storedTotalPages = Math.max(1, Math.ceil(filteredTasks.length / pageSize));
+  const visibleTodayItems = todayItems.slice((todayPage - 1) * pageSize, todayPage * pageSize);
+  const visibleStoredTasks = filteredTasks.slice((storedPage - 1) * pageSize, storedPage * pageSize);
+
+  useEffect(() => { setTodayPage(1); }, [today.data?.date, boardBucket]);
+  useEffect(() => { setStoredPage(1); }, [taskFilter, taskSearch]);
+
+  const goToPage = (target: 'today' | 'stored', nextPage: number) => {
+    if (target === 'today') setTodayPage(nextPage);
+    else setStoredPage(nextPage);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`${target}-tasks-table`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
 
   /* ──── Complete Task Mutation ──── */
   const completeMut = useMutation({
@@ -151,11 +171,12 @@ export default function TasksPage() {
       <Tabs value={tab} onChange={setTab}>
         <TabsList>
           <TabsTrigger value="today" badge={s?.tasksToday}>عمل اليوم</TabsTrigger>
+          <TabsTrigger value="overdue">متأخرة</TabsTrigger>
           <TabsTrigger value="stored">المهام المخزنة</TabsTrigger>
         </TabsList>
 
         {/* ──────────────── Today Board ──────────────── */}
-        <TabsPanel value="today">
+        <TabsPanel value={tab === 'overdue' ? 'overdue' : 'today'}>
           <DataState
             isLoading={today.isLoading}
             isError={today.isError}
@@ -163,7 +184,7 @@ export default function TasksPage() {
             onRetry={() => today.refetch()}
             isFetching={today.isFetching}
             isEmpty={!today.data?.items?.length}
-            emptyTitle="لا توجد مهام اليوم"
+            emptyTitle={tab === 'overdue' ? 'لا توجد مهام متأخرة' : 'لا توجد مهام اليوم'}
             emptyHint={today.data?.isCollector === false ? 'أنت لا تعمل كمحصل حالياً' : undefined}
             skeletonClassName="h-64"
           >
@@ -173,7 +194,7 @@ export default function TasksPage() {
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   <SummaryCard
                     icon={<CheckCircle2 className="h-5 w-5 text-pine-600" />}
-                    label="مهام اليوم"
+                    label={tab === 'overdue' ? 'المهام المتأخرة' : 'مهام اليوم'}
                     value={String(s?.tasksToday ?? 0)}
                   />
                   {Object.entries(s?.expectedByCurrency ?? {}).map(([ccy, amt]) => (
@@ -227,7 +248,11 @@ export default function TasksPage() {
                 </Card>
 
                 {/* Items */}
-                <Card>
+                <Card className="scroll-mt-24">
+                  <div id="today-tasks-table" className="scroll-mt-24 flex flex-wrap items-center justify-between gap-2 border-b border-concrete-100 px-4 py-3 text-xs text-concrete-500 dark:border-white/10">
+                    <span>عرض {(todayPage - 1) * pageSize + 1}–{Math.min(todayPage * pageSize, todayItems.length)} من {todayItems.length}</span>
+                    <span>الصفحة {todayPage} من {todayTotalPages}</span>
+                  </div>
                   <Table>
                     <thead>
                       <tr className="border-b border-concrete-100 text-right text-xs text-concrete-500 dark:border-white/10">
@@ -240,7 +265,7 @@ export default function TasksPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {today.data.items.map((item, i) => {
+                      {visibleTodayItems.map((item, i) => {
                         const pc = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG[5];
                         const Icon = pc.icon;
                         return (
@@ -305,6 +330,7 @@ export default function TasksPage() {
                       })}
                     </tbody>
                   </Table>
+                  <Pagination page={todayPage} totalPages={todayTotalPages} onPage={(page) => goToPage('today', page)} />
                 </Card>
 
                 {today.data.settings && (
@@ -319,9 +345,9 @@ export default function TasksPage() {
 
         {/* ──────────────── Stored Tasks ──────────────── */}
         <TabsPanel value="stored">
-          <Card>
+          <Card className="scroll-mt-24">
             {/* Filters bar */}
-            <div className="flex flex-wrap items-center gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+            <div id="stored-tasks-table" className="scroll-mt-24 flex flex-wrap items-center gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
               <div className="flex gap-1">
                 {['open', 'escalated', 'done'].map(s => (
                   <button
@@ -369,7 +395,7 @@ export default function TasksPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredTasks.map(t => (
+                  {visibleStoredTasks.map(t => (
                     <TRow key={t.id}>
                       <TD className="text-xs">
                         {TASK_TYPE_AR[t.taskType] ?? t.taskType}
@@ -424,6 +450,7 @@ export default function TasksPage() {
                   ))}
                 </tbody>
               </Table>
+              <Pagination page={storedPage} totalPages={storedTotalPages} onPage={(page) => goToPage('stored', page)} />
             </DataState>
           </Card>
         </TabsPanel>

@@ -33,6 +33,7 @@ import { SearchModule } from './search/search.module';
 import { AccountingPeriodsModule } from './accounting-periods/accounting-periods.module';
 import { OracleInventorySyncModule } from './oracle-inventory-sync/oracle-inventory-sync.module';
 import { OracleMonitoringModule } from './oracle-monitoring/oracle-monitoring.module';
+import { InventoryTransfersModule } from './inventory-transfers/inventory-transfers.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -73,6 +74,7 @@ import { IdempotencyInterceptor } from './common/interceptors/idempotency.interc
     AccountingPeriodsModule,
     OracleInventorySyncModule,
     OracleMonitoringModule,
+    InventoryTransfersModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },         // 1) Rate limiting

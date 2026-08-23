@@ -192,6 +192,30 @@ const GROUPS: SettingsGroup[] = [
     ],
   },
   {
+    title: 'WhatsApp على Windows (تشغيل يدوي)',
+    items: [
+      {
+        key: 'messaging.whatsappWindows.enabled',
+        label: 'فتح تطبيق WhatsApp في Windows',
+        description: 'يفتح محادثة العميل والرسالة الجاهزة في تطبيق WhatsApp المثبت على هذا الكمبيوتر. لا يرسل الرسالة تلقائيًا.',
+        type: 'boolean',
+        defaultValue: 'true',
+      },
+    ],
+  },
+  {
+    title: 'الرسائل النصية عبر Phone Link (تشغيل يدوي)',
+    items: [
+      {
+        key: 'messaging.phoneLink.enabled',
+        label: 'فتح تطبيق Phone Link في Windows',
+        description: 'يفتح الرقم ونص الرسالة الجاهز في تطبيق الرسائل المرتبط بالهاتف. لا يرسل الرسالة تلقائيًا.',
+        type: 'boolean',
+        defaultValue: 'true',
+      },
+    ],
+  },
+  {
     title: 'التهيئة للتكاملات المستقبلية (متوقفة افتراضيًا)',
     items: [
       {

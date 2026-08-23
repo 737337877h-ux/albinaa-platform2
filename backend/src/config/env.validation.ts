@@ -54,6 +54,18 @@ class EnvVars {
   @Min(0)
   @Max(23)
   RISK_RECALCULATE_HOUR?: number;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_READ_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_READ_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_READ_SCHEMA?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>) {

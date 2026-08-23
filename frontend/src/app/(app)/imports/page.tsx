@@ -149,8 +149,8 @@ interface ReportData {
   transactionsNew: number;
   transactionsDuplicate: number;
   durationMs: number;
-  balancesBefore: Record<string, number>;
-  balancesAfter: Record<string, number>;
+  balancesBefore?: Record<string, number> | null;
+  balancesAfter?: Record<string, number> | null;
   balancesWritten?: number | null;
   duplicateNamePairsFlagged: number;
   reconciliationsOpened: number;
@@ -351,7 +351,7 @@ export default function ImportsPage() {
   const items = listQuery.data ?? [];
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 space-y-5">
       <PageHeader
         title="استيراد Excel"
         action={
@@ -380,7 +380,7 @@ export default function ImportsPage() {
       )}
 
       {/* ──── History Table ──── */}
-      <Card>
+      <Card className="min-w-0 overflow-hidden">
         <div className="border-b border-concrete-100 px-4 py-3 dark:border-white/10">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <History className="h-4 w-4 text-concrete-400" aria-hidden />
@@ -398,7 +398,7 @@ export default function ImportsPage() {
           emptyHint="ارفع ملف Excel لبدء أول استيراد"
           skeletonClassName="h-64"
         >
-          <Table>
+          <Table className="min-w-[920px]">
             <thead>
               <tr className="border-b border-concrete-100 text-right text-xs text-concrete-500 dark:border-white/10 dark:text-concrete-400">
                 <th className="px-4 py-2.5 font-medium">الملف</th>
@@ -1008,7 +1008,7 @@ function PreviewDialog({
                     </>
                   )}
                   <th className="pb-1 font-medium">العملة</th>
-                  {Object.keys(preview.sampleAgingRows[0].buckets).map((bk) => (
+                  {Object.keys(preview.sampleAgingRows[0]?.buckets ?? {}).map((bk) => (
                     <th key={bk} className="pb-1 font-medium" dir="ltr">
                       {bk}
                     </th>
@@ -1028,7 +1028,7 @@ function PreviewDialog({
                     <td className="pb-1">
                       <Badge tone="pine">{r.currency}</Badge>
                     </td>
-                    {Object.keys(r.buckets).map((bk) => (
+                    {Object.keys(r.buckets ?? {}).map((bk) => (
                       <td key={bk} className="tnum pb-1">
                         {r.buckets[bk].toLocaleString('en-US')}
                       </td>
@@ -1083,6 +1083,8 @@ function ReportDialog({
   onClose: () => void;
   open: boolean;
 }) {
+  const balancesAfter = data?.balancesAfter ?? {};
+  const balancesBefore = data?.balancesBefore ?? {};
   return (
     <Dialog open={open} onClose={onClose} title="تقرير الاستيراد">
       {isLoading && <Skeleton className="h-48" />}
@@ -1149,7 +1151,7 @@ function ReportDialog({
           )}
 
           {/* ── Balance Changes ── */}
-          {Object.keys(data.balancesAfter).length > 0 && (
+          {Object.keys(balancesAfter).length > 0 && (
             <div className="space-y-2">
               <h3 className="text-sm font-semibold text-concrete-700 dark:text-concrete-200">
                 الأرصدة قبل/بعد
@@ -1164,9 +1166,9 @@ function ReportDialog({
                   </tr>
                 </thead>
                 <tbody>
-                  {Object.keys(data.balancesAfter).map((ccy) => {
-                    const before = data.balancesBefore[ccy] ?? 0;
-                    const after = data.balancesAfter[ccy];
+                  {Object.keys(balancesAfter).map((ccy) => {
+                    const before = balancesBefore[ccy] ?? 0;
+                    const after = balancesAfter[ccy];
                     const diff = after - before;
                     return (
                       <tr key={ccy} className="text-xs">

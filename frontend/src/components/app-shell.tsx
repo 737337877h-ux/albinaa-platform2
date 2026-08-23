@@ -13,6 +13,9 @@ import {
   ClipboardCheck,
   MessageCircle,
   Ruler,
+  Boxes,
+  Activity,
+  BadgeDollarSign,
 } from 'lucide-react';
 import { useMe, useCan, useLogout } from '@/lib/auth';
 import { api, ApiError, tokenStore } from '@/lib/api';
@@ -36,12 +39,21 @@ const NAV = [
   { href: '/collections/reconciliation', label: 'مطابقة الصندوق', icon: ClipboardCheck, perm: 'collections.approve' },
   { href: '/imports', label: 'استيراد Excel', icon: FileSpreadsheet, perm: 'imports.read' },
   { href: '/reservations', label: 'حجوزات البضاعة', icon: PackageCheck, perm: 'reservations.read' },
+  { href: '/inventory', label: 'المخزون', icon: Boxes, perm: 'reports.read' },
+  { href: '/inventory-transfers', label: 'التحويلات المخزنية', icon: ArrowRightLeft, perm: 'inventory_transfers.read' },
   { href: '/reports', label: 'التقارير', icon: ChartPie, perm: 'reports.read' },
   { href: '/reports/aging', label: 'أعمار الديون', icon: ChartNoAxesColumnIncreasing, perm: 'reports.read' },
   { href: '/reports/kpi', label: 'مؤشرات التحصيل', icon: Gauge, perm: 'reports.read' },
 ] as const;
 
+const NAV_ORDER = [
+  '/dashboard', '/tasks', '/customers', '/followups', '/promises', '/collections',
+  '/campaigns', '/advances', '/collections/reconciliation', '/inventory', '/inventory-transfers', '/reservations',
+  '/reports', '/reports/aging', '/reports/kpi', '/imports',
+] as const;
+
 const ADMIN_NAV = [
+  { href: '/admin/financial-adjustments', label: 'طلبات الخصم والتصفية', icon: BadgeDollarSign, perm: 'customers.write' },
   { href: '/admin/credit-control', label: 'الرقابة الائتمانية', icon: ShieldCheck, perm: 'customers.read' },
   { href: '/admin/units', label: 'وحدات الحجوزات', icon: Ruler, perm: 'reservations.manage' },
   { href: '/admin/users', label: 'المستخدمين', icon: UserCog, perm: 'users.manage' },
@@ -60,6 +72,7 @@ const ADMIN_NAV = [
   { href: '/admin/settings', label: 'الإعدادات', icon: Settings, perm: 'settings.manage' },
   { href: '/admin/accounting-periods', label: 'الفترات المحاسبية', icon: CalendarClock, perm: 'periods.manage' },
   { href: '/admin/audit', label: 'سجل العمليات', icon: ScrollText, perm: 'audit.read' },
+  { href: '/admin/oracle-monitoring', label: 'مراقبة ربط Oracle', icon: Activity, perm: 'settings.manage' },
 ] as const;
 
 function LoadingShell() {
@@ -143,7 +156,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Same tree on server and first client paint — avoids React #418/#423
   if (!mounted) return <LoadingShell />;
 
-  const nav = NAV.filter((n) => can(n.perm));
+  const nav = NAV.filter((n) => can(n.perm)).sort((a, b) => NAV_ORDER.indexOf(a.href) - NAV_ORDER.indexOf(b.href));
   const adminNav = ADMIN_NAV.filter((n) => can(n.perm));
 
   if (isLoading) return <LoadingShell />;
@@ -229,7 +242,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <div className="flex min-h-screen flex-col">
+      <div className="flex min-h-screen min-w-0 flex-col">
         <header className="sticky top-0 z-40 border-b border-line bg-surface-0 backdrop-blur">
           <div className="flex items-center justify-between px-4 py-3 lg:px-6">
             <div className="flex items-center gap-2 lg:hidden">
@@ -250,13 +263,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="flex-1 px-4 py-5 pb-24 lg:px-6 lg:pb-8">{children}</main>
+        <main className="min-w-0 flex-1 px-4 py-5 pb-24 lg:px-6 lg:pb-8">{children}</main>
 
         <nav
           aria-label="التنقل السريع"
           className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-4 border-t border-line bg-surface-1 lg:hidden"
         >
-          {[NAV[1], NAV[2]].filter((n) => can(n.perm)).map(({ href, label, icon: Icon }) => (
+          {['/dashboard', '/tasks']
+            .map((href) => NAV.find((item) => item.href === href))
+            .filter((n): n is NonNullable<typeof n> => !!n && can(n.perm))
+            .map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}

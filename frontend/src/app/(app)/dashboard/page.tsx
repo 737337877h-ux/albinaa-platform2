@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
+import { notificationHref } from '@/lib/notification-target';
 import { AlertTriangle, Bot, ChevronLeft, PackageCheck, Sparkles, UsersRound } from 'lucide-react';
 import { api, tokenStore } from '@/lib/api';
 import { useCan, useMe } from '@/lib/auth';
@@ -26,6 +27,12 @@ interface DashboardSummary {
   byCurrency: Record<string, { debtors: number; debtTotal: number; creditors: number; creditTotal: number; zero: number }>;
   lastImport: { id: string; fileName: string; importedAt: string } | null;
   newDebt: {
+    betweenImports?: { latest: string; previous: string | null };
+    comparison?: {
+      latestFile: string;
+      previousFile: string | null;
+      comparable: boolean;
+    };
     perCurrency?: Record<string, {
       amount: number;
       netChange?: number;
@@ -297,6 +304,17 @@ export default function DashboardPage() {
                 {summary.data.newDebt?.perCurrency && Object.keys(summary.data.newDebt.perCurrency).length > 0 && (
                   <Card className="p-4">
                     <p className="text-xs text-concrete-500">صافي تغير المديونية (بين استيرادين متجانسين)</p>
+                    {summary.data.newDebt.comparison?.comparable && (
+                      <div className="mt-2 rounded-lg bg-concrete-50 p-2 text-[11px] leading-5 text-concrete-600 dark:bg-white/5 dark:text-concrete-300">
+                        <p>الأحدث: {summary.data.newDebt.comparison.latestFile}</p>
+                        <p>السابق: {summary.data.newDebt.comparison.previousFile}</p>
+                        {summary.data.newDebt.betweenImports?.previous && (
+                          <p>
+                            الفترة: {fmtDateTime(summary.data.newDebt.betweenImports.previous)} ← {fmtDateTime(summary.data.newDebt.betweenImports.latest)}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     {Object.entries(summary.data.newDebt.perCurrency).map(([ccy, v]) => (
                       <div key={ccy} className="mt-2 rounded-lg border border-concrete-100 p-2 dark:border-white/10">
                         <div className="flex items-center justify-between gap-3">
@@ -892,9 +910,11 @@ export default function DashboardPage() {
           >
             <ul className="divide-y divide-concrete-100 dark:divide-white/10">
               {(notifications.data?.items ?? []).map((n) => (
-                <li key={n.id} className="px-4 py-3 text-sm">
-                  <p className={n.readAt ? 'text-concrete-500' : 'font-medium'}>{notifText(n)}</p>
-                  <p className="mt-0.5 text-xs text-concrete-400">{fmtDateTime(n.createdAt)}</p>
+                <li key={n.id} className="text-sm">
+                  <Link href={notificationHref(n)} className="block px-4 py-3 hover:bg-concrete-50 dark:hover:bg-white/5">
+                    <p className={n.readAt ? 'text-concrete-500' : 'font-medium'}>{notifText(n)}</p>
+                    <p className="mt-0.5 text-xs text-concrete-400">{fmtDateTime(n.createdAt)}</p>
+                  </Link>
                 </li>
               ))}
             </ul>

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'next/navigation';
 import { CheckCircle2, FileCheck2, LockKeyhole, Printer, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
@@ -37,6 +38,8 @@ const voucherTone: Record<string, 'hazard' | 'credit' | 'pine'> = {
 const voucherLabel: Record<string, string> = { submitted: 'بانتظار المطابقة', matched: 'مطابقة', locked: 'معتمدة ومقفلة' };
 
 export default function CollectionReconciliationPage() {
+  const searchParams = useSearchParams();
+  const focusedRequestId = searchParams.get('requestId');
   const can = useCan();
   const canApprove = can('collections.approve');
   const canReceive = can('cash.receive');
@@ -82,6 +85,11 @@ export default function CollectionReconciliationPage() {
     const timer = window.setTimeout(() => { window.print(); setPrintId(null); }, 100);
     return () => window.clearTimeout(timer);
   }, [printId]);
+
+  useEffect(() => {
+    if (!focusedRequestId || !board.data) return;
+    document.getElementById(`reversal-${focusedRequestId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [board.data, focusedRequestId]);
 
   if (!canApprove) return <PermissionNotice message="تحتاج صلاحية اعتماد التحصيلات لفتح مطابقة الصندوق." />;
   return (
@@ -169,7 +177,11 @@ export default function CollectionReconciliationPage() {
               <p className="mt-1 text-xs text-concrete-500">لا يستطيع منشئ الطلب اعتماده؛ يلزم مستخدم ثانٍ.</p></div>
             {board.data.pendingReversals.length === 0 ? <Empty title="لا توجد طلبات عكس معلقة" /> : (
               <div className="divide-y divide-concrete-100 dark:divide-white/10">{board.data.pendingReversals.map((request) => (
-                <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
+                <div
+                  key={request.id}
+                  id={`reversal-${request.id}`}
+                  className={`flex flex-wrap items-center justify-between gap-3 p-4 transition ${focusedRequestId === request.id ? 'bg-hazard-50 ring-2 ring-inset ring-hazard-400 dark:bg-hazard-900/20' : ''}`}
+                >
                   <div><p className="font-medium">{request.collection.customer.name} · <span dir="ltr">{request.collection.receiptNumber}</span></p>
                     <p className="text-sm text-concrete-600">{request.reason}</p><p className="text-xs text-concrete-500">طلبه {request.requester.fullName} · {fmtDateTime(request.requestedAt)}</p></div>
                   <div className="flex gap-2"><Button variant="danger" onClick={() => action.mutate({ path: `/collections/reconciliation/reversal-requests/${request.id}/review`, body: { approve: false, note: 'مرفوض من شاشة المطابقة' } })}>

@@ -231,11 +231,48 @@ export function Pagination({ page, totalPages, onPage }: {
   page: number; totalPages: number; onPage: (p: number) => void;
 }) {
   if (totalPages <= 1) return null;
+
+  const radius = 2;
+  const start = Math.max(1, Math.min(page - radius, totalPages - radius * 2));
+  const end = Math.min(totalPages, Math.max(page + radius, radius * 2 + 1));
+  const pages = Array.from({ length: end - start + 1 }, (_, index) => start + index);
+
   return (
-    <nav aria-label="تصفح الصفحات" className="flex items-center justify-center gap-3 py-3 text-sm">
-      <Button variant="secondary" disabled={page <= 1} onClick={() => onPage(page - 1)}>السابق</Button>
-      <span className="tnum text-concrete-700 dark:text-concrete-300">{page} / {totalPages}</span>
-      <Button variant="secondary" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>التالي</Button>
+    <nav aria-label="تصفح الصفحات" className="flex max-w-full items-center justify-center gap-2 py-3 text-sm">
+      <Button variant="secondary" disabled={page <= 1} onClick={() => onPage(page - 1)} aria-label="الصفحة السابقة">
+        السابق
+      </Button>
+      <div className="flex max-w-[min(60vw,28rem)] snap-x snap-mandatory items-center gap-1 overflow-x-auto scroll-smooth px-1 py-1 [scrollbar-width:thin]">
+        {start > 1 ? (
+          <>
+            <button type="button" onClick={() => onPage(1)} className="tnum min-h-9 min-w-9 snap-center rounded-lg border border-concrete-200 px-2 text-concrete-700 transition-colors hover:bg-concrete-100 dark:border-concrete-700 dark:text-concrete-200 dark:hover:bg-concrete-800">1</button>
+            {start > 2 ? <span aria-hidden="true" className="px-1 text-concrete-400">…</span> : null}
+          </>
+        ) : null}
+        {pages.map((pageNumber) => (
+          <button
+            key={pageNumber}
+            type="button"
+            onClick={() => onPage(pageNumber)}
+            aria-current={pageNumber === page ? "page" : undefined}
+            className={`tnum min-h-9 min-w-9 snap-center rounded-lg border px-2 transition-colors ${pageNumber === page
+              ? "border-primary-600 bg-primary-600 font-bold text-white shadow-sm"
+              : "border-concrete-200 text-concrete-700 hover:bg-concrete-100 dark:border-concrete-700 dark:text-concrete-200 dark:hover:bg-concrete-800"
+            }`}
+          >
+            {pageNumber}
+          </button>
+        ))}
+        {end < totalPages ? (
+          <>
+            {end < totalPages - 1 ? <span aria-hidden="true" className="px-1 text-concrete-400">…</span> : null}
+            <button type="button" onClick={() => onPage(totalPages)} className="tnum min-h-9 min-w-9 snap-center rounded-lg border border-concrete-200 px-2 text-concrete-700 transition-colors hover:bg-concrete-100 dark:border-concrete-700 dark:text-concrete-200 dark:hover:bg-concrete-800">{totalPages}</button>
+          </>
+        ) : null}
+      </div>
+      <Button variant="secondary" disabled={page >= totalPages} onClick={() => onPage(page + 1)} aria-label="الصفحة التالية">
+        التالي
+      </Button>
     </nav>
   );
 }

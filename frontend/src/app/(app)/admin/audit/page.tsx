@@ -41,6 +41,22 @@ const ACTION_AR: Record<string, string> = {
   import_executed: 'تنفيذ استيراد',
   customer_created: 'إنشاء عميل',
   customer_updated: 'تعديل عميل',
+  customer_location_updated: 'تحديث موقع عميل',
+  customer_sub_account_linked: 'ربط حساب فرعي',
+  customer_sub_account_unlinked: 'فك ارتباط حساب فرعي',
+  customer_merge_reversed: 'التراجع عن دمج عميل',
+  duplicate_reviewed: 'مراجعة تطابق عميل محتمل',
+  role_created: 'إنشاء دور',
+  followup_soft_deleted: 'حذف متابعة مع الاحتفاظ بسجلها',
+  contact_app_opened: 'فتح وسيلة تواصل مع العميل',
+  daily_work_queue_generated: 'توليد قائمة عمل اليوم',
+  message_campaign_prepared: 'تجهيز حملة رسائل',
+  message_dispatch_opened_manual: 'فتح رسالة للإرسال اليدوي',
+  oracle_exception_kept_excluded: 'اعتماد استبعاد استثناء Oracle',
+  oracle_exception_inventory_snapshot_approved: 'اعتماد لقطة مخزون لاستثناء Oracle',
+  oracle_exception_amount_approved: 'اعتماد مبلغ Oracle',
+  oracle_movement_auto_publication_completed: 'اكتمال نشر حركات Oracle الجديدة',
+  oracle_new_movements_auto_published: 'نشر حركات Oracle الجديدة تلقائيًا',
 };
 
 const ENTITY_TABLES = [
@@ -55,6 +71,11 @@ const ENTITY_TABLES = [
   'promises',
   'imports',
   'auth',
+  'tasks',
+  'message_campaigns',
+  'message_dispatches',
+  'oracle_movement_exception_reviews',
+  'oracle_movement_publication_batches',
 ];
 
 function actionBadgeTone(action: string): 'pine' | 'neutral' | 'hazard' | 'debt' | 'credit' {
@@ -100,7 +121,7 @@ interface AuditLog {
   ipAddress: string;
   userAgent: string;
   createdAt: string;
-  user: { fullName: string };
+  user: { fullName: string } | null;
 }
 
 interface AuditResponse {
@@ -144,7 +165,7 @@ export default function AuditPage() {
       if (to) p.set('to', to);
       if (actionFilter) p.set('action', actionFilter);
       if (entityTable) p.set('entityTable', entityTable);
-      if (userSearch) p.set('userId', userSearch);
+      if (userSearch) p.set('userSearch', userSearch);
       return api<AuditResponse>(`/audit?${p.toString()}`);
     },
     enabled: canRead,
@@ -247,7 +268,7 @@ export default function AuditPage() {
                   <Fragment key={log.id}>
                     <TRow>
                       <TD className="whitespace-nowrap text-xs">{fmtDateTime(log.createdAt)}</TD>
-                      <TD className="text-sm">{log.user.fullName}</TD>
+                      <TD className="text-sm">{log.user?.fullName ?? 'النظام'}</TD>
                       <TD>
                         <Badge tone={actionBadgeTone(log.action)}>
                           {ACTION_AR[log.action] ?? log.action}

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { MapPin } from 'lucide-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { api, ApiError } from '@/lib/api';
 import { Dialog } from '@/components/ui/dialog';
@@ -16,6 +17,8 @@ export interface EditableCustomer {
   whatsapp?: string | null;
   region?: string | null;
   address?: string | null;
+  geoLat?: number | string | null;
+  geoLng?: number | string | null;
   branchId?: string | null;
   branch?: { id: string; name: string } | null;
   customerType?: string | null;
@@ -25,12 +28,13 @@ export interface EditableCustomer {
 type FormState = {
   externalCustomerCode: string; name: string; tradeName: string;
   phonePrimary: string; phoneSecondary: string; whatsapp: string;
-  region: string; address: string; branchId: string; customerType: string; notes: string;
+  region: string; address: string; geoLat: string; geoLng: string;
+  branchId: string; customerType: string; notes: string;
 };
 
 const emptyForm = (type = 'customer'): FormState => ({
   externalCustomerCode: '', name: '', tradeName: '', phonePrimary: '', phoneSecondary: '',
-  whatsapp: '', region: '', address: '', branchId: '', customerType: type, notes: '',
+  whatsapp: '', region: '', address: '', geoLat: '', geoLng: '', branchId: '', customerType: type, notes: '',
 });
 
 export function CustomerFormDialog({ open, onClose, customer, defaultCustomerType = 'customer', onSaved }: {
@@ -61,6 +65,8 @@ export function CustomerFormDialog({ open, onClose, customer, defaultCustomerTyp
       whatsapp: customer.whatsapp ?? '',
       region: customer.region ?? '',
       address: customer.address ?? '',
+      geoLat: customer.geoLat == null ? '' : String(customer.geoLat),
+      geoLng: customer.geoLng == null ? '' : String(customer.geoLng),
       branchId: customer.branchId ?? customer.branch?.id ?? '',
       customerType: customer.customerType ?? defaultCustomerType,
       notes: customer.notes ?? '',
@@ -72,7 +78,20 @@ export function CustomerFormDialog({ open, onClose, customer, defaultCustomerTyp
       if (!form.name.trim() || (!editing && !form.externalCustomerCode.trim())) {
         throw new Error('اسم العميل وكود الحساب مطلوبان');
       }
-      const body = Object.fromEntries(Object.entries(form).map(([key, value]) => [key, value.trim() || undefined]));
+      const hasLat = form.geoLat.trim() !== '';
+      const hasLng = form.geoLng.trim() !== '';
+      if (hasLat !== hasLng) throw new Error('يجب إدخال خط العرض وخط الطول معًا');
+      const latitude = hasLat ? Number(form.geoLat) : undefined;
+      const longitude = hasLng ? Number(form.geoLng) : undefined;
+      if ((latitude !== undefined && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90))
+        || (longitude !== undefined && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))) {
+        throw new Error('إحداثيات الموقع غير صحيحة');
+      }
+      const body = Object.fromEntries(
+        Object.entries(form).map(([key, value]) => [key, value.trim() || undefined]),
+      ) as Record<string, string | number | undefined>;
+      body.geoLat = latitude;
+      body.geoLng = longitude;
       if (editing) delete body.externalCustomerCode;
       return api<EditableCustomer & { id: string }>(editing ? `/customers/${customer!.id}` : '/customers', {
         method: editing ? 'PATCH' : 'POST',
@@ -84,6 +103,18 @@ export function CustomerFormDialog({ open, onClose, customer, defaultCustomerTyp
   });
 
   const set = (key: keyof FormState, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) { setError('تحديد الموقع غير مدعوم في هذا المتصفح'); return; }
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => setForm((current) => ({
+        ...current,
+        geoLat: coords.latitude.toFixed(6),
+        geoLng: coords.longitude.toFixed(6),
+      })),
+      () => setError('تعذر قراءة الموقع؛ تحقق من صلاحية الموقع في المتصفح'),
+      { enableHighAccuracy: true, timeout: 15_000 },
+    );
+  };
 
   return (
     <Dialog open={open} onClose={onClose} title={editing ? 'تعديل بيانات الحساب' : 'إضافة حساب جديد'} className="sm:max-w-3xl">
@@ -109,6 +140,12 @@ export function CustomerFormDialog({ open, onClose, customer, defaultCustomerTyp
           </Select>
         </Field>
         <Field label="العنوان"><Input value={form.address} onChange={(e) => set('address', e.target.value)} /></Field>
+        <Field label="خط العرض"><Input dir="ltr" inputMode="decimal" value={form.geoLat} onChange={(e) => set('geoLat', e.target.value)} placeholder="15.369400" /></Field>
+        <Field label="خط الطول"><Input dir="ltr" inputMode="decimal" value={form.geoLng} onChange={(e) => set('geoLng', e.target.value)} placeholder="44.191000" /></Field>
+        <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
+          <Button type="button" variant="secondary" onClick={useCurrentLocation}><MapPin className="h-4 w-4" /> استخدام موقعي الحالي</Button>
+          {form.geoLat && form.geoLng && <a className="text-sm text-pine-700 hover:underline" target="_blank" rel="noreferrer" href={`https://www.google.com/maps?q=${form.geoLat},${form.geoLng}`}>معاينة الموقع على الخريطة</a>}
+        </div>
         <div className="sm:col-span-2"><Field label="ملاحظات"><Textarea rows={3} value={form.notes} onChange={(e) => set('notes', e.target.value)} /></Field></div>
       </div>
       {error && <p className="mt-3 text-sm text-debt-600" role="alert">{error}</p>}

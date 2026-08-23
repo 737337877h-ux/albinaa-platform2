@@ -64,6 +64,7 @@ model Organization {
   oracleCustomers          OracleCustomerMirror[]
   oracleCustomerCurrencies OracleCustomerCurrencyMirror[]
   oracleCustomerBalances   OracleCustomerBalanceMirror[]
+  inventoryTransferRequests InventoryTransferRequest[]
 
   @@map("organizations")
 }
@@ -145,6 +146,9 @@ model User {
   financialAdjustmentRequestsReviewed FinancialAdjustmentRequest[] @relation("FinancialAdjustmentReviewer")
   oracleSyncRunsTriggered          OracleInventorySyncRun[]     @relation("OracleSyncTriggeredBy")
   oracleCustomerSyncRunsTriggered  OracleCustomerSyncRun[]      @relation("OracleCustomerSyncTriggeredBy")
+  inventoryTransfersCreated         InventoryTransferRequest[]   @relation("InventoryTransferCreator")
+  inventoryTransfersSubmitted       InventoryTransferRequest[]   @relation("InventoryTransferSubmitter")
+  inventoryTransfersReviewed        InventoryTransferRequest[]   @relation("InventoryTransferReviewer")
   oracleBranchMappingsVerified     OracleBranchMapping[]        @relation("OracleBranchMappingVerifiedBy")
 
   @@unique([organizationId, username], map: "uq_users_org_username")
@@ -1977,4 +1981,59 @@ model OracleMovementPublicationLedger {
   @@index([organizationId, status, movementKind, lastSeenAt], map: "idx_oracle_movement_publication_ledger_review")
   @@index([publicationBatchId], map: "idx_oracle_movement_publication_ledger_batch")
   @@map("oracle_movement_publication_ledger")
+}
+
+// ---------------------------------------------------------------------------
+// Oracle INVT001.225 inventory transfer requests — platform-first, dry-run only
+// ---------------------------------------------------------------------------
+model InventoryTransferRequest {
+  id                              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId                  String    @map("organization_id") @db.Uuid
+  idempotencyKey                  String    @map("idempotency_key")
+  sourceWarehouseCode             String    @map("source_warehouse_code")
+  destinationWarehouseCode        String    @map("destination_warehouse_code")
+  status                          String    @default("draft")
+  notes                           String?
+  oracleOutReqSer                 String?   @map("oracle_out_req_ser")
+  oracleTransferDocumentNumber    String?   @map("oracle_transfer_document_number")
+  oracleSourceTransferSerial      String?   @map("oracle_source_transfer_serial")
+  oracleDestinationTransferSerial String?   @map("oracle_destination_transfer_serial")
+  sourceIssued                    Boolean   @default(false) @map("source_issued")
+  destinationReceived             Boolean   @default(false) @map("destination_received")
+  transferCompleted               Boolean   @default(false) @map("transfer_completed")
+  lastOracleCheckedAt             DateTime? @map("last_oracle_checked_at") @db.Timestamptz()
+  lastDryRunAt                    DateTime? @map("last_dry_run_at") @db.Timestamptz()
+  lastDryRunResult                Json?     @map("last_dry_run_result") @db.JsonB
+  createdBy                       String    @map("created_by") @db.Uuid
+  submittedBy                     String?   @map("submitted_by") @db.Uuid
+  submittedAt                     DateTime? @map("submitted_at") @db.Timestamptz()
+  reviewedBy                      String?   @map("reviewed_by") @db.Uuid
+  reviewedAt                      DateTime? @map("reviewed_at") @db.Timestamptz()
+  reviewNote                      String?   @map("review_note")
+  createdAt                       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization Organization            @relation(fields: [organizationId], references: [id])
+  creator      User                    @relation("InventoryTransferCreator", fields: [createdBy], references: [id])
+  submitter    User?                   @relation("InventoryTransferSubmitter", fields: [submittedBy], references: [id])
+  reviewer     User?                   @relation("InventoryTransferReviewer", fields: [reviewedBy], references: [id])
+  lines        InventoryTransferLine[]
+
+  @@unique([organizationId, idempotencyKey], map: "uq_inventory_transfer_org_idempotency")
+  @@index([organizationId, status, createdAt], map: "idx_inventory_transfer_org_status")
+  @@map("inventory_transfer_requests")
+}
+
+model InventoryTransferLine {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requestId String  @map("request_id") @db.Uuid
+  lineNo    Int     @map("line_no")
+  itemCode  String  @map("item_code")
+  unitCode  String  @map("unit_code")
+  quantity  Decimal @db.Decimal(18, 4)
+
+  request InventoryTransferRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, lineNo], map: "uq_inventory_transfer_line_no")
+  @@map("inventory_transfer_lines")
 }

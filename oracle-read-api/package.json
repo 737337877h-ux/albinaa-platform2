@@ -1,0 +1,21 @@
+{
+  "name": "albinaa-oracle-read-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SELECT-only Oracle 11g gateway for AlBinaa Platform",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "start:secure-local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local-secure.ps1",
+    "configure:persistent": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/configure-persistent.ps1",
+    "install:persistent": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-persistent-task.ps1",
+    "test": "node --test",
+    "check": "node --check src/config.js && node --check src/oracle.js && node --check src/queries.js && node --check src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "oracledb": "^6.9.0"
+  }
+}

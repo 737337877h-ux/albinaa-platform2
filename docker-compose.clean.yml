@@ -43,6 +43,9 @@ services:
       TZ: Asia/Aden
       RISK_AUTO_RECALCULATE_ENABLED: ${RISK_AUTO_RECALCULATE_ENABLED:-true}
       RISK_RECALCULATE_HOUR: ${RISK_RECALCULATE_HOUR:-2}
+      ORACLE_READ_API_URL: http://host.docker.internal:3011
+      ORACLE_READ_API_KEY: ${ORACLE_READ_API_KEY}
+      ORACLE_READ_SCHEMA: ${ORACLE_READ_SCHEMA:-IAS20261}
       PUSH_ENABLED: "false"
     volumes:
       - ./data-clean/uploads:/data/uploads

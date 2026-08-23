@@ -8,7 +8,7 @@ import { api, apiFileBlob, ApiError, downloadApiFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
-import { contactLinks } from '@/lib/contact';
+import { contactLinks, uniqueContactNumbers } from '@/lib/contact';
 import { PageHeader } from '@/components/app-shell';
 import { MessageTemplateDialog } from '@/components/message-template-dialog';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
@@ -32,6 +32,8 @@ interface Customer360 {
   whatsapp: string | null;
   region: string | null;
   address: string | null;
+  geoLat: number | null;
+  geoLng: number | null;
   branch: { id: string; name: string } | null;
   customerType: string | null;
   status: string;
@@ -143,6 +145,25 @@ interface CollectionItem {
   method: { name: string };
   branch: { name: string } | null;
   createdAt: string;
+}
+
+interface CustomerMediaResponse {
+  receipts: {
+    id: string;
+    entityId: string;
+    fileName: string;
+    uploadedAt: string;
+    previewPath: string;
+  }[];
+  locations: {
+    id: string;
+    collectionId: string | null;
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+    timestamp: string;
+    collectorName: string;
+  }[];
 }
 
 interface PaginatedResponse<T> {
@@ -398,7 +419,7 @@ export default function Customer360Page() {
   const [pdfDownloading, setPdfDownloading] = useState(false);
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
-  const [pdfTemplate, setPdfTemplate] = useState<'classic' | 'branded'>('classic');
+  const [pdfTemplate, setPdfTemplate] = useState<'classic' | 'branded'>('branded');
   const statementParams = () => {
     const params = new URLSearchParams({ currency: stmtCurrency });
     if (stmtFromDate) params.set('fromDate', stmtFromDate);
@@ -568,6 +589,28 @@ export default function Customer360Page() {
     ),
     enabled: canRead && tab === 'collections',
   });
+  const collectionMedia = useQuery<CustomerMediaResponse>({
+    queryKey: ['customer-media', id],
+    queryFn: () => api<CustomerMediaResponse>(`/customers/${id}/media`),
+    enabled: canRead && tab === 'collections',
+  });
+  const [receiptPreviewUrl, setReceiptPreviewUrl] = useState<string | null>(null);
+  const [receiptPreviewName, setReceiptPreviewName] = useState('إيصال التحصيل');
+  const [receiptPreviewMime, setReceiptPreviewMime] = useState('image/jpeg');
+  useEffect(() => () => {
+    if (receiptPreviewUrl) URL.revokeObjectURL(receiptPreviewUrl);
+  }, [receiptPreviewUrl]);
+  const previewReceipt = async (receipt: CustomerMediaResponse['receipts'][number]) => {
+    try {
+      const blob = await apiFileBlob(receipt.previewPath);
+      if (receiptPreviewUrl) URL.revokeObjectURL(receiptPreviewUrl);
+      setReceiptPreviewName(receipt.fileName || 'إيصال التحصيل');
+      setReceiptPreviewMime(blob.type || 'application/octet-stream');
+      setReceiptPreviewUrl(URL.createObjectURL(blob));
+    } catch (error) {
+      toast(friendlyApiError(error), 'err');
+    }
+  };
 
   /* ──────── Reservations (PR-F) ──────── */
   const reservations = useQuery<ReservationItem[]>({
@@ -777,11 +820,20 @@ export default function Customer360Page() {
   }
 
   const c = customer.data;
-  const links = c ? contactLinks(c.phonePrimary) : null;
-  const whatsappLink = c ? contactLinks(c.whatsapp ?? c.phonePrimary)?.whatsapp : null;
+  const contactNumbers = c ? uniqueContactNumbers([
+    { label: 'الأساسي', value: c.phonePrimary },
+    { label: 'الإضافي', value: c.phoneSecondary },
+    { label: 'واتساب', value: c.whatsapp },
+  ]) : [];
   const primaryDebt = c?.balances
     .filter((b) => Number(b.operationalBalance) > 0)
     .sort((a, b) => Number(b.operationalBalance) - Number(a.operationalBalance))[0];
+  const groupPrimaryDebt = accountGroup.data?.aggregateBalances
+    .filter((balance) => balance.balance > 0)
+    .sort((a, b) => b.balance - a.balance)[0];
+  const messageDebt = accountGroup.data?.childBalances.some((balance) => balance.balance > 0)
+    ? groupPrimaryDebt
+    : primaryDebt ? { currency: primaryDebt.currency, balance: Number(primaryDebt.operationalBalance) } : undefined;
   const isLoading = customer.isLoading;
   const err = customer.error;
 
@@ -834,6 +886,11 @@ export default function Customer360Page() {
                 <MapPin className="h-3.5 w-3.5" /> {c.region}
               </span>
             )}
+            {c.geoLat != null && c.geoLng != null && (
+              <a href={`https://www.google.com/maps?q=${c.geoLat},${c.geoLng}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-pine-700 hover:underline">
+                <MapPin className="h-3.5 w-3.5" /> فتح موقع العميل
+              </a>
+            )}
             {c.branch && (
               <span className="flex items-center gap-1 text-concrete-600 dark:text-concrete-400">
                 <Building2 className="h-3.5 w-3.5" /> {c.branch?.name ?? '—'}
@@ -850,23 +907,22 @@ export default function Customer360Page() {
               </Badge>
             )}
           </div>
-          {(links || whatsappLink) && (
+          {contactNumbers.length > 0 && (
             <div className="mt-4 flex flex-wrap gap-2 border-t border-concrete-100 pt-4 dark:border-white/10">
-              {links && (
-                <>
-                  <a href={links.tel} className="inline-flex items-center gap-2 rounded-lg bg-pine-700 px-4 py-2 text-sm font-medium text-white hover:bg-pine-800">
-                    <Phone className="h-4 w-4" aria-hidden /> اتصال
+              {contactNumbers.map((number) => {
+                const numberLinks = contactLinks(number.value)!;
+                return (
+                  <a key={number.normalized} href={numberLinks.tel} className="inline-flex items-center gap-2 rounded-lg bg-pine-700 px-3 py-2 text-sm font-medium text-white hover:bg-pine-800">
+                    <Phone className="h-4 w-4" aria-hidden /> اتصال — {number.label}: <span dir="ltr">{number.value}</span>
                   </a>
-                  <button type="button" onClick={() => setMessageChannel('sms')} className="inline-flex items-center gap-2 rounded-lg border border-concrete-200 bg-white px-4 py-2 text-sm font-medium text-iron-900 hover:bg-concrete-100 dark:border-white/10 dark:bg-iron-800 dark:text-concrete-100">
-                    <MessageSquare className="h-4 w-4" aria-hidden /> رسالة نصية
-                  </button>
-                </>
-              )}
-              {whatsappLink && (
-                <button type="button" onClick={() => setMessageChannel('whatsapp')} className="inline-flex items-center gap-2 rounded-lg bg-credit-600 px-4 py-2 text-sm font-medium text-white hover:bg-credit-700">
-                  <MessageCircle className="h-4 w-4" aria-hidden /> واتساب
-                </button>
-              )}
+                );
+              })}
+              <button type="button" onClick={() => setMessageChannel('sms')} className="inline-flex items-center gap-2 rounded-lg border border-concrete-200 bg-white px-4 py-2 text-sm font-medium text-iron-900 hover:bg-concrete-100 dark:border-white/10 dark:bg-iron-800 dark:text-concrete-100">
+                <MessageSquare className="h-4 w-4" aria-hidden /> رسالة نصية
+              </button>
+              <button type="button" onClick={() => setMessageChannel('whatsapp')} className="inline-flex items-center gap-2 rounded-lg bg-credit-600 px-4 py-2 text-sm font-medium text-white hover:bg-credit-700">
+                <MessageCircle className="h-4 w-4" aria-hidden /> واتساب
+              </button>
             </div>
           )}
           <MessageTemplateDialog
@@ -877,10 +933,13 @@ export default function Customer360Page() {
             customerName={c.name}
             customerCode={c.externalCustomerCode}
             phone={c.phonePrimary}
+            phoneSecondary={c.phoneSecondary}
             whatsapp={c.whatsapp}
-            balance={primaryDebt ? Number(primaryDebt.operationalBalance) : null}
-            currency={primaryDebt?.currency ?? null}
+            balance={messageDebt?.balance ?? null}
+            currency={messageDebt?.currency ?? null}
             collectorName={c.currentCollector?.name ?? null}
+            groupBalances={accountGroup.data?.aggregateBalances}
+            childBalances={accountGroup.data?.childBalances}
           />
         </Card>
       )}
@@ -1502,9 +1561,12 @@ export default function Customer360Page() {
                     </div>
                   )}
                   <Table>
-                    <THead cols={['التاريخ', 'المبلغ', 'العملة', 'الطريقة', 'الحالة', 'المحصل', 'المرجع', 'ملاحظات']} />
+                    <THead cols={['التاريخ', 'المبلغ', 'العملة', 'الطريقة', 'الحالة', 'المحصل', 'المرجع', 'الإيصال', 'الموقع', 'ملاحظات']} />
                     <tbody>
-                      {collections.data.items.map(co => (
+                      {collections.data.items.map(co => {
+                        const receipt = collectionMedia.data?.receipts.find((item) => item.entityId === co.id);
+                        const location = collectionMedia.data?.locations.find((item) => item.collectionId === co.id);
+                        return (
                         <TRow key={co.id}>
                           <TD>{fmtDateTime(co.collectedAt)}</TD>
                           <TD className="font-semibold"><Money value={co.amount} /></TD>
@@ -1517,9 +1579,12 @@ export default function Customer360Page() {
                           </TD>
                           <TD>{co.collector?.user?.fullName ?? '—'}</TD>
                           <TD className="font-mono text-xs"><span dir="ltr">{co.receiptNumber ?? co.referenceNumber ?? '—'}</span></TD>
+                          <TD>{receipt ? <Button variant="secondary" onClick={() => previewReceipt(receipt)}><Eye className="h-4 w-4" /> معاينة</Button> : '—'}</TD>
+                          <TD>{location ? <Button variant="secondary" onClick={() => window.open(`https://www.google.com/maps?q=${location.latitude},${location.longitude}`, '_blank', 'noopener,noreferrer')}><MapPin className="h-4 w-4" /> الخريطة</Button> : '—'}</TD>
                           <TD className="max-w-[200px] truncate text-xs">{co.notes ?? '—'}</TD>
                         </TRow>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </Table>
                   <Pagination page={collections.data.page} totalPages={collections.data.totalPages} onPage={setCoPage} />
@@ -1527,6 +1592,15 @@ export default function Customer360Page() {
               )}
             </DataState>
           </Card>
+          <Dialog open={!!receiptPreviewUrl} onClose={() => setReceiptPreviewUrl(null)} title={receiptPreviewName} className="sm:max-w-4xl">
+            {receiptPreviewUrl && (
+              <div className="flex max-h-[75vh] items-center justify-center overflow-auto rounded-xl bg-concrete-100 p-3 dark:bg-iron-900">
+                {receiptPreviewMime === 'application/pdf'
+                  ? <object data={receiptPreviewUrl} type="application/pdf" className="h-[70vh] w-full rounded-lg" aria-label={receiptPreviewName} />
+                  : <img src={receiptPreviewUrl} alt={receiptPreviewName} className="max-h-[70vh] max-w-full rounded-lg object-contain" />}
+              </div>
+            )}
+          </Dialog>
         </TabsPanel>
 
         {/* حجوزات تشغيلية فقط ولا تؤثر على الرصيد المالي. */}
