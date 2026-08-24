@@ -22,6 +22,7 @@ import {
   rescheduleOfflineReminders, setNotificationSoundPreference,
 } from '../utils/local-notifications';
 import { colors, radius, shadow } from '../theme';
+import { BlockedMutationDiagnostic, discardBlockedMutations, getBlockedMutationDiagnostics } from '../db/database';
 
 const PHASE_LABELS = {
   idle: 'جاهز', syncing: 'جارٍ المزامنة', synced: 'تمت المزامنة', offline: 'دون اتصال', error: 'تحتاج مراجعة',
@@ -42,6 +43,26 @@ export default function SettingsScreen() {
   const [serverDraft, setServerDraft] = useState('');
   const [usernameDraft, setUsernameDraft] = useState('');
   const [passwordDraft, setPasswordDraft] = useState('');
+  const [blockedDiagnostics, setBlockedDiagnostics] = useState<BlockedMutationDiagnostic[]>([]);
+
+  const discardBlocked = () => {
+    Alert.alert(
+      'حذف العمليات المرفوضة',
+      `سيتم حذف ${status.blocked} عملية مرفوضة من هذا الهاتف فقط.`,
+      [
+        { text: 'إلغاء', style: 'cancel' },
+        {
+          text: 'حذف', style: 'destructive', onPress: async () => {
+            const removed = await discardBlockedMutations();
+            setBlockedDiagnostics([]);
+            await refreshStatus();
+            await triggerSync();
+            Alert.alert('تم التنظيف', `حُذفت ${removed} عملية مرفوضة وأُعيدت المزامنة.`);
+          },
+        },
+      ],
+    );
+  };
 
   useEffect(() => {
     Promise.all([getLanOnlySync(), getBaseUrl(), areLocalNotificationsEnabled(), isBiometricEnabled(), restoreGpsTracking(), getWorkplace(), getNotificationSoundPreference()]).then(([localOnly, url, alertsEnabled, biometric, gps, workplace, sound]) => {
@@ -57,6 +78,12 @@ export default function SettingsScreen() {
     setUsernameDraft(user?.username || '');
     refreshStatus().catch(() => undefined);
   }, [refreshStatus, user?.username]);
+
+  useEffect(() => {
+    getBlockedMutationDiagnostics()
+      .then(setBlockedDiagnostics)
+      .catch(() => setBlockedDiagnostics([]));
+  }, [status.blocked, status.lastSyncAt]);
 
   const switchAccountOrServer = async () => {
     const nextServer = serverDraft.trim().replace(/\/+$/, '');
@@ -183,9 +210,24 @@ export default function SettingsScreen() {
             : <Text style={styles.primaryBtnText}>مزامنة الآن</Text>}
         </TouchableOpacity>
         {status.blocked > 0 && (
-          <TouchableOpacity style={styles.outlineBtn} onPress={retryBlocked}>
-            <Text style={styles.outlineBtnText}>إعادة محاولة العمليات المراجعة</Text>
-          </TouchableOpacity>
+          <>
+            <TouchableOpacity style={styles.outlineBtn} onPress={retryBlocked}>
+              <Text style={styles.outlineBtnText}>إعادة محاولة العمليات المراجعة</Text>
+            </TouchableOpacity>
+            <View style={styles.diagnosticsBox}>
+              <Text style={styles.diagnosticsTitle}>تفاصيل العمليات المرفوضة</Text>
+              {blockedDiagnostics.map((item, index) => (
+                <View key={item.operationId} style={styles.diagnosticItem}>
+                  <Text style={styles.diagnosticHeading}>عملية {index + 1}: {item.type.toUpperCase()} {item.endpoint}</Text>
+                  <Text style={styles.diagnosticError}>{item.lastError || 'لم يسجل الخادم سببًا'}</Text>
+                  <Text style={styles.diagnosticPayload}>{item.payloadSummary}</Text>
+                </View>
+              ))}
+            </View>
+            <TouchableOpacity style={styles.discardBtn} onPress={discardBlocked}>
+              <Text style={styles.discardBtnText}>حذف العمليات المرفوضة من الهاتف</Text>
+            </TouchableOpacity>
+          </>
         )}
       </View>
 
@@ -304,6 +346,14 @@ const styles = StyleSheet.create({
   infoValue: { flex: 1, fontSize: 13, color: colors.ink, fontWeight: '700', textAlign: 'left' },
   danger: { color: '#B42318' },
   errorText: { color: '#B42318', backgroundColor: '#FEF3F2', padding: 10, borderRadius: 8, marginTop: 10, textAlign: 'right' },
+  diagnosticsBox: { backgroundColor: '#FFF8E8', borderRadius: radius.sm, padding: 10, marginTop: 10, borderWidth: 1, borderColor: colors.line },
+  diagnosticsTitle: { color: colors.primary, fontSize: 14, fontWeight: '900', textAlign: 'right', marginBottom: 6 },
+  diagnosticItem: { borderTopWidth: 1, borderTopColor: colors.line, paddingVertical: 8 },
+  diagnosticHeading: { color: colors.ink, fontSize: 12, fontWeight: '900', textAlign: 'left' },
+  diagnosticError: { color: '#B42318', fontSize: 11, marginTop: 3, textAlign: 'left' },
+  diagnosticPayload: { color: colors.muted, fontSize: 10, marginTop: 3, textAlign: 'left' },
+  discardBtn: { backgroundColor: '#FEF3F2', borderRadius: radius.sm, padding: 12, alignItems: 'center', marginTop: 10 },
+  discardBtnText: { color: '#B42318', fontSize: 13, fontWeight: '900' },
   badge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
   badgeOk: { backgroundColor: '#DDF7EC' },
   badgeWarn: { backgroundColor: '#FFF1D6' },

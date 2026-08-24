@@ -779,6 +779,48 @@ export async function getMutationQueueStats(): Promise<{ pending: number; blocke
   }, { pending: 0, blocked: 0 });
 }
 
+export type BlockedMutationDiagnostic = {
+  id: number;
+  operationId: string;
+  type: string;
+  endpoint: string;
+  lastError: string | null;
+  blockedAt: string | null;
+  payloadSummary: string;
+};
+
+export async function getBlockedMutationDiagnostics(): Promise<BlockedMutationDiagnostic[]> {
+  const d = await getDb();
+  const rows = await d.getAllAsync<{
+    id: number;
+    operationId: string;
+    type: string;
+    endpoint: string;
+    payload: string;
+    lastError: string | null;
+    blockedAt: string | null;
+  }>(
+    `SELECT id, operationId, type, endpoint, payload, lastError, blockedAt
+     FROM mutation_queue
+     WHERE status = 'blocked'
+     ORDER BY id ASC`,
+  );
+
+  return rows.map(({ payload, ...row }) => {
+    let payloadSummary = 'بيانات غير قابلة للقراءة';
+    try {
+      const parsed = JSON.parse(payload);
+      const safeEntries = Object.entries(parsed ?? {})
+        .filter(([key]) => !['receiptAttachment', 'password', 'token'].includes(key))
+        .slice(0, 8);
+      payloadSummary = safeEntries
+        .map(([key, value]) => `${key}=${typeof value === 'object' ? '[بيانات]' : String(value)}`)
+        .join('، ') || 'لا توجد حقول';
+    } catch { /* keep the safe fallback */ }
+    return { ...row, payloadSummary };
+  });
+}
+
 export async function removeMutation(id: number) {
   const d = await getDb();
   const row = await d.getFirstAsync<{ operationId: string }>(
@@ -831,6 +873,12 @@ export async function retryBlockedMutations() {
      SET status = 'pending', retryCount = 0, lastError = NULL, blockedAt = NULL, nextRetryAt = NULL
      WHERE status = 'blocked'`,
   );
+}
+
+export async function discardBlockedMutations(): Promise<number> {
+  const d = await getDb();
+  const result = await d.runAsync("DELETE FROM mutation_queue WHERE status = 'blocked'");
+  return result.changes;
 }
 
 export async function getUnsyncedGps(): Promise<any[]> {
