@@ -1,3 +1,4 @@
+import { LegacyCollectionsTestModule } from './legacy-collections-test.module';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -21,7 +22,7 @@ describe('Collection handover reconciliation and maker-checker reversal (e2e)', 
   const collectionIds: string[] = [];
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule, LegacyCollectionsTestModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new GlobalExceptionFilter());
@@ -61,7 +62,7 @@ describe('Collection handover reconciliation and maker-checker reversal (e2e)', 
 
   it('numbers branch receipts and creates one-currency handover voucher', async () => {
     for (const amount of [1500, 2500]) {
-      const response = await request(app.getHttpServer()).post('/collections')
+      const response = await request(app.getHttpServer()).post('/__test/legacy-collections')
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ customerId, collectorId, branchId, currencyCode: 'YER', amount, methodId }).expect(201);
       collectionIds.push(response.body.id);

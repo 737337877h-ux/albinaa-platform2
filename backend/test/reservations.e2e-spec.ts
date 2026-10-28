@@ -75,13 +75,13 @@ describe('Reservation units and summary (e2e)', () => {
       .send({ customerId, itemName: 'صنف تجريبي', ...body });
 
     const activeTon = await create({
-      quantity: 2, unitId: ton.id, unitPrice: 100, currencyCode: 'YER', expiresAt: dateOffset(5),
+      totalTons: 2, unitId: ton.id, unitPrice: 100, currencyCode: 'YER', expiresAt: dateOffset(5),
     }).expect(201);
     await create({
-      quantity: 3, unitId: piece.id, unitPrice: 50, currencyCode: 'SAR', expiresAt: dateOffset(10),
+      totalTons: 3, unitId: piece.id, unitPrice: 50, currencyCode: 'SAR', expiresAt: dateOffset(10),
     }).expect(201);
     await create({
-      quantity: 9, unitId: ton.id, unitPrice: 999, currencyCode: 'YER', expiresAt: dateOffset(-1),
+      totalTons: 9, unitId: ton.id, unitPrice: 999, currencyCode: 'YER', expiresAt: dateOffset(-1),
     }).expect(201);
 
     const summary = await request(app.getHttpServer())
@@ -90,7 +90,7 @@ describe('Reservation units and summary (e2e)', () => {
       .expect(200);
     expect(summary.body.activeCount).toBe(baseline.activeCount + 2);
     expect(summary.body.customerCount).toBe(baseline.customerCount + 1);
-    expect(summary.body.totalTons).toBeCloseTo(baseline.totalTons + 2, 6);
+    expect(summary.body.totalTons).toBeCloseTo(baseline.totalTons + 5, 6);
     expect(summary.body.expiringIn7Days).toBe(baseline.expiringIn7Days + 1);
     expect(amount(summary.body, 'SAR')).toBeCloseTo(amount(baseline, 'SAR') + 150, 6);
     expect(amount(summary.body, 'YER')).toBeCloseTo(amount(baseline, 'YER') + 200, 6);
@@ -105,7 +105,7 @@ describe('Reservation units and summary (e2e)', () => {
       .get('/reservations/summary')
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
-    expect(afterIssue.body.totalTons).toBeCloseTo(baseline.totalTons + 1.5, 6);
+    expect(afterIssue.body.totalTons).toBeCloseTo(baseline.totalTons + 4.5, 6);
     expect(amount(afterIssue.body, 'YER')).toBeCloseTo(amount(baseline, 'YER') + 150, 6);
   });
 });

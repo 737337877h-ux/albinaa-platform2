@@ -1,3 +1,4 @@
+import { LegacyCollectionsTestModule } from './legacy-collections-test.module';
 import { ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
@@ -18,7 +19,7 @@ describe('Milestone 7 — Administration + Mobile API (e2e)', () => {
   let weakUserId: string;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule, LegacyCollectionsTestModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new GlobalExceptionFilter());
@@ -256,7 +257,7 @@ describe('Milestone 7 — Administration + Mobile API (e2e)', () => {
       const methodId = methods.body?.[0]?.id;
       if (methodId) {
         const colRes = await request(app.getHttpServer())
-          .post('/collections').set('Authorization', `Bearer ${adminToken}`)
+          .post('/__test/legacy-collections').set('Authorization', `Bearer ${adminToken}`)
           .send({
             customerId: customers[0].id,
             currencyCode: 'SAR',

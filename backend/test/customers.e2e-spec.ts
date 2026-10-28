@@ -78,7 +78,7 @@ describe('Customer Domain — Milestone 4 (e2e)', () => {
   // ==========================================================================
   it('GET /customers مع Pagination يعيد page/limit/total/totalPages', async () => {
     const res = await request(app.getHttpServer())
-      .get('/customers?page=1&limit=2')
+      .get('/customers?page=1&limit=2&search=900')
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
     expect(res.body.page).toBe(1);

@@ -54,28 +54,22 @@ describe('Credit limits per currency (e2e)', () => {
     expect(customer.body.creditLimits.find((x: any) => x.currencyCode === 'YER')).toMatchObject({ amount: 1500, used: 1000 });
   });
 
-  it('blocks exposure above the limit without permission and requires a reason for an override', async () => {
-    const body = { customerId, itemName: 'حديد', quantity: 4, unitId, unitPrice: 100, currencyCode: 'YER' };
-    await request(app.getHttpServer()).post('/reservations').set('Authorization', `Bearer ${limitedToken}`).send(body).expect(201);
-    await request(app.getHttpServer()).post('/reservations').set('Authorization', `Bearer ${limitedToken}`)
-      .send({ ...body, quantity: 2 }).expect(403);
+  it('keeps goods reservations separate from financial credit exposure', async () => {
+    const before = await prisma.customerBalance.findMany({ where: { customerId } });
+    const ledgerBefore = await prisma.operationalLedger.count({ where: { customerId } });
+    const body = { customerId, itemName: 'حديد', totalTons: 4, unitId, unitPrice: 100, currencyCode: 'YER' };
+    const first = await request(app.getHttpServer()).post('/reservations').set('Authorization', `Bearer ${limitedToken}`).send(body).expect(201);
+    expect(first.body).toMatchObject({ creditAmount: '0', totalTons: '4', totalAmount: '400' });
+    const second = await request(app.getHttpServer()).post('/reservations').set('Authorization', `Bearer ${limitedToken}`)
+      .send({ ...body, totalTons: 2 }).expect(201);
     await request(app.getHttpServer()).post('/reservations').set('Authorization', `Bearer ${adminToken}`)
-      .send({ ...body, quantity: 2 }).expect(400);
-    const overridden = await request(app.getHttpServer()).post('/reservations').set('Authorization', `Bearer ${adminToken}`)
-      .send({ ...body, quantity: 2, overrideReason: 'اعتماد المدير لمشروع عاجل' }).expect(201);
-    const audit = await prisma.auditLog.findFirstOrThrow({ where: { entityId: overridden.body.id, action: 'reservation_created' } });
-    expect(audit.reason).toBe('اعتماد المدير لمشروع عاجل');
-    expect((audit.newValue as any).creditControl.overrideUsed).toBe(true);
-    const financeAlert = await prisma.notification.findFirstOrThrow({
-      where: { user: { username: 'admin' }, kind: 'finance_alert' },
-      orderBy: { createdAt: 'desc' },
-    });
-    expect(financeAlert.payload).toMatchObject({
-      event: 'credit_limit_overridden',
-      severity: 'critical',
-      reservationId: overridden.body.id,
-      customerId,
-      currency: 'YER',
-    });
+      .send({ ...body, totalTons: 2 }).expect(201);
+    expect(await prisma.customerBalance.findMany({ where: { customerId } })).toEqual(before);
+    expect(await prisma.operationalLedger.count({ where: { customerId } })).toBe(ledgerBefore);
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { entityId: second.body.id, action: 'reservation_created' } });
+    expect(audit.newValue).toMatchObject({ totalTons: 2, totalAmount: 200, approvedItemAssignment: 'deferred_until_sales_invoice' });
+    const customer = await request(app.getHttpServer()).get(`/customers/${customerId}`)
+      .set('Authorization', `Bearer ${adminToken}`).expect(200);
+    expect(customer.body.creditLimits.find((x: any) => x.currencyCode === 'YER')).toMatchObject({ amount: 1500, used: 1000 });
   });
 });

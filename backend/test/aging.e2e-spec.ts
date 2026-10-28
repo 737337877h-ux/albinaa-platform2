@@ -1,3 +1,4 @@
+const daysAgo = (days: number) => new Date(Date.now() - days * 86400000);
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -49,9 +50,9 @@ describe('Debt aging report (e2e)', () => {
       { customerId: ids[1], currencyCode: 'YER', accountingBalance: 500, lastImportJobId: job.id },
     ] });
     await prisma.importedTransaction.createMany({ data: [
-      { customerId: ids[0], currencyCode: 'YER', documentTypeId: documentType.id, txDate: new Date('2026-03-01'), debit: 100, credit: 0, lineHash: `aging-old-${Date.now()}`, importJobId: job.id },
-      { customerId: ids[0], currencyCode: 'YER', documentTypeId: documentType.id, txDate: new Date('2026-07-20'), debit: 200, credit: 0, lineHash: `aging-new-${Date.now()}`, importJobId: job.id },
-      { customerId: ids[0], currencyCode: 'YER', documentTypeId: documentType.id, txDate: new Date('2026-08-01'), debit: 0, credit: 150, lineHash: `aging-pay-${Date.now()}`, importJobId: job.id },
+      { customerId: ids[0], currencyCode: 'YER', documentTypeId: documentType.id, txDate: daysAgo(100), debit: 100, credit: 0, lineHash: `aging-old-${Date.now()}`, importJobId: job.id },
+      { customerId: ids[0], currencyCode: 'YER', documentTypeId: documentType.id, txDate: daysAgo(10), debit: 200, credit: 0, lineHash: `aging-new-${Date.now()}`, importJobId: job.id },
+      { customerId: ids[0], currencyCode: 'YER', documentTypeId: documentType.id, txDate: daysAgo(1), debit: 0, credit: 150, lineHash: `aging-pay-${Date.now()}`, importJobId: job.id },
     ] });
   });
 

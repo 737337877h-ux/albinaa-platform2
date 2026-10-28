@@ -1,3 +1,4 @@
+import { LegacyCollectionsTestModule } from './legacy-collections-test.module';
 import { ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
@@ -20,7 +21,7 @@ describe('Idempotency (e2e)', () => {
   let methodId: string;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule, LegacyCollectionsTestModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new GlobalExceptionFilter());
@@ -140,14 +141,14 @@ describe('Idempotency (e2e)', () => {
     };
 
     const res1 = await request(app.getHttpServer())
-      .post('/collections').set('Authorization', `Bearer ${adminToken}`)
+      .post('/__test/legacy-collections').set('Authorization', `Bearer ${adminToken}`)
       .set('Idempotency-Key', ID_KEY + '-coll').send(payload)
       .expect(201);
 
     expect(res1.body).toHaveProperty('id');
 
     const res2 = await request(app.getHttpServer())
-      .post('/collections').set('Authorization', `Bearer ${adminToken}`)
+      .post('/__test/legacy-collections').set('Authorization', `Bearer ${adminToken}`)
       .set('Idempotency-Key', ID_KEY + '-coll').send(payload)
       .expect(201);
 

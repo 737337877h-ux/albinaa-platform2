@@ -1,3 +1,5 @@
+const futureDate = (days: number) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+import { LegacyCollectionsTestModule } from './legacy-collections-test.module';
 /**
  * اختبارات E2E — Milestone 5: Collection Workflow
  * تغطي السيناريوهات العشرة المطلوبة:
@@ -47,7 +49,7 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
   };
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule, LegacyCollectionsTestModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new GlobalExceptionFilter());
@@ -199,7 +201,7 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
     const res = await request(app.getHttpServer())
       .post('/payment-promises')
       .set('Authorization', `Bearer ${collectorToken}`)
-      .send({ customerId, dueDate: '2026-08-15', expectedAmount: 5000, currencyCode: 'YER' })
+      .send({ customerId, dueDate: futureDate(15), expectedAmount: 5000, currencyCode: 'YER' })
       .expect(201);
     promiseId = res.body.id;
 
@@ -251,13 +253,24 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
     expect((promiseRiskAudit.newValue as any).targetedCustomerIds).toContain(customerId);
   });
 
+  it('keeps production direct collection creation disabled without financial writes', async () => {
+    const before = await prisma.collection.count({ where: { customerId } });
+    const ledgerBefore = await prisma.operationalLedger.count({ where: { customerId } });
+    const response = await request(app.getHttpServer()).post('/collections')
+      .set('Authorization', `Bearer ${collectorToken}`)
+      .send({ customerId, currencyCode: 'YER', amount: 3000, methodId }).expect(409);
+    expect(response.body.message).toContain('طلب سند قبض');
+    expect(await prisma.collection.count({ where: { customerId } })).toBe(before);
+    expect(await prisma.operationalLedger.count({ where: { customerId } })).toBe(ledgerBefore);
+  });
+
   // ===== 5+6) تسجيل تحصيل + تحديث الرصيد التشغيلي =====
   it('تحصيل 3000 YER يقيّد في الدفتر ويخفض التشغيلي (المحاسبي ثابت حتى الاستيراد)', async () => {
     const before = await operationalOf();
     expect(before.operationalBalance).toBe(before.accountingBalance); // لا قيود بعد
 
     const res = await request(app.getHttpServer())
-      .post('/collections')
+      .post('/__test/legacy-collections')
       .set('Authorization', `Bearer ${collectorToken}`)
       .send({
         customerId, currencyCode: 'YER', amount: 3000,
@@ -278,7 +291,7 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
 
     // مبلغ صفري/سالب مرفوض
     await request(app.getHttpServer())
-      .post('/collections')
+      .post('/__test/legacy-collections')
       .set('Authorization', `Bearer ${collectorToken}`)
       .send({ customerId, currencyCode: 'YER', amount: 0, methodId })
       .expect(400);
@@ -298,9 +311,9 @@ describe('Collection Workflow — Milestone 5 (e2e)', () => {
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ year: 2025, month: 1, reason: 'إقفال اختبار يناير' }).expect(201);
     const body = { customerId, collectorId, currencyCode: 'YER', amount: 25, methodId, collectedAt: '2025-01-15T10:00:00.000Z' };
-    await request(app.getHttpServer()).post('/collections').set('Authorization', `Bearer ${collectorToken}`).send(body).expect(403);
-    await request(app.getHttpServer()).post('/collections').set('Authorization', `Bearer ${adminToken}`).send(body).expect(400);
-    await request(app.getHttpServer()).post('/collections').set('Authorization', `Bearer ${adminToken}`)
+    await request(app.getHttpServer()).post('/__test/legacy-collections').set('Authorization', `Bearer ${collectorToken}`).send(body).expect(403);
+    await request(app.getHttpServer()).post('/__test/legacy-collections').set('Authorization', `Bearer ${adminToken}`).send(body).expect(400);
+    await request(app.getHttpServer()).post('/__test/legacy-collections').set('Authorization', `Bearer ${adminToken}`)
       .send({ ...body, accountingOverrideReason: 'تصحيح معتمد بعد الإقفال' }).expect(201);
     const overrideAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: 'accounting_period_overridden' }, orderBy: { createdAt: 'desc' } });
     expect(overrideAudit.reason).toBe('تصحيح معتمد بعد الإقفال');

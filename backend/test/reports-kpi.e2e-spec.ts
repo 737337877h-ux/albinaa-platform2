@@ -1,3 +1,5 @@
+const now = new Date();
+const monthDate = (offset: number, day: number) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset, day));
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -31,27 +33,27 @@ describe('Collection KPI report (e2e)', () => {
     const job = await prisma.importJob.create({ data: { organizationId: admin.organizationId, fileName: 'kpi.xlsx', fileHash: `kpi-${Date.now()}`, uploadedBy: admin.id } });
     await prisma.customerBalance.create({ data: { customerId: customer.id, currencyCode: CURRENCY, accountingBalance: 1200, lastImportJobId: job.id } });
     await prisma.importedTransaction.createMany({ data: [
-      { customerId: customer.id, currencyCode: CURRENCY, documentTypeId: documentType.id, txDate: new Date('2026-07-05'), debit: 1000, credit: 0, lineHash: 'kpi-jul-sale', importJobId: job.id },
-      { customerId: customer.id, currencyCode: CURRENCY, documentTypeId: documentType.id, txDate: new Date('2026-07-20'), debit: 0, credit: 200, lineHash: 'kpi-jul-pay', importJobId: job.id },
-      { customerId: customer.id, currencyCode: CURRENCY, documentTypeId: documentType.id, txDate: new Date('2026-08-02'), debit: 500, credit: 0, lineHash: 'kpi-aug-sale', importJobId: job.id },
-      { customerId: customer.id, currencyCode: CURRENCY, documentTypeId: documentType.id, txDate: new Date('2026-08-03'), debit: 0, credit: 100, lineHash: 'kpi-aug-pay', importJobId: job.id },
+      { customerId: customer.id, currencyCode: CURRENCY, documentTypeId: documentType.id, txDate: monthDate(-1, 5), debit: 1000, credit: 0, lineHash: 'kpi-jul-sale', importJobId: job.id },
+      { customerId: customer.id, currencyCode: CURRENCY, documentTypeId: documentType.id, txDate: monthDate(-1, 20), debit: 0, credit: 200, lineHash: 'kpi-jul-pay', importJobId: job.id },
+      { customerId: customer.id, currencyCode: CURRENCY, documentTypeId: documentType.id, txDate: monthDate(0, 2), debit: 500, credit: 0, lineHash: 'kpi-aug-sale', importJobId: job.id },
+      { customerId: customer.id, currencyCode: CURRENCY, documentTypeId: documentType.id, txDate: monthDate(0, 3), debit: 0, credit: 100, lineHash: 'kpi-aug-pay', importJobId: job.id },
     ] });
     await prisma.agingSnapshot.createMany({ data: [
-      { organizationId: admin.organizationId, customerId: customer.id, currencyCode: CURRENCY, asOf: new Date('2026-07-31'), bucket_0_30: 300, bucket_61_90: 500, totalDue: 800, provisionAmount: 50 },
-      { organizationId: admin.organizationId, customerId: customer.id, currencyCode: CURRENCY, asOf: new Date('2026-08-04'), bucket_0_30: 500, bucket_61_90: 700, totalDue: 1200, provisionAmount: 70 },
+      { organizationId: admin.organizationId, customerId: customer.id, currencyCode: CURRENCY, asOf: monthDate(0, 0), bucket_0_30: 300, bucket_61_90: 500, totalDue: 800, provisionAmount: 50 },
+      { organizationId: admin.organizationId, customerId: customer.id, currencyCode: CURRENCY, asOf: monthDate(0, 4), bucket_0_30: 500, bucket_61_90: 700, totalDue: 1200, provisionAmount: 70 },
     ] });
     const method = await prisma.collectionMethod.findFirstOrThrow({ where: { organizationId: admin.organizationId } });
-    await prisma.collection.create({ data: { customerId: customer.id, collectorId, currencyCode: CURRENCY, amount: 200, collectedAt: new Date('2026-08-04T08:00:00Z'), methodId: method.id } });
+    await prisma.collection.create({ data: { customerId: customer.id, collectorId, currencyCode: CURRENCY, amount: 200, collectedAt: monthDate(0, 4), methodId: method.id } });
     await prisma.paymentPromise.createMany({ data: [
-      { customerId: customer.id, collectorId, promiseDate: new Date('2026-08-01'), dueDate: new Date('2026-08-03'), expectedAmount: 100, fulfilledAmount: 100, currencyCode: CURRENCY, status: 'fulfilled' },
-      { customerId: customer.id, collectorId, promiseDate: new Date('2026-08-01'), dueDate: new Date('2026-08-03'), expectedAmount: 100, currencyCode: CURRENCY, status: 'unfulfilled' },
+      { customerId: customer.id, collectorId, promiseDate: monthDate(0, 1), dueDate: monthDate(0, 3), expectedAmount: 100, fulfilledAmount: 100, currencyCode: CURRENCY, status: 'fulfilled' },
+      { customerId: customer.id, collectorId, promiseDate: monthDate(0, 1), dueDate: monthDate(0, 3), expectedAmount: 100, currencyCode: CURRENCY, status: 'unfulfilled' },
     ] });
   });
 
   afterAll(async () => { if (app) await app.close(); });
 
   it('stores a monthly target and returns auditable 12-month KPIs', async () => {
-    await request(app.getHttpServer()).patch(`/reports/kpi/targets/${collectorId}/${CURRENCY}`).set('Authorization', `Bearer ${token}`).send({ month: '2026-08-01', targetAmount: 400 }).expect(200);
+    await request(app.getHttpServer()).patch(`/reports/kpi/targets/${collectorId}/${CURRENCY}`).set('Authorization', `Bearer ${token}`).send({ month: monthDate(0, 1).toISOString().slice(0, 10), targetAmount: 400 }).expect(200);
     const response = await request(app.getHttpServer()).get('/reports/kpi').set('Authorization', `Bearer ${token}`).expect(200);
     expect(response.body.trend.filter((x: any) => x.currency === CURRENCY)).toHaveLength(12);
     expect(response.body.latestByCurrency[CURRENCY].cei).toBeCloseTo(12.5, 4);

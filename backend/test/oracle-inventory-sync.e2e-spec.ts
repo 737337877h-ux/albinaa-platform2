@@ -65,7 +65,7 @@ describe('Oracle inventory snapshot loader (isolated database)', () => {
     };
     const loader = new OracleInventorySyncService(prisma, new OracleInventorySnapshotService());
     const publication = new OracleInventoryPublicationService(prisma);
-    const reader = new OracleInventoryReadService(prisma);
+    const reader = new OracleInventoryReadService(prisma, { log: async () => undefined } as any);
     const first = await loader.run({
       snapshotDirectory,
       organizationId: organization.id,
