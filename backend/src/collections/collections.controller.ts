@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, Req,
+  Body, ConflictException, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, Req,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
@@ -8,7 +8,6 @@ import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { CollectionsService } from './collections.service';
-import { CreateCollectionDto } from './dto/create-collection.dto';
 import { QueryCollectionsDto } from './dto/query-collections.dto';
 import { ReverseCollectionDto } from './dto/reverse-collection.dto';
 import { CreateHandoverVoucherDto } from './dto/create-handover-voucher.dto';
@@ -24,10 +23,10 @@ export class CollectionsController {
   @Post()
   @RequirePermissions('collections.create')
   @ApiOperation({
-    summary: 'تسجيل تحصيل — يقيّد تلقائيًا في الدفتر التشغيلي (لا تعديل لاحقًا، لا حذف، التصحيح بعكس فقط)',
+    summary: 'التسجيل المباشر متوقف — التحصيل الجديد يبدأ من طلب سند قبض معتمد',
   })
-  create(@CurrentUser() user: AuthUser, @Body() dto: CreateCollectionDto, @Req() req: Request) {
-    return this.collections.create(user, dto, req);
+  create() {
+    throw new ConflictException('تم إيقاف التسجيل المباشر للتحصيل؛ استخدم طلب سند قبض ثم اعتمده قبل تحديث مديونية العميل');
   }
 
   @Get()
@@ -37,12 +36,20 @@ export class CollectionsController {
     return this.collections.findAll(user, q);
   }
 
+  @Get('activity/today')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'تحصيلات اليوم وطلبات سندات القبض المنشأة اليوم من السجل الدائم' })
+  todayActivity(@CurrentUser() user: AuthUser) {
+    return this.collections.todayActivity(user);
+  }
+
   @Get('methods')
   @RequirePermissions('customers.read')
   @ApiOperation({ summary: 'طرق التحصيل النشطة للمنظمة الحالية' })
   listMethods(@CurrentUser() user: AuthUser) {
     return this.collections.listMethods(user);
   }
+
 
   @Get('reconciliation')
   @RequirePermissions('collections.approve')

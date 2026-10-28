@@ -1,4 +1,4 @@
-import { DEFAULT_MESSAGE_TEMPLATES, parseMessageTemplates, renderMessageTemplate } from './messaging';
+import { DEFAULT_MESSAGE_TEMPLATES, formatDebtBalances, parseMessageTemplates, renderMessageTemplate } from './messaging';
 
 describe('message templates', () => {
   it('renders supported customer and balance variables', () => {
@@ -28,5 +28,16 @@ describe('message templates', () => {
   it('accepts serialized editable templates', () => {
     const input = [{ id: 'one', name: 'اختبار', channel: 'sms', body: 'مرحبًا', active: true }];
     expect(parseMessageTemplates(JSON.stringify(input))).toEqual(input);
+  });
+
+  it('formats all significant account currencies in one reminder value', () => {
+    expect(formatDebtBalances([
+      { currency: 'YER', balance: 125000 },
+      { currency: 'SAR', balance: 450 },
+      { currency: 'USD', balance: 3 },
+    ])).toBe('125,000 ريال يمني + 450 ريال سعودي');
+    expect(renderMessageTemplate('المستحق: {الرصيد}', {
+      customerName: 'أحمد', balance: '125,000 ريال يمني + 450 ريال سعودي',
+    })).toBe('المستحق: 125,000 ريال يمني + 450 ريال سعودي');
   });
 });

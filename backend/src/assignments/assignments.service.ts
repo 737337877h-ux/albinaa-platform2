@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { CustomersService } from '../customers/customers.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { queueAssignmentNotification } from '../notifications/assignment-notification';
 import { PrismaService } from '../prisma/prisma.service';
 import { BulkAssignmentDto } from './dto/bulk-assignment.dto';
 import { CreateAssignmentDto } from './dto/create-assignment.dto';
@@ -52,19 +53,7 @@ export class AssignmentsService {
       { collectorId: dto.collectorId, effectiveFrom: dto.effectiveFrom, reason: dto.reason },
       req,
     );
-    // إشعار المحصل الجديد بنقل العميل إليه
-    const collector = await this.prisma.collector.findUniqueOrThrow({
-      where: { id: dto.collectorId },
-    });
-    const customer = await this.prisma.customer.findUniqueOrThrow({
-      where: { id: dto.customerId }, select: { name: true, externalCustomerCode: true },
-    });
-    await this.notifications.notifyUser(collector.userId, 'customer_transferred', {
-      customerId: dto.customerId,
-      customerName: customer.name,
-      customerCode: customer.externalCustomerCode,
-      reason: dto.reason ?? null,
-    });
+    // The shared assignment transaction already queued its notification.
     return result;
   }
 
@@ -177,7 +166,7 @@ export class AssignmentsService {
             data: { effectiveTo: now },
           });
         }
-        await tx.customerAssignment.create({
+        const assignment = await tx.customerAssignment.create({
           data: {
             customerId: c.id,
             collectorId: dto.collectorId,
@@ -186,6 +175,7 @@ export class AssignmentsService {
             assignedBy: actor.id,
           },
         });
+        await queueAssignmentNotification(tx, assignment.id);
       }
       if (plan.changingIds.length) {
         const updated = await tx.task.updateMany({
@@ -376,6 +366,7 @@ export class AssignmentsService {
           reviewNote: dto.note?.trim() || null, reviewedAt: now,
         },
       });
+      await queueAssignmentNotification(tx, assignment.id);
       return { reviewed, assignment, tasksUpdated: tasks.count };
     });
 
@@ -389,10 +380,6 @@ export class AssignmentsService {
       this.notifications.notifyUser(request.requestedBy, 'assignment_change_reviewed', {
         requestId: id, customerId: request.customerId, customerName: request.customer.name,
         decision: 'approved', collectorName: replacement.user.fullName,
-      }),
-      this.notifications.notifyUser(replacement.user.id, 'customer_transferred', {
-        customerId: request.customerId, customerName: request.customer.name,
-        customerCode: request.customer.externalCustomerCode, reason: request.reason,
       }),
     ]);
     return result;
@@ -469,12 +456,13 @@ export class AssignmentsService {
         await tx.customerAssignment.updateMany({
           where: { customerId: change.customerId, effectiveTo: null }, data: { effectiveTo: now },
         });
-        await tx.customerAssignment.create({
+        const assignment = await tx.customerAssignment.create({
           data: {
             customerId: change.customerId, collectorId: change.collectorId, effectiveFrom: now,
             reason: dto.reason ?? 'إسناد جماعي ذكي حسب الحمل والمنطقة', assignedBy: actor.id,
           },
         });
+        await queueAssignmentNotification(tx, assignment.id);
         await tx.task.updateMany({
           where: { customerId: change.customerId, status: 'open' }, data: { assignedTo: change.collectorId },
         });

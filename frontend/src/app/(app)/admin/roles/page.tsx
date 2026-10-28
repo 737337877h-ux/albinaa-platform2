@@ -40,6 +40,19 @@ type PermissionGroup = {
 };
 
 const PERMISSION_GROUPS: PermissionGroup[] = [
+  { label: 'الموظفون والرواتب', prefix: 'hr.', items: [
+    { code: 'hr.tasks.manage', label: 'إنشاء وإسناد ومراجعة مهام الموظفين' },
+    { code: 'hr.attendance.read', label: 'عرض سجل الحضور والانصراف' },
+    { code: 'hr.attendance.qr', label: 'عرض رمز حضور المنشأة' },
+    { code: 'hr.requests.review', label: 'مراجعة طلبات السلف والإجازات للموظفين' },
+    { code: 'hr.payroll.read', label: 'عرض كشف الموظف ومسودة الراتب (تحتاج عرض الموظفين والرواتب)' },
+    { code: 'hr.payroll.manage', label: 'حفظ ومراجعة مسودة الراتب (تحتاج عرض الكشف)' },
+    { code: 'hr.payroll.approve', label: 'اعتماد وإعادة فتح كشف الرواتب بعد إغلاق الشهر' },
+    { code: 'hr.read', label: 'عرض الموظفين والدوام' },
+    { code: 'hr.manage', label: 'إدارة الموظفين والدوام (تحتاج عرض الموظفين)' },
+    { code: 'hr.salary.read', label: 'عرض الرواتب (تحتاج عرض الموظفين)' },
+    { code: 'hr.salary.manage', label: 'إدارة الرواتب (تحتاج عرض الموظفين والرواتب)' },
+  ] },
   { label: 'العملاء', prefix: 'customers.', items: [
     { code: 'customers.read', label: 'عرض العملاء' },
     { code: 'customers.read_all', label: 'عرض كل العملاء' },
@@ -77,6 +90,26 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   { label: 'التقارير', prefix: 'reports.', items: [
     { code: 'reports.read', label: 'عرض التقارير' },
     { code: 'reports.export', label: 'تصدير التقارير' },
+  ]},
+  { label: 'المخزون والتحويلات', prefix: 'inventory', items: [
+    { code: 'inventory.read', label: 'عرض الأصناف والمخزون' },
+    { code: 'inventory_transfers.read', label: 'عرض طلبات التحويل المخزني' },
+    { code: 'inventory_transfers.create', label: 'إنشاء وإرسال طلبات التحويل' },
+    { code: 'inventory_transfers.dry_run', label: 'تشغيل فحص Oracle للقراءة فقط' },
+    { code: 'inventory_transfers.approve', label: 'اعتماد أو رفض طلبات التحويل' },
+  ]},
+  { label: 'طلبات يمن سوفت التجريبية', prefix: 'oracle_test_requests.', items: [
+    { code: 'oracle_test_requests.purchase.read', label: 'عرض طلبات الشراء وحالة اعتمادها' },
+    { code: 'oracle_test_requests.purchase.create', label: 'إنشاء طلبات شراء' },
+    { code: 'oracle_test_requests.receipt.read', label: 'عرض طلبات سندات القبض وحالة اعتمادها' },
+    { code: 'oracle_test_requests.receipt.create', label: 'إنشاء طلبات سندات قبض' },
+    { code: 'oracle_test_requests.payment.read', label: 'عرض طلبات سندات الصرف وحالة اعتمادها' },
+    { code: 'oracle_test_requests.payment.create', label: 'إنشاء طلبات سندات صرف' },
+    { code: 'oracle_test_requests.journal.read', label: 'عرض طلبات القيود اليومية وحالة اعتمادها' },
+    { code: 'oracle_test_requests.journal.create', label: 'إنشاء طلبات قيود يومية' },
+    { code: 'oracle_test_requests.inventory_count.read', label: 'عرض مستندات الجرد وحالتها' },
+    { code: 'oracle_test_requests.inventory_count.dry_run', label: 'تشغيل Dry Run للجرد' },
+    { code: 'oracle_test_requests.inventory_count.create', label: 'إنشاء مسودة جرد متعددة الأصناف' },
   ]},
   { label: 'الائتمان', prefix: 'credit.', items: [
     { code: 'credit.override', label: 'تجاوز سقف الائتمان بسبب موثق' },
@@ -122,6 +155,8 @@ const MOBILE_PERMISSION_GROUPS: PermissionGroup[] = [
     { code: 'mobile.reservations.view', label: 'عرض البضاعة المحجوزة' },
     { code: 'mobile.reservations.create', label: 'إضافة حجز بضاعة' },
     { code: 'mobile.inventory.view', label: 'عرض الأصناف والمخزون' },
+    { code: 'mobile.inventory.cost.view', label: 'عرض التكلفة للمخزون والأصناف' },
+    { code: 'mobile.inventory_count.create', label: 'إنشاء مسودة جرد من الهاتف' },
     { code: 'mobile.receipts.view', label: 'معاينة صور الإيصالات' },
     { code: 'mobile.receipts.upload', label: 'رفع صورة إيصال' },
     { code: 'mobile.location.view', label: 'عرض الموقع' },

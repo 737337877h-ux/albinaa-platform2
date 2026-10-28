@@ -1,4 +1,51 @@
-import { collapseMobileTasksByCustomer, MobileService } from './mobile.service';
+import {
+  collapseMobileTasksByCustomer,
+  mobileInventorySummaryReference,
+  mobileOracleReceiptCollection,
+  mobileTaskBucket,
+  MobileService,
+} from './mobile.service';
+
+describe('mobile Oracle receipt collections', () => {
+  it('keeps a named receipt when Oracle request has no platform customer id', () => {
+    const result = mobileOracleReceiptCollection({
+      id: 'audit-16',
+      entityId: '202600000100092100000000161',
+      createdAt: '2026-09-06T14:17:16.804Z',
+      newValue: {
+        kind: 'voucher', requestKind: 'receipt', requestNo: '16',
+        requestSerial: '202600000100092100000000161',
+        recipientName: 'عبدالرحمن/اكسسوارات', amount: 1000, currencyCode: 'YER',
+      },
+    }, new Map());
+
+    expect(result).toEqual(expect.objectContaining({
+      customerId: null,
+      customerName: 'عبدالرحمن/اكسسوارات',
+      amount: 1000,
+      currencyCode: 'YER',
+    }));
+  });
+});
+
+describe('mobile inventory offline summary', () => {
+  it('keeps the published inventory valuation for SQLite instead of falling back to zero', () => {
+    const result = mobileInventorySummaryReference({
+      valuation: { totalInventoryCost: 2_656_351.48, totalPrimaryQuantity: 7_581 },
+      counts: { items: 6_761 },
+    }, null);
+    expect(result[0]).toEqual(expect.objectContaining({
+      id: 'current',
+      valuation: expect.objectContaining({ totalInventoryCost: 2_656_351.48 }),
+    }));
+  });
+
+  it('uses the complete catalog summary when the lightweight summary is unavailable', () => {
+    expect(mobileInventorySummaryReference(null, {
+      valuation: { totalInventoryCost: 99 },
+    })[0]).toEqual(expect.objectContaining({ valuation: { totalInventoryCost: 99 } }));
+  });
+});
 
 describe('collapseMobileTasksByCustomer', () => {
   it('keeps one task per customer and selects the highest priority task', () => {
@@ -22,6 +69,14 @@ describe('collapseMobileTasksByCustomer', () => {
   });
 });
 
+describe('mobileTaskBucket', () => {
+  it('classifies Prisma Date values without mixing upcoming tasks into overdue tasks', () => {
+    expect(mobileTaskBucket(new Date('2026-08-28T00:00:00.000Z'), '2026-08-29')).toBe('overdue');
+    expect(mobileTaskBucket(new Date('2026-08-29T00:00:00.000Z'), '2026-08-29')).toBe('today');
+    expect(mobileTaskBucket(new Date('2026-08-30T00:00:00.000Z'), '2026-08-29')).toBe('upcoming');
+  });
+});
+
 describe('MobileService customer snapshot', () => {
   const user = {
     id: 'user-1',
@@ -36,6 +91,10 @@ describe('MobileService customer snapshot', () => {
       customerBalance: { findMany: jest.fn().mockResolvedValue([]) },
       collector: { findUnique: jest.fn() },
       operationalLedger: { findMany: jest.fn() },
+      followup: { groupBy: jest.fn().mockResolvedValue([]) },
+      paymentPromise: { groupBy: jest.fn().mockResolvedValue([]) },
+      collection: { groupBy: jest.fn().mockResolvedValue([]) },
+      auditLog: { findMany: jest.fn().mockResolvedValue([]) },
     };
     return { prisma, service: new MobileService(prisma as any) };
   }
@@ -57,7 +116,7 @@ describe('MobileService customer snapshot', () => {
         geoLat: null,
         geoLng: null,
         assignments: [{ collector: { user: { fullName: 'المحصّل الأول' } } }],
-        balances: [{ currencyCode: 'YER', accountingBalance: 1_000, lastImportJob: { importedAt } }],
+        balances: [{ currencyCode: 'YER', accountingBalance: 4_000, lastImportJob: { importedAt } }],
       },
     ]);
     prisma.operationalLedger.findMany.mockResolvedValue([
@@ -71,8 +130,90 @@ describe('MobileService customer snapshot', () => {
       where: { organizationId: 'org-1', status: 'active' },
     }));
     expect(result).toHaveLength(1);
-    expect(result[0].balances).toEqual([{ currency: 'YER', balance: 900 }]);
+    expect(result[0].balances).toEqual([{ currency: 'YER', balance: 3900 }]);
     expect(result[0].assignedCollectorName).toBe('المحصّل الأول');
+  });
+
+  it('excludes settled and small customers while retaining significant advance creditors', async () => {
+    const { prisma, service } = createService();
+    prisma.customer.findMany.mockResolvedValue([
+      {
+        id: 'settled', name: 'عميل صافي', customerType: null, assignments: [],
+        balances: [{ currencyCode: 'YER', accountingBalance: 0, lastImportJob: null }],
+      },
+      {
+        id: 'small', name: 'عميل بسيط', customerType: null, assignments: [],
+        balances: [{ currencyCode: 'SAR', accountingBalance: 30, lastImportJob: null }],
+      },
+      {
+        id: 'debtor', name: 'عميل مدين', customerType: null, assignments: [],
+        balances: [{ currencyCode: 'USD', accountingBalance: 5.01, lastImportJob: null }],
+      },
+      {
+        id: 'advance-creditor', name: 'سلفة دائنة', customerType: 'advance', assignments: [],
+        balances: [{ currencyCode: 'YER', accountingBalance: -3_001, lastImportJob: null }],
+      },
+    ]);
+    prisma.operationalLedger.findMany.mockResolvedValue([]);
+
+    const result = await service.findCustomers(user);
+
+    expect(result.map((item) => item.id)).toEqual(['debtor', 'advance-creditor']);
+  });
+
+  it('keeps the full scoped snapshot for offline dashboard totals', async () => {
+    const { prisma, service } = createService();
+    prisma.customer.findMany.mockResolvedValue([
+      {
+        id: 'settled', name: 'عميل صافي', customerType: null, assignments: [],
+        balances: [{ currencyCode: 'YER', accountingBalance: 0, lastImportJob: null }],
+      },
+      {
+        id: 'small', name: 'عميل بسيط', customerType: null, assignments: [],
+        balances: [{ currencyCode: 'YER', accountingBalance: 2_500, lastImportJob: null }],
+      },
+      {
+        id: 'debtor', name: 'عميل مدين', customerType: null, assignments: [],
+        balances: [{ currencyCode: 'YER', accountingBalance: 5_000, lastImportJob: null }],
+      },
+    ]);
+    prisma.operationalLedger.findMany.mockResolvedValue([]);
+
+    const result = await service.findCustomers(user, false);
+
+    expect(result.map((item) => item.id)).toEqual(['settled', 'small', 'debtor']);
+  });
+
+  it('marks customers contacted by a follow-up, promise, collection, or Oracle receipt request', async () => {
+    const { prisma, service } = createService();
+    prisma.customer.findMany.mockResolvedValue([
+      { id: 'followed', organizationId: 'org-1', name: 'متابعة', customerType: null, assignments: [], balances: [] },
+      { id: 'promised', organizationId: 'org-1', name: 'وعد', customerType: null, assignments: [], balances: [] },
+      { id: 'collected', organizationId: 'org-1', name: 'تحصيل', customerType: null, assignments: [], balances: [] },
+      { id: 'oracle-receipt', organizationId: 'org-1', name: 'سند قبض', customerType: null, assignments: [], balances: [] },
+      { id: 'never', organizationId: 'org-1', name: 'دون تواصل', customerType: null, assignments: [], balances: [] },
+    ]);
+    prisma.operationalLedger.findMany.mockResolvedValue([]);
+    prisma.followup.groupBy.mockResolvedValue([{ customerId: 'followed', _max: { followupAt: new Date('2026-08-01T10:00:00Z') } }]);
+    prisma.paymentPromise.groupBy.mockResolvedValue([{ customerId: 'promised', _max: { createdAt: new Date('2026-08-02T10:00:00Z') } }]);
+    prisma.collection.groupBy.mockResolvedValue([{ customerId: 'collected', _max: { collectedAt: new Date('2026-08-03T10:00:00Z') } }]);
+    prisma.auditLog.findMany.mockResolvedValue([{
+      id: 'audit-receipt', entityId: 'oracle-serial',
+      createdAt: new Date('2026-08-04T10:00:00Z'),
+      newValue: { kind: 'voucher', requestKind: 'receipt', platformCustomerId: 'oracle-receipt' },
+    }]);
+
+    const result = await service.findCustomers(user, false);
+
+    expect(result.filter((item) => item.hasRecordedEngagement).map((item) => item.id))
+      .toEqual(['followed', 'promised', 'collected', 'oracle-receipt']);
+    expect(result.filter((item) => item.hasRecordedFollowup).map((item) => item.id)).toEqual(['followed']);
+    expect(result.filter((item) => !item.hasRecordedFollowup).map((item) => item.id)).toEqual(['promised', 'collected', 'oracle-receipt', 'never']);
+    expect(prisma.followup.groupBy).toHaveBeenCalledWith(expect.objectContaining({where:{customerId:{in:expect.any(Array)},deletedAt:null}}));
+    expect(result.find((item) => item.id === 'never')).toEqual(expect.objectContaining({
+      hasRecordedEngagement: false,
+      lastEngagementAt: null,
+    }));
   });
 
   it('keeps collector assignment scope while excluding merged accounts', async () => {

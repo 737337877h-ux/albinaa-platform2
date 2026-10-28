@@ -14,6 +14,7 @@ const CUSTOMER_COLUMNS = ['C_CODE','A_CY','DOC_DATE','DOC_TYPE','DOC_JV_TYPE','D
 const INVENTORY_COLUMNS = ['DOC_TYPE','BILL_DOC_TYPE','DOC_NO','I_CODE','I_QTY','FREE_QTY','ITM_UNT','P_SIZE','P_QTY','PF_QTY','I_DATE','I_COST','W_CODE','WHG_CODE','STK_COST','A_CY','C_CODE','V_CODE','A_DESC','RCRD_NO','SERIAL','REF_NO','DOC_SER','DOC_SEQUENCE','BARCODE','IN_OUT','AD_DATE','UP_DATE','CMP_NO','BRN_NO','BRN_YEAR'];
 
 export interface CustomerMovementRow {
+  collectorNo: string | null;
   sourceFingerprint: string; sourceHash: string; duplicateOrdinal: number;
   externalCustomerCode: string; currencyCode: string; documentDate: Date;
   documentType: string; documentJvType: string | null; documentNumber: string | null;
@@ -88,6 +89,10 @@ function fingerprintRows(rows: CsvRow[], headers: string[]) {
   });
 }
 
+export function fingerprintCustomerMovements(rows: CsvRow[]) {
+  return fingerprintRows(rows, CUSTOMER_COLUMNS);
+}
+
 @Injectable()
 export class OracleMovementSnapshotService {
   async inspect(snapshotDirectory: string): Promise<OracleMovementSnapshot> {
@@ -102,7 +107,8 @@ export class OracleMovementSnapshotService {
       return parsed;
     };
     const [customerFile, inventoryFile, controlFile] = await Promise.all([file('customer_movements'), file('inventory_movements'), file('control_totals')]);
-    assertColumns(customerFile.headers, CUSTOMER_COLUMNS, 'customer_movements.csv');
+    assertColumns(customerFile.headers, customerFile.headers.includes('COL_NO')
+      ? [...CUSTOMER_COLUMNS, 'COL_NO'] : CUSTOMER_COLUMNS, 'customer_movements.csv');
     assertColumns(inventoryFile.headers, INVENTORY_COLUMNS, 'inventory_movements.csv');
     if (controlFile.rows.length !== 1) throw new Error('control_totals.csv must contain one row');
     const counts = controlFile.rows[0];
@@ -110,7 +116,9 @@ export class OracleMovementSnapshotService {
     const expectedInventory = integer(counts, 'INVENTORY_MOVEMENTS', 'control_totals.csv');
     if (customerFile.rows.length !== expectedCustomers || inventoryFile.rows.length !== expectedInventory) throw new Error('Movement counts differ from Oracle control totals.');
 
-    const customerMovements = fingerprintRows(customerFile.rows, customerFile.headers).map(({ row, ...identity }, index): CustomerMovementRow => {
+    // Collector enrichment must never change an already published movement's identity.
+    const customerMovements = fingerprintCustomerMovements(customerFile.rows).map(({ row, ...baseIdentity }, index): CustomerMovementRow => {
+      const identity = { ...baseIdentity, collectorNo: optional(row, 'COL_NO') };
       const context = `customer_movements.csv row ${index + 2}`;
       return { ...identity, externalCustomerCode: required(row,'C_CODE',context), currencyCode: required(row,'A_CY',context), documentDate: date(row,'DOC_DATE',context)!, documentType: required(row,'DOC_TYPE',context), documentJvType: optional(row,'DOC_JV_TYPE'), documentNumber: optional(row,'DOC_NO'), documentSerial: optional(row,'DOC_SER'), recordNumber: optional(row,'RCRD_NO'), referenceNumber: optional(row,'REF_NO'), description: optional(row,'DOC_DESC'), debitLocal: decimal(row,'DR_AMT',context)!, creditLocal: decimal(row,'CR_AMT',context)!, debitForeign: decimal(row,'DR_AMTF',context)!, creditForeign: decimal(row,'CR_AMTF',context)!, sourceCreatedAt: date(row,'AD_DATE',context,true), sourceUpdatedAt: date(row,'UP_DATE',context,true) };
     });

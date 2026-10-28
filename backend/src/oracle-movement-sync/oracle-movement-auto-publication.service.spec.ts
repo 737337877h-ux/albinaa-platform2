@@ -6,6 +6,32 @@ const decimal = (value: string | number) => new Prisma.Decimal(value);
 describe('OracleMovementAutoPublicationService safety classification', () => {
   const service = new OracleMovementAutoPublicationService({} as never);
 
+  it('closes an exhausted reservation with the database-supported status and caps excess sales', async () => {
+    const tx = {
+      customer: { findFirst: jest.fn().mockResolvedValue({ id: 'customer' }) },
+      reservation: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'reservation', remainingTons: decimal('0.4') }]),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      reservationAdjustment: {
+        findUnique: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}),
+      },
+    };
+    await (service as unknown as {
+      applyReservationMovement(client: unknown, org: string, row: unknown, id: string): Promise<void>;
+    }).applyReservationMovement(tx, 'org', {
+      external_item_code: '230800405005', external_customer_code: '20566',
+      document_type: '1', in_out: -1, primary_quantity: decimal(21), primary_free_quantity: decimal(0),
+      source_fingerprint: 'regression-exhaustion', document_number: 'test', movement_date: new Date(),
+    }, 'movement');
+    expect(tx.reservation.update).toHaveBeenCalledTimes(1);
+    const data = tx.reservation.update.mock.calls[0][0].data;
+    expect(data.status).toBe('completed');
+    expect(data.remainingTons.toString()).toBe('0');
+    expect(data.issuedQty.increment.toString()).toBe('0.4');
+    expect(tx.reservationAdjustment.create.mock.calls[0][0].data.tonsDelta.toString()).toBe('-0.4');
+  });
+
   const customer = (overrides: Record<string, unknown> = {}) => ({
     id: 'row-1',
     source_fingerprint: 'a'.repeat(64),
@@ -144,5 +170,82 @@ describe('OracleMovementAutoPublicationService safety classification', () => {
         existing_warehouse_group_code: null,
       })], '2026-08-16');
     expect(result[0]).toMatchObject({ action: 'publish', reasonCode: 'oracle_inventory_revision_published' });
+  });
+
+  it('advances the Oracle balance cutoff even when the amount is already equal', async () => {
+    const snapshotAt = new Date('2026-08-30T20:37:08.541Z');
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        {
+          customer_id: '00000000-0000-0000-0000-000000000011',
+          external_customer_code: '20468',
+          currency_code: 'YER',
+          oracle_amount: decimal('0.015'),
+          platform_amount: decimal('0.015'),
+          snapshot_at: snapshotAt,
+        },
+        {
+          customer_id: '00000000-0000-0000-0000-000000000012',
+          external_customer_code: '30256',
+          currency_code: 'YER',
+          oracle_amount: decimal('1406965'),
+          platform_amount: decimal('1606965'),
+          snapshot_at: snapshotAt,
+        },
+      ]),
+      importJob: { create: jest.fn().mockResolvedValue({ id: '00000000-0000-0000-0000-000000000099' }) },
+      customerBalance: { upsert: jest.fn().mockResolvedValue({}) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+
+    const result = await (service as never as {
+      reconcileCurrentCustomerBalances(client: unknown, organizationId: string, publishedBy: string): Promise<{
+        changed: number; cutoffsUpdated: number; importJobId: string | null;
+      }>;
+    }).reconcileCurrentCustomerBalances(
+      tx,
+      '00000000-0000-0000-0000-000000000021',
+      '00000000-0000-0000-0000-000000000022',
+    );
+
+    expect(result).toEqual({
+      changed: 1,
+      cutoffsUpdated: 2,
+      importJobId: '00000000-0000-0000-0000-000000000099',
+    });
+    expect(tx.importJob.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ importedAt: snapshotAt, rowsTotal: 2, customersUpdated: 2 }),
+    }));
+    expect(tx.customerBalance.upsert).toHaveBeenCalledTimes(2);
+    expect(tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        newValue: expect.objectContaining({ changed: 1, cutoffsUpdated: 2 }),
+      }),
+    }));
+  });
+
+  it('finalizes validated customer and movement runs after publication', async () => {
+    const tx = {
+      oracleMovementSyncRun: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      oracleCustomerSyncRun: {
+        findFirst: jest.fn().mockResolvedValue({ id: '00000000-0000-0000-0000-000000000031' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    await (service as never as {
+      finalizePublishedRuns(client: unknown, organizationId: string, sourceSchema: string, movementRunId: string): Promise<void>;
+    }).finalizePublishedRuns(
+      tx,
+      '00000000-0000-0000-0000-000000000021',
+      'IAS20261',
+      '00000000-0000-0000-0000-000000000041',
+    );
+
+    expect(tx.oracleMovementSyncRun.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'published' }),
+    }));
+    expect(tx.oracleCustomerSyncRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'published' }),
+    }));
   });
 });

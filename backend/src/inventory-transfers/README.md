@@ -1,6 +1,14 @@
 # INVT001.225 safe integration contract
 
-This module is intentionally platform-first and Oracle-read-only.
+This module is platform-first and Oracle-read-only by default.
+
+An optional, separately deployed experimental writer can create an unapproved
+`IAS_OUT_REQUEST_MST/DTL` draft only when `ORACLE_WRITE_ENABLED=true` and both
+`ORACLE_READ_SCHEMA` and `ORACLE_WRITE_SCHEMA` are exactly `IAS20191`. It is
+disabled by default, uses an idempotent platform request reference, and never
+approves, processes, issues, receives, updates, or deletes an Oracle document.
+The writer implementation lives in `oracle-write-api/` and must use only the
+restricted `ALBINAAWRITER` test account.
 
 State flow:
 

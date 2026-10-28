@@ -1,11 +1,16 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
-import { CreateInventoryTransferDto, ReviewInventoryTransferDto } from './dto/inventory-transfer.dto';
+import { OracleInventoryItemsQueryDto } from '../oracle-inventory-sync/dto/oracle-inventory-query.dto';
+import {
+  CreateInventoryTransferDto,
+  LinkOracleTransferDocumentDto,
+  ReviewInventoryTransferDto,
+} from './dto/inventory-transfer.dto';
 import { InventoryTransfersService } from './inventory-transfers.service';
 
 @ApiTags('Inventory Transfers')
@@ -17,6 +22,25 @@ export class InventoryTransfersController {
   @Get()
   @RequirePermissions('inventory_transfers.read')
   list(@CurrentUser() user: AuthUser) { return this.transfers.list(user); }
+
+  @Get('lookups/warehouses')
+  @RequirePermissions('inventory_transfers.create')
+  @ApiOperation({ summary: 'Active warehouse choices from the published Oracle mirror' })
+  warehouseOptions(@CurrentUser() user: AuthUser) { return this.transfers.warehouseOptions(user); }
+
+  @Get('lookups/items')
+  @RequirePermissions('inventory_transfers.create')
+  @ApiOperation({ summary: 'Search active item choices in the published Oracle mirror' })
+  itemOptions(@CurrentUser() user: AuthUser, @Query() query: OracleInventoryItemsQueryDto) {
+    return this.transfers.itemOptions(user, query);
+  }
+
+  @Get('lookups/items/:externalItemCode')
+  @RequirePermissions('inventory_transfers.create')
+  @ApiOperation({ summary: 'Read valid units and warehouse balances for a transfer item choice' })
+  itemOption(@CurrentUser() user: AuthUser, @Param('externalItemCode') externalItemCode: string) {
+    return this.transfers.itemOption(user, externalItemCode);
+  }
 
   @Get(':id')
   @RequirePermissions('inventory_transfers.read')
@@ -47,6 +71,17 @@ export class InventoryTransfersController {
   @Idempotent()
   @RequirePermissions('inventory_transfers.approve')
   reject(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReviewInventoryTransferDto, @Req() req: Request) { return this.transfers.reject(user, id, dto, req); }
+
+  @Post(':id/oracle-document/link')
+  @Idempotent()
+  @RequirePermissions('inventory_transfers.create')
+  @ApiOperation({ summary: 'Link an approved request to an existing Oracle transfer using SELECT-only verification' })
+  linkOracleDocument(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LinkOracleTransferDocumentDto,
+    @Req() req: Request,
+  ) { return this.transfers.linkOracleDocument(user, id, dto, req); }
 
   @Post(':id/oracle-status/refresh')
   @RequirePermissions('inventory_transfers.read')

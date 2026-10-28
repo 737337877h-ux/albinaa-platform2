@@ -1,7 +1,22 @@
-import { escalationForAging, TASK_TYPE_PRIORITY, priorityOfTaskType, queueTaskKey } from './tasks.service';
+import {
+  escalationForAging, isScheduledTaskType, REFRESHED_DAILY_TASK_TYPES, TASK_TYPE_PRIORITY, priorityOfTaskType, queueTaskKey,
+} from './tasks.service';
 
 describe('daily work queue helpers (PR 5)', () => {
   describe('TASK_TYPE_PRIORITY', () => {
+    it('refreshes calculated daily priorities but preserves scheduled work', () => {
+      expect(REFRESHED_DAILY_TASK_TYPES).toContain('risk_high');
+      expect(REFRESHED_DAILY_TASK_TYPES).toContain('followup_normal');
+      expect(REFRESHED_DAILY_TASK_TYPES).not.toContain('promise_due');
+      expect(REFRESHED_DAILY_TASK_TYPES).not.toContain('followup_due');
+      expect(REFRESHED_DAILY_TASK_TYPES).not.toContain('collection_remaining');
+      expect(isScheduledTaskType('followup_normal')).toBe(false);
+      expect(isScheduledTaskType('risk_high')).toBe(false);
+      expect(isScheduledTaskType('promise_due')).toBe(true);
+      expect(isScheduledTaskType('followup_due')).toBe(true);
+      expect(isScheduledTaskType('collection_remaining')).toBe(true);
+      expect(isScheduledTaskType('visit')).toBe(true);
+    });
     it('ranks queue causes in owner-approved order 1..12', () => {
       const ordered = [
         'promise_overdue',

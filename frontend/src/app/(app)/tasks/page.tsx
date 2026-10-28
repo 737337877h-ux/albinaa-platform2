@@ -104,10 +104,16 @@ export default function TasksPage() {
   /* ──── Today Board ──── */
   const boardBucket = tab === 'overdue' ? 'overdue' : 'today';
   const today = useQuery<TodayResponse>({
-    queryKey: ['tasks-scheduled', boardBucket],
-    queryFn: () => api<TodayResponse>(`/tasks/scheduled?bucket=${boardBucket}`),
+    queryKey: tab === 'today' ? ['tasks-followup-priorities'] : ['tasks-scheduled', boardBucket],
+    queryFn: () => api<TodayResponse>(tab === 'today' ? '/tasks/today' : `/tasks/scheduled?bucket=${boardBucket}`),
     enabled: canManage && tab !== 'stored',
   });
+  const followupPriorities = useQuery<TodayResponse>({
+    queryKey: ['tasks-followup-priorities'],
+    queryFn: () => api<TodayResponse>('/tasks/today'),
+    enabled: canManage,
+  });
+  const neverFollowed = (followupPriorities.data?.items ?? []).filter((item) => !item.lastFollowupAt);
 
   /* ──── Stored Tasks ──── */
   const tasks = useQuery<StoredTask[]>({
@@ -134,7 +140,7 @@ export default function TasksPage() {
   const visibleTodayItems = todayItems.slice((todayPage - 1) * pageSize, todayPage * pageSize);
   const visibleStoredTasks = filteredTasks.slice((storedPage - 1) * pageSize, storedPage * pageSize);
 
-  useEffect(() => { setTodayPage(1); }, [today.data?.date, boardBucket]);
+  useEffect(() => { setTodayPage(1); }, [today.data?.date, tab]);
   useEffect(() => { setStoredPage(1); }, [taskFilter, taskSearch]);
 
   const goToPage = (target: 'today' | 'stored', nextPage: number) => {
@@ -168,15 +174,27 @@ export default function TasksPage() {
     <div className="space-y-5">
       <PageHeader title="عمل اليوم" />
 
+      <Card className="border-r-4 border-r-hazard-500 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">عملاء مسندون لم تتم متابعتهم</h2>
+            <p className="mt-1 text-xs text-ink-mid">هذه قائمة تنبيه مستقلة ولا تُضاف إلى عداد مهام اليوم حتى لا تتكرر مئات المهام. تختفي حالة العميل بعد تسجيل أول متابعة له.</p>
+          </div>
+          <Badge tone={neverFollowed.length ? 'hazard' : 'pine'}>{followupPriorities.isLoading ? 'جارٍ الحساب…' : `${neverFollowed.length} عميل`}</Badge>
+        </div>
+        {neverFollowed.length > 0 && <details className="mt-3"><summary className="cursor-pointer text-sm font-semibold text-pine-700 dark:text-pine-100">عرض العملاء غير المتابعين</summary><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{neverFollowed.map((item) => <Link key={item.customerId} href={`/customers/${item.customerId}?tab=overview`} className="rounded-lg border border-line bg-surface-2 p-3 hover:border-pine-500"><strong className="block text-sm">{item.customerName}</strong><span className="mt-1 block text-xs text-ink-mid">{item.reason}</span></Link>)}</div></details>}
+      </Card>
+
       <Tabs value={tab} onChange={setTab}>
         <TabsList>
-          <TabsTrigger value="today" badge={s?.tasksToday}>عمل اليوم</TabsTrigger>
+          <TabsTrigger value="today" badge={followupPriorities.data?.summary.tasksToday}>عمل اليوم</TabsTrigger>
+          <TabsTrigger value="scheduled">المهام المجدولة اليوم</TabsTrigger>
           <TabsTrigger value="overdue">متأخرة</TabsTrigger>
           <TabsTrigger value="stored">المهام المخزنة</TabsTrigger>
         </TabsList>
 
         {/* ──────────────── Today Board ──────────────── */}
-        <TabsPanel value={tab === 'overdue' ? 'overdue' : 'today'}>
+        <TabsPanel value={tab === 'stored' ? 'today' : tab}>
           <DataState
             isLoading={today.isLoading}
             isError={today.isError}
@@ -184,7 +202,7 @@ export default function TasksPage() {
             onRetry={() => today.refetch()}
             isFetching={today.isFetching}
             isEmpty={!today.data?.items?.length}
-            emptyTitle={tab === 'overdue' ? 'لا توجد مهام متأخرة' : 'لا توجد مهام اليوم'}
+            emptyTitle={tab === 'overdue' ? 'لا توجد مهام متأخرة' : tab === 'scheduled' ? 'لا توجد مهام مجدولة اليوم' : 'لا توجد أولويات لعمل اليوم'}
             emptyHint={today.data?.isCollector === false ? 'أنت لا تعمل كمحصل حالياً' : undefined}
             skeletonClassName="h-64"
           >
@@ -194,7 +212,7 @@ export default function TasksPage() {
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   <SummaryCard
                     icon={<CheckCircle2 className="h-5 w-5 text-pine-600" />}
-                    label={tab === 'overdue' ? 'المهام المتأخرة' : 'مهام اليوم'}
+                    label={tab === 'overdue' ? 'المهام المتأخرة' : tab === 'scheduled' ? 'المهام المجدولة اليوم' : 'أولويات عمل اليوم'}
                     value={String(s?.tasksToday ?? 0)}
                   />
                   {Object.entries(s?.expectedByCurrency ?? {}).map(([ccy, amt]) => (

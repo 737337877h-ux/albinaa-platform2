@@ -81,6 +81,7 @@ export interface ItemUnitSnapshotRow {
   usesSerialNumber: boolean;
   isInactive: boolean;
   inactiveReason: string | null;
+  salePrice: string | null;
   sourceUpdatedAt: Date | null;
   sourceHash: string;
 }
@@ -331,6 +332,7 @@ export class OracleInventorySnapshotService {
       usesSerialNumber: flag(row, 'USE_SRLNO'),
       isInactive: flag(row, 'INACTIVE'),
       inactiveReason: optional(row, 'INACTIVE_RES'),
+      salePrice: decimal(row, 'SALE_PRICE', `item_units.csv row ${index + 2}`, true),
       sourceUpdatedAt: oracleDate(row, 'UP_DATE', `item_units.csv row ${index + 2}`),
       sourceHash: rowHash(row, fileRows.item_units.headers),
     }));

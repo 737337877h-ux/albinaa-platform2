@@ -6,6 +6,11 @@ import { ApiError } from './api';
  */
 export function friendlyApiError(err: unknown): string {
   if (err instanceof ApiError) {
+    if (err.status === 400 && [
+      'حدد بداية ونهاية الفترة للكشف التاريخي',
+      'تجاوزت الفترة 5000 حركة؛ اختر فترة أقصر. سيشمل الرصيد الافتتاحي الحركات السابقة.',
+      'تحقق من العملة والفترة؛ الأرشيف المتاح من 2020 إلى 2026.',
+    ].includes(err.message)) return err.message;
     if (err.status === 401) return 'انتهت صلاحية الجلسة. سجّل الدخول من جديد.';
     if (err.status === 403) return 'لا تملك صلاحية الوصول إلى هذا القسم.';
     if (err.status === 404) return 'العنصر المطلوب غير موجود.';

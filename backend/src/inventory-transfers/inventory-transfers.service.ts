@@ -4,8 +4,15 @@ import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateInventoryTransferDto, ReviewInventoryTransferDto } from './dto/inventory-transfer.dto';
+import { OracleInventoryItemsQueryDto } from '../oracle-inventory-sync/dto/oracle-inventory-query.dto';
+import { OracleInventoryReadService } from '../oracle-inventory-sync/oracle-inventory-read.service';
+import {
+  CreateInventoryTransferDto,
+  LinkOracleTransferDocumentDto,
+  ReviewInventoryTransferDto,
+} from './dto/inventory-transfer.dto';
 import { OracleInventoryReader } from './oracle-inventory.reader';
+import { OracleOutRequestWriter } from './oracle-out-request.writer';
 import { TransferValidationIssue, validateStockLine } from './inventory-transfer.validation';
 
 const EDITABLE_STATUSES = ['draft', 'rejected'] as const;
@@ -16,6 +23,8 @@ export class InventoryTransfersService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly oracle: OracleInventoryReader,
+    private readonly inventoryMirror: OracleInventoryReadService,
+    private readonly oracleWriter: OracleOutRequestWriter,
   ) {}
 
   private include = { lines: { orderBy: { lineNo: 'asc' as const } } };
@@ -28,14 +37,54 @@ export class InventoryTransfersService {
     return row;
   }
 
-  list(actor: AuthUser) {
-    return this.prisma.inventoryTransferRequest.findMany({
+  private async attachItemNames<T extends { lines: Array<{ itemCode: string }> }>(actor: AuthUser, rows: T[]) {
+    const itemCodes = rows.flatMap((row) => row.lines.map((line) => line.itemCode));
+    const labels = this.oracle.directLookupsEnabled()
+      ? await this.oracle.directItemLabels(itemCodes)
+      : await this.inventoryMirror.itemLabels(actor, itemCodes);
+    const names = new Map(labels.map((item) => [item.externalItemCode, item.nameAr]));
+    return rows.map((row) => ({
+      ...row,
+      lines: row.lines.map((line) => ({ ...line, itemName: names.get(line.itemCode) ?? null })),
+    }));
+  }
+
+  async list(actor: AuthUser) {
+    const rows = await this.prisma.inventoryTransferRequest.findMany({
       where: { organizationId: actor.organizationId }, include: this.include,
       orderBy: { createdAt: 'desc' },
     });
+    return this.attachItemNames(actor, rows);
   }
 
-  get(actor: AuthUser, id: string) { return this.scoped(actor, id); }
+  warehouseOptions(actor: AuthUser) {
+    return this.oracle.directLookupsEnabled()
+      ? this.oracle.directWarehouses()
+      : this.inventoryMirror.warehouses(actor, { status: 'active' });
+  }
+
+  itemOptions(actor: AuthUser, query: OracleInventoryItemsQueryDto) {
+    const limit = Math.min(query.limit ?? 20, 20);
+    return this.oracle.directLookupsEnabled()
+      ? this.oracle.directItems(query.search, limit)
+      : this.inventoryMirror.items(actor, {
+      ...query,
+      page: 1,
+      limit,
+      status: 'active',
+    });
+  }
+
+  itemOption(actor: AuthUser, externalItemCode: string) {
+    return this.oracle.directLookupsEnabled()
+      ? this.oracle.directItem(externalItemCode)
+      : this.inventoryMirror.item(actor, externalItemCode, {});
+  }
+
+  async get(actor: AuthUser, id: string) {
+    const [row] = await this.attachItemNames(actor, [await this.scoped(actor, id)]);
+    return row;
+  }
 
   async create(actor: AuthUser, dto: CreateInventoryTransferDto, req: Request) {
     const source = dto.sourceWarehouseCode.trim();
@@ -93,7 +142,10 @@ export class InventoryTransfersService {
     if (!sourceExists) issues.push({ code: 'SOURCE_WAREHOUSE_NOT_FOUND', severity: 'error', message: 'المستودع المصدر غير موجود في Oracle' });
     if (!destinationExists) issues.push({ code: 'DESTINATION_WAREHOUSE_NOT_FOUND', severity: 'error', message: 'المستودع الوجهة غير موجود في Oracle' });
     const snapshots = await Promise.all(row.lines.map((line) => this.oracle.stock(row.sourceWarehouseCode, line.itemCode, line.unitCode)));
-    row.lines.forEach((line, index) => issues.push(...validateStockLine(line.lineNo, Number(line.quantity), snapshots[index])));
+    const allowInsufficientStock = this.oracleWriter.allowsInsufficientStock() && this.oracle.directLookupsEnabled();
+    row.lines.forEach((line, index) => issues.push(...validateStockLine(
+      line.lineNo, Number(line.quantity), snapshots[index], allowInsufficientStock,
+    )));
     const oracleTransferStatus = row.oracleSourceTransferSerial
       ? await this.oracle.transferStatus({
         sourceTransferSerial: row.oracleSourceTransferSerial,
@@ -103,7 +155,8 @@ export class InventoryTransfersService {
       })
       : null;
     const result = {
-      mode: 'DRY_RUN', oracleWriteAttempted: false, valid: issues.every((issue) => issue.severity !== 'error'),
+      mode: 'DRY_RUN', oracleWriteAttempted: false, allowInsufficientStock,
+      valid: issues.every((issue) => issue.severity !== 'error'),
       checkedAt: new Date().toISOString(), screen: 'INVT001.225', sourceWarehouseCode: row.sourceWarehouseCode,
       destinationWarehouseCode: row.destinationWarehouseCode,
       lines: row.lines.map((line, index) => ({
@@ -138,11 +191,41 @@ export class InventoryTransfersService {
     if (row.status !== 'pending_approval') throw new ConflictException('الطلب ليس بانتظار الاعتماد');
     if (row.createdBy === actor.id) throw new ConflictException('لا يجوز لمنشئ الطلب اعتماده');
     const check = await this.dryRun(actor, id, req);
-    if (!check.valid) throw new BadRequestException({ message: 'تعذر الاعتماد بسبب فشل التحقق من Oracle أو عدم كفاية الرصيد', issues: check.issues });
+    if (!check.valid) throw new BadRequestException({ message: 'تعذر الاعتماد بسبب فشل التحقق من بنية طلب Oracle', issues: check.issues });
+    const oracleDraft = this.oracleWriter.isEnabled()
+      ? await this.oracleWriter.createDraft({
+        externalReference: `inventory-transfer:${row.id}`,
+        sourceWarehouseCode: row.sourceWarehouseCode,
+        destinationWarehouseCode: row.destinationWarehouseCode,
+        requestSide: 'منصة البناء الراقي',
+        notes: (row.notes || 'طلب تحويل معتمد من منصة البناء الراقي').slice(0, 250),
+        lines: row.lines.map((line) => ({
+          itemCode: line.itemCode,
+          unitCode: line.unitCode,
+          quantity: Number(line.quantity),
+        })),
+      })
+      : null;
     const updated = await this.prisma.inventoryTransferRequest.update({
-      where: { id }, data: { status: 'approved', reviewedBy: actor.id, reviewedAt: new Date(), reviewNote: dto.note?.trim() || null }, include: this.include,
+      where: { id }, data: {
+        status: 'approved', reviewedBy: actor.id, reviewedAt: new Date(), reviewNote: dto.note?.trim() || null,
+        ...(oracleDraft ? { oracleOutReqNo: oracleDraft.requestNo, oracleOutReqSer: oracleDraft.requestSerial } : {}),
+      }, include: this.include,
     });
-    await this.audit.log({ userId: actor.id, action: 'inventory_transfer_approved_dry_run', entityTable: 'inventory_transfer_requests', entityId: id, req });
+    await this.audit.log({
+      userId: actor.id,
+      action: oracleDraft ? 'inventory_transfer_approved_oracle_draft_created' : 'inventory_transfer_approved_dry_run',
+      entityTable: 'inventory_transfer_requests',
+      entityId: id,
+      newValue: {
+        oracleWriteAttempted: Boolean(oracleDraft),
+        oracleDraftCreated: oracleDraft?.created ?? false,
+        oracleOutReqNo: oracleDraft?.requestNo ?? null,
+        oracleOutReqSer: oracleDraft?.requestSerial ?? null,
+        oracleWriteSchema: oracleDraft ? this.oracleWriter.targetSchema() : null,
+      },
+      req,
+    });
     return updated;
   }
 
@@ -155,25 +238,141 @@ export class InventoryTransfersService {
     return updated;
   }
 
-  async refreshOracleStatus(actor: AuthUser, id: string, req: Request) {
+  async linkOracleDocument(actor: AuthUser, id: string, dto: LinkOracleTransferDocumentDto, req: Request) {
     const row = await this.scoped(actor, id);
-    if (!row.oracleSourceTransferSerial) {
-      throw new BadRequestException('رقم TR_SER للمستند المصدر مطلوب لقراءة حالة Oracle');
+    if (row.status !== 'approved') {
+      throw new ConflictException('لا يمكن ربط مستند Oracle قبل اعتماد الطلب');
+    }
+    const sourceTransferSerial = dto.sourceTransferSerial.trim();
+    if (row.oracleSourceTransferSerial && row.oracleSourceTransferSerial !== sourceTransferSerial) {
+      throw new ConflictException('الطلب مرتبط مسبقًا بمستند Oracle آخر');
+    }
+    if (row.oracleSourceTransferSerial === sourceTransferSerial) {
+      return this.refreshOracleStatus(actor, id, req);
     }
     const status = await this.oracle.transferStatus({
-      sourceTransferSerial: row.oracleSourceTransferSerial,
+      sourceTransferSerial,
       sourceWarehouseCode: row.sourceWarehouseCode,
       destinationWarehouseCode: row.destinationWarehouseCode,
       itemCodes: row.lines.map((line) => line.itemCode),
     });
-    if (!status) return { found: false, request: row };
+    if (!status?.sourceTransferSerial) {
+      throw new BadRequestException('لم يُعثر على مستند Oracle مطابق للمصدر والوجهة والأصناف المحددة');
+    }
+    if (status.sourceTransferSerial !== sourceTransferSerial) {
+      throw new ConflictException('مستند Oracle المعاد لا يطابق رقم TR_SER المطلوب');
+    }
+    if (status.destinationReceived && !status.sourceIssued) {
+      throw new ConflictException('Oracle أعاد طرف وجهة بلا طرف مصدر مرتبط');
+    }
+    if (status.transferCompleted !== (status.sourceIssued && status.destinationReceived)) {
+      throw new ConflictException('حالة اكتمال التحويل لا تطابق وجود طرفي المصدر والوجهة');
+    }
+    const updated = await this.prisma.inventoryTransferRequest.update({
+      where: { id }, data: {
+        oracleOutReqSer: status.outReqSer ?? row.oracleOutReqSer,
+        oracleTransferDocumentNumber: status.transferDocumentNumber,
+        oracleSourceTransferSerial: status.sourceTransferSerial,
+        oracleDestinationTransferSerial: status.destinationTransferSerial,
+        sourceIssued: status.sourceIssued,
+        destinationReceived: status.destinationReceived,
+        transferCompleted: status.transferCompleted,
+        lastOracleCheckedAt: new Date(),
+      }, include: this.include,
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'inventory_transfer_oracle_document_linked',
+      entityTable: 'inventory_transfer_requests',
+      entityId: id,
+      newValue: {
+        sourceTransferSerial: status.sourceTransferSerial,
+        sourceIssued: status.sourceIssued,
+        destinationReceived: status.destinationReceived,
+        transferCompleted: status.transferCompleted,
+        oracleWriteAttempted: false,
+      },
+      req,
+    });
+    return { found: true, request: updated };
+  }
+
+  async refreshOracleStatus(actor: AuthUser, id: string, req: Request) {
+    const row = await this.scoped(actor, id);
+    let sourceTransferSerial = row.oracleSourceTransferSerial;
+    if (!sourceTransferSerial) {
+      if (!row.oracleOutReqSer) {
+        throw new BadRequestException('رقم OUT_REQ_SER مطلوب لاكتشاف مستند Oracle تلقائيًا');
+      }
+      const documents = await this.oracle.transferDocumentsByOutRequest(row.oracleOutReqSer);
+      const matching = documents.filter((document) => document.warehouseCode === row.sourceWarehouseCode
+        && document.destinationWarehouseCode === row.destinationWarehouseCode);
+      if (matching.length > 1) {
+        throw new ConflictException('عُثر على أكثر من مستند مصدر مطابق لطلب Oracle؛ يلزم فحص مسؤول النظام');
+      }
+      sourceTransferSerial = matching[0]?.transferSerial ?? null;
+      if (!sourceTransferSerial) {
+        const updated = await this.prisma.inventoryTransferRequest.update({
+          where: { id }, data: {
+            oracleTransferDocumentNumber: null,
+            oracleDestinationTransferSerial: null,
+            sourceIssued: false,
+            destinationReceived: false,
+            transferCompleted: false,
+            lastOracleCheckedAt: new Date(),
+          }, include: this.include,
+        });
+        await this.audit.log({
+          userId: actor.id,
+          action: 'inventory_transfer_oracle_document_not_issued',
+          entityTable: 'inventory_transfer_requests',
+          entityId: id,
+          newValue: { outReqSer: row.oracleOutReqSer, oracleWriteAttempted: false },
+          req,
+        });
+        return { found: false, request: updated };
+      }
+    }
+    const status = await this.oracle.transferStatus({
+      sourceTransferSerial,
+      sourceWarehouseCode: row.sourceWarehouseCode,
+      destinationWarehouseCode: row.destinationWarehouseCode,
+      itemCodes: row.lines.map((line) => line.itemCode),
+    });
+    if (!status) {
+      const updated = await this.prisma.inventoryTransferRequest.update({
+        where: { id }, data: {
+          oracleTransferDocumentNumber: null,
+          oracleDestinationTransferSerial: null,
+          sourceIssued: false,
+          destinationReceived: false,
+          transferCompleted: false,
+          lastOracleCheckedAt: new Date(),
+        }, include: this.include,
+      });
+      await this.audit.log({
+        userId: actor.id,
+        action: 'inventory_transfer_oracle_status_missing',
+        entityTable: 'inventory_transfer_requests',
+        entityId: id,
+        newValue: {
+          sourceTransferSerial,
+          sourceIssued: false,
+          destinationReceived: false,
+          transferCompleted: false,
+          oracleWriteAttempted: false,
+        },
+        req,
+      });
+      return { found: false, request: updated };
+    }
     if (status.destinationReceived && !status.sourceIssued) throw new ConflictException('Oracle أعاد طرف وجهة بلا طرف مصدر مرتبط');
     if (status.transferCompleted !== (status.sourceIssued && status.destinationReceived)) {
       throw new ConflictException('حالة اكتمال التحويل لا تطابق وجود طرفي المصدر والوجهة');
     }
     const updated = await this.prisma.inventoryTransferRequest.update({
       where: { id }, data: {
-        oracleOutReqSer: status.outReqSer, oracleTransferDocumentNumber: status.transferDocumentNumber,
+        oracleOutReqSer: status.outReqSer ?? row.oracleOutReqSer, oracleTransferDocumentNumber: status.transferDocumentNumber,
         oracleSourceTransferSerial: status.sourceTransferSerial,
         oracleDestinationTransferSerial: status.destinationTransferSerial,
         sourceIssued: status.sourceIssued, destinationReceived: status.destinationReceived,

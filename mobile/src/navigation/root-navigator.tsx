@@ -31,6 +31,7 @@ import ReservationsScreen from '../screens/reservations';
 import NewReservationScreen from '../screens/new-reservation';
 import InventoryScreen from '../screens/inventory';
 import InventoryItemScreen from '../screens/inventory-item';
+import NewInventoryCountScreen from '../screens/new-inventory-count';
 import { colors } from '../theme';
 import * as Notifications from 'expo-notifications';
 import { notificationNavigationTarget } from '../utils/notification-navigation';
@@ -157,6 +158,7 @@ export default function RootNavigator() {
           <Stack.Screen name="NewReservation" component={NewReservationScreen} options={{ title: 'إضافة حجز بضاعة' }} />
           <Stack.Screen name="Inventory" component={InventoryScreen} options={{ title: 'المخزون' }} />
           <Stack.Screen name="InventoryItem" component={InventoryItemScreen} options={{ title: 'تفاصيل الصنف' }} />
+          <Stack.Screen name="NewInventoryCount" component={NewInventoryCountScreen} options={{ title: 'إنشاء جرد' }} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'الإشعارات' }} />
         </Stack.Navigator>
       ) : (

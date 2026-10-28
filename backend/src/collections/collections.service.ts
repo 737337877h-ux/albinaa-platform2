@@ -6,6 +6,10 @@ import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { hasExplicitTimeZone, orgDateOnly, orgYear, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
+import { durableOracleRequest } from '../common/oracle-request-audit';
+import { oracleReceiptActivity } from '../common/oracle-receipt-activity';
+import { reconcileReceiptRequests, countableReceiptRequest, recordedLocalReceiptFinals } from '../common/oracle-receipt-reconciliation';
+import { OracleTestRequestsService } from '../oracle-test-requests/oracle-test-requests.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -32,6 +36,7 @@ export class CollectionsService {
     private readonly notifications: NotificationsService,
     private readonly accountingPeriods: AccountingPeriodsService,
     @Optional() private readonly riskRefresh?: RiskRefreshService,
+    @Optional() private readonly oracleRequests?: OracleTestRequestsService,
   ) {}
 
   private async collectorOf(user: AuthUser) {
@@ -195,8 +200,10 @@ export class CollectionsService {
     });
 
     // النقدي يظهر لأمين الصندوق حتى يؤكد الاستلام (قاعدة معتمدة §13)
-    await this.notifications.notifyByPermission(
-      actor.organizationId, 'cash.receive', 'collection_created', {
+    await this.notifications.notifyByPermissions(
+      actor.organizationId,
+      ['cash.receive', 'collections.approve', 'finance.alerts.receive', 'settings.manage'],
+      'collection_created', {
         collectionId: collection.id,
         customerId: dto.customerId,
         customerName: customer.name,
@@ -242,6 +249,17 @@ export class CollectionsService {
       if (q.fromDate) (where.collectedAt as any).gte = startOfOrgDay(q.fromDate);
       if (q.toDate) (where.collectedAt as any).lt = startOfNextOrgDay(q.toDate);
     }
+    const oracleHistory = user.permissions.includes('customers.read_all')
+      ? await oracleReceiptActivity(this.prisma, user, undefined, { includeUnassigned: true })
+      : await oracleReceiptActivity(this.prisma, user);
+    const directRows = oracleHistory.filter((row) => {
+      const day = row.collectedAt.slice(0, 10);
+      return (!q.customerId || row.customerId === q.customerId)
+        && !q.branchId && (!q.status || q.status === 'recorded' || q.status === 'approved')
+        && (!q.currency || row.currencyCode === q.currency)
+        && (!q.fromDate || day >= q.fromDate) && (!q.toDate || day <= q.toDate)
+        && (!q.collectorId || !user.permissions.includes('reports.read') || row.collector.id === q.collectorId);
+    }).map(row=>({...row,status:'approved'}));
     const [total, items, sums] = await Promise.all([
       this.prisma.collection.count({ where }),
       this.prisma.collection.findMany({
@@ -253,8 +271,8 @@ export class CollectionsService {
           branch: { select: { name: true } },
         },
         orderBy: { collectedAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
+        skip: directRows.length ? 0 : (page - 1) * limit,
+        take: directRows.length ? page * limit : limit,
       }),
       this.prisma.collection.groupBy({
         by: ['currencyCode'],
@@ -262,14 +280,172 @@ export class CollectionsService {
         _sum: { amount: true },
       }),
     ]);
+    const attachments = items.length === 0 ? [] : await this.prisma.attachment.findMany({
+      where: { entityTable: 'collections', entityId: { in: items.map((item) => item.id) } },
+      include: { uploader: { select: { fullName: true } } },
+      orderBy: { uploadedAt: 'desc' },
+    });
+    const attachmentByCollection = new Map<string, typeof attachments[number]>();
+    for (const attachment of attachments) {
+      if (!attachmentByCollection.has(attachment.entityId)) attachmentByCollection.set(attachment.entityId, attachment);
+    }
+    const totalsByCurrency = Object.fromEntries(sums.map((s) => [s.currencyCode, Number(s._sum.amount ?? 0)]));
+    for (const row of directRows) totalsByCurrency[row.currencyCode] = (totalsByCurrency[row.currencyCode] ?? 0) + row.amount;
+    const platformRows = items.map((item) => {
+        const attachment = attachmentByCollection.get(item.id);
+        return {
+          ...item,
+          receiptAttachment: attachment ? {
+            id: attachment.id,
+            fileName: attachment.fileName,
+            uploadedAt: attachment.uploadedAt,
+            uploaderName: attachment.uploader?.fullName ?? null,
+            previewPath: `/mobile/receipts/${attachment.id}`,
+          } : null,
+        };
+      });
+    const mergedRows = directRows.length ? [...platformRows, ...directRows]
+      .sort((a, b) => new Date(b.collectedAt).getTime() - new Date(a.collectedAt).getTime() || a.id.localeCompare(b.id))
+      .slice((page - 1) * limit, page * limit) : platformRows;
     return {
-      page, limit, total, totalPages: Math.ceil(total / limit),
-      totalsByCurrency: Object.fromEntries(
-        sums.map((s) => [s.currencyCode, Number(s._sum.amount ?? 0)]),
-      ),
-      items,
+      page, limit, total: total + directRows.length, totalPages: Math.ceil((total + directRows.length) / limit),
+      totalsByCurrency, items: mergedRows,
     };
   }
+
+  /**
+   * سجل اليوم التشغيلي: يجمع التحصيلات القديمة المسجلة في Collection مع
+   * طلبات سند القبض الجديدة المحفوظة دائمًا في AuditLog. لا ينشئ قيودًا ولا
+   * يغيّر Oracle؛ الغرض عرض ما أنجزه المحصل اليوم مع حالة الطلب بوضوح.
+   */
+  async todayActivity(user: AuthUser) {
+    const day = orgDateOnly();
+    const from = startOfOrgDay(day);
+    const to = startOfNextOrgDay(day);
+    const collectionScope = await this.scope(user);
+    const canReadAll = user.permissions.includes('customers.read_all');
+    const [collections, auditRows, collectors] = await Promise.all([
+      this.prisma.collection.findMany({
+        where: {
+          ...collectionScope,
+          status: { not: 'reversed' },
+          collectedAt: { gte: from, lt: to },
+        },
+        include: {
+          customer: { select: { id: true, name: true, externalCustomerCode: true } },
+          collector: { include: { user: { select: { fullName: true } } } },
+          method: { select: { name: true } },
+          branch: { select: { name: true } },
+        },
+        orderBy: { collectedAt: 'desc' },
+      }),
+      this.prisma.auditLog.findMany({
+        where: {
+          action: 'oracle_test_request_created',
+          entityTable: 'IAS20261',
+          createdAt: { gte: from, lt: to },
+          user: { organizationId: user.organizationId },
+          ...(canReadAll ? {} : { userId: user.id }),
+        },
+        select: {
+          id: true, entityId: true, newValue: true, createdAt: true,
+          user: {
+            select: {
+              id: true, fullName: true,
+              collector: { select: { id: true, active: true, oracleCollectorNo: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.collector.findMany({
+        where: { active: true, user: { organizationId: user.organizationId } },
+        select: { id: true, oracleCollectorNo: true, user: { select: { fullName: true } } },
+      }),
+    ]);
+
+    const durableReceipts = auditRows
+      .map((row) => ({ row, request: durableOracleRequest(row) }))
+      .filter((entry): entry is typeof entry & { request: NonNullable<typeof entry.request> } =>
+        entry.request?.kind === 'receipt' && entry.request.amount !== null && Boolean(entry.request.currencyCode));
+    const directReceipts = await oracleReceiptActivity(this.prisma, user, day);
+    const currentStates = reconcileReceiptRequests(auditRows as any[], [...directReceipts, ...recordedLocalReceiptFinals(collections)],
+      await this.oracleRequests?.receiptStatuses?.().catch(()=>[]) ?? []);
+    const stateByAudit = new Map(currentStates.map(request=>[request.auditId,request]));
+    const customerIds = currentStates.map(request => request.platformCustomerId).filter(Boolean) as string[];
+    const customerCodes = currentStates.map(request => request.platformCustomerCode).filter(Boolean) as string[];
+    const customers = customerIds.length || customerCodes.length ? await this.prisma.customer.findMany({
+      where: {
+        organizationId: user.organizationId,
+        OR: [
+          ...(customerIds.length ? [{ id: { in: customerIds } }] : []),
+          ...(customerCodes.length ? [{ externalCustomerCode: { in: customerCodes } }] : []),
+        ],
+      },
+      select: { id: true, name: true, externalCustomerCode: true },
+    }) : [];
+    const customerById = new Map(customers.map((customer) => [customer.id, customer]));
+    const customerByCode = new Map(customers.map((customer) => [customer.externalCustomerCode, customer]));
+    const collectorByNo = new Map(collectors
+      .filter((collector) => collector.oracleCollectorNo !== null)
+      .map((collector) => [String(collector.oracleCollectorNo), collector]));
+
+    const oracleItems = durableReceipts.flatMap(({ row, request: original }) => {
+      const request = stateByAudit.get(row.id);
+      if (!request || !countableReceiptRequest(request)) return [];
+      const customer = request.platformCustomerId ? customerById.get(request.platformCustomerId)
+        : request.platformCustomerCode ? customerByCode.get(request.platformCustomerCode) : null;
+      const mappedCollector = request.collectorNo ? collectorByNo.get(String(request.collectorNo)) : null;
+      const creatorCollector = row.user?.collector?.active ? row.user.collector : null;
+      const collector = mappedCollector ?? (creatorCollector ? {
+        id: creatorCollector.id,
+        oracleCollectorNo: creatorCollector.oracleCollectorNo,
+        user: { fullName: row.user?.fullName ?? 'محصل غير معروف' },
+      } : null);
+      return [{
+        id: `oracle-receipt:${request.requestSerial}`,
+        customerId: customer?.id ?? null,
+        currencyCode: request.currencyCode as string,
+        amount: request.amount as number,
+        collectedAt: request.createdAt,
+        status: request.status,
+        receiptNumber: request.requestNo,
+        referenceNumber: request.requestSerial,
+        notes: `طلب سند قبض Oracle — ${request.statusLabel}`,
+        statusVerified: request.statusVerified,
+        customer: customer ?? {
+          id: null,
+          name: request.recipientName ?? request.platformCustomerCode ?? 'عميل غير محدد',
+          externalCustomerCode: request.platformCustomerCode,
+        },
+        collector: collector ? { id: collector.id, user: { fullName: collector.user.fullName } }
+          : { id: null, user: { fullName: row.user?.fullName ?? 'محصل غير محدد' } },
+        method: { name: `طلب سند قبض Oracle — ${request.statusLabel}` },
+        branch: null,
+        source: 'oracle_receipt_request',
+      }];
+    });
+    const items = [...collections.map((collection) => ({ ...collection, source: 'platform_collection' })),
+      ...oracleItems, ...directReceipts]
+      .sort((a, b) => new Date(b.collectedAt).getTime() - new Date(a.collectedAt).getTime());
+    const totalsByCurrency: Record<string, number> = {};
+    const recordedTotalsByCurrency: Record<string,number> = {};
+    const requestTotalsByCurrency: Record<string,number> = {};
+    for (const item of items) {
+      totalsByCurrency[item.currencyCode] = (totalsByCurrency[item.currencyCode] ?? 0) + Number(item.amount);
+      const totals = item.source === 'oracle_receipt_request' ? requestTotalsByCurrency : recordedTotalsByCurrency;
+      totals[item.currencyCode] = (totals[item.currencyCode] ?? 0) + Number(item.amount);
+    }
+    return {
+      day,
+      total: items.length,
+      totalsByCurrency,
+      recordedTotalsByCurrency, requestTotalsByCurrency,
+      items,
+      sources: { platform: collections.length, oracleReceiptRequests: oracleItems.length },
+    };
+  }
+
 
   async findOne(user: AuthUser, id: string) {
     const where = await this.scope(user);

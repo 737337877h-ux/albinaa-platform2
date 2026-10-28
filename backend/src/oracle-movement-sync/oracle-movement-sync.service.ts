@@ -21,12 +21,12 @@ export class OracleMovementSyncService {
         for (let index = 0; index < snapshot.inventoryMovements.length; index += 250) {
           await tx.oracleInventoryMovementMirror.createMany({ data: snapshot.inventoryMovements.slice(index,index+250).map((row) => ({ ...row, syncRunId: run.id, organizationId: options.organizationId })) });
         }
-        await tx.oracleMovementSyncRun.update({ where: { id: run.id }, data: { status: 'validating', loadedCounts: snapshot.sourceCounts as Prisma.InputJsonValue, validationSummary: snapshot.validationSummary as Prisma.InputJsonValue } });
+        await tx.oracleMovementSyncRun.update({ where: { id: run.id }, data: { status: 'validated', validatedAt: new Date(), loadedCounts: snapshot.sourceCounts as Prisma.InputJsonValue, validationSummary: snapshot.validationSummary as Prisma.InputJsonValue } });
       }, { maxWait: 20_000, timeout: 600_000 });
     } catch (error) {
       await this.prisma.oracleMovementSyncRun.update({ where: { id: run.id }, data: { status: 'failed', errorSummary: { type: error instanceof Error ? error.name : 'UnknownError', message: 'Movement mirror loading failed; see protected logs.' } } });
       throw error;
     }
-    return { applied: true, syncRunId: run.id, status: 'validating', counts: snapshot.sourceCounts, validationSummary: snapshot.validationSummary };
+    return { applied: true, syncRunId: run.id, status: 'validated', counts: snapshot.sourceCounts, validationSummary: snapshot.validationSummary };
   }
 }

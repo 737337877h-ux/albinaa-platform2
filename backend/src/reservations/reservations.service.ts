@@ -1,14 +1,14 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
-import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { IssueReservationDto } from './dto/issue-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
 import { CreateUnitDto, UpdateUnitDto } from './dto/manage-unit.dto';
+import { RESERVATION_ITEM_STANDARDS } from './reservation-catalog';
 
 export function reservationWeightTons(quantity: number, weightKg: number | null): number | null {
   return weightKg === null ? null : quantity * weightKg / 1000;
@@ -28,7 +28,6 @@ export class ReservationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
-    private readonly notifications: NotificationsService,
   ) {}
 
   private async assertCustomerInOrg(actor: AuthUser, customerId: string) {
@@ -80,6 +79,10 @@ export class ReservationsService {
       nameAr: unit.nameAr,
       weightKg: unit.weightKg === null ? null : Number(unit.weightKg),
     }));
+  }
+
+  approvedItems() {
+    return RESERVATION_ITEM_STANDARDS;
   }
 
   async listAllUnits() {
@@ -167,6 +170,7 @@ export class ReservationsService {
           r.customer_id,
           r.currency_code,
           COALESCE(r.remaining_qty, r.quantity, 0) AS qty,
+          COALESCE(r.remaining_tons, COALESCE(r.remaining_qty, r.quantity, 0) * u.weight_kg / 1000, 0) AS tons,
           COALESCE(r.unit_price, 0) AS unit_price,
           r.expires_at,
           u.name_ar AS unit_name,
@@ -181,7 +185,7 @@ export class ReservationsService {
       SELECT
         (SELECT COUNT(*) FROM active) AS active_count,
         (SELECT COUNT(DISTINCT customer_id) FROM active) AS customer_count,
-        (SELECT COALESCE(SUM(qty * weight_kg / 1000), 0) FROM active WHERE weight_kg IS NOT NULL) AS total_tons,
+        (SELECT COALESCE(SUM(tons), 0) FROM active) AS total_tons,
         (SELECT COUNT(*) FROM active WHERE expires_at BETWEEN CURRENT_DATE AND CURRENT_DATE + 7) AS expiring_in_7_days,
         (SELECT COALESCE(jsonb_agg(jsonb_build_object('currency', currency_code, 'amount', amount) ORDER BY currency_code), '[]'::jsonb)
           FROM (SELECT currency_code, SUM(qty * unit_price) AS amount FROM active GROUP BY currency_code) currency_totals
@@ -195,7 +199,7 @@ export class ReservationsService {
             SELECT
               currency_code,
               SUM(qty * unit_price) AS total_amount,
-              SUM(qty * weight_kg / 1000) AS total_tons
+              SUM(tons) AS total_tons
             FROM active
             WHERE weight_kg IS NOT NULL
             GROUP BY currency_code
@@ -230,13 +234,14 @@ export class ReservationsService {
   }
 
   async findAll(actor: AuthUser, customerId?: string) {
-    return this.prisma.reservation.findMany({
+    const rows = await this.prisma.reservation.findMany({
       where: {
         customer: { organizationId: actor.organizationId },
         ...(customerId ? { customerId } : {}),
       },
       include: {
         measureUnit: true,
+        adjustments: { orderBy: { createdAt: 'desc' }, take: 30 },
         customer: {
           select: {
             id: true,
@@ -252,6 +257,57 @@ export class ReservationsService {
       },
       orderBy: { reservedAt: 'desc' },
     });
+    return rows.map((row) => ['cancelled', 'completed', 'fulfilled'].includes(row.status)
+      ? { ...row, remainingQty: new Prisma.Decimal(0), remainingTons: new Prisma.Decimal(0) }
+      : row);
+  }
+
+  async searchCustomerOptions(actor: AuthUser, rawSearch: string) {
+    const search = rawSearch.trim();
+    if (search.length < 2) {
+      throw new BadRequestException('اكتب حرفين على الأقل للبحث عن العميل');
+    }
+    const normalized = search
+      .normalize('NFKC')
+      .replace(/[إأآا]/g, 'ا')
+      .replace(/ى/g, 'ي')
+      .replace(/ة/g, 'ه')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const rows = await this.prisma.customer.findMany({
+      where: {
+        organizationId: actor.organizationId,
+        status: { notIn: ['merged', 'import_reversed'] },
+        OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+        AND: [{
+          OR: [
+            { name: { contains: search, mode: 'insensitive' } },
+            { nameNormalized: { contains: normalized } },
+            { tradeName: { contains: search, mode: 'insensitive' } },
+            { externalCustomerCode: { contains: search, mode: 'insensitive' } },
+            { accountNumber: { contains: search, mode: 'insensitive' } },
+            { phonePrimary: { contains: search } },
+            { phoneSecondary: { contains: search } },
+            { whatsapp: { contains: search } },
+          ],
+        }],
+      },
+      take: 20,
+      select: {
+        id: true,
+        name: true,
+        externalCustomerCode: true,
+        accountNumber: true,
+      },
+    });
+    rows.sort((left, right) => {
+      const leftCode = left.externalCustomerCode ?? left.accountNumber ?? '';
+      const rightCode = right.externalCustomerCode ?? right.accountNumber ?? '';
+      const leftExact = leftCode.toLowerCase() === search.toLowerCase() ? 0 : 1;
+      const rightExact = rightCode.toLowerCase() === search.toLowerCase() ? 0 : 1;
+      return leftExact - rightExact || left.name.localeCompare(right.name, 'ar');
+    });
+    return { items: rows.slice(0, 10) };
   }
 
   async findOne(actor: AuthUser, id: string) {
@@ -260,54 +316,15 @@ export class ReservationsService {
 
   async create(actor: AuthUser, dto: CreateReservationDto, req?: Request) {
     await this.assertCustomerInOrg(actor, dto.customerId);
-
-    const currency = await this.prisma.currency.findUnique({ where: { code: dto.currencyCode } });
-    if (!currency) throw new BadRequestException('Unknown currency code');
-
-    const totalAmount = dto.quantity * dto.unitPrice;
-    const unit = await this.resolveUnit(dto.unitId, dto.unit);
-
-    const [balance, limit, policy, activeReservations] = await Promise.all([
-      this.prisma.customerBalance.findUnique({
-        where: { customerId_currencyCode: { customerId: dto.customerId, currencyCode: dto.currencyCode } },
-        include: { lastImportJob: { select: { importedAt: true } } },
-      }),
-      this.prisma.customerCreditLimit.findUnique({
-        where: { customerId_currencyCode: { customerId: dto.customerId, currencyCode: dto.currencyCode } },
-      }),
-      this.prisma.customerCreditPolicy.findUnique({ where: { customerId: dto.customerId } }),
-      this.prisma.reservation.findMany({
-        where: { customerId: dto.customerId, currencyCode: dto.currencyCode, status: { in: ['open', 'partial'] } },
-        select: { remainingQty: true, quantity: true, unitPrice: true },
-      }),
-    ]);
-    let ledgerDelta = 0;
-    if (balance) {
-      const ledger = await this.prisma.operationalLedger.aggregate({
-        _sum: { amountSigned: true },
-        where: {
-          customerId: dto.customerId, currencyCode: dto.currencyCode,
-          ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
-        },
-      });
-      ledgerDelta = Number(ledger._sum.amountSigned ?? 0);
-    }
-    const currentDebt = Math.max(0, Number(balance?.accountingBalance ?? 0) + ledgerDelta);
-    const reservedExposure = activeReservations.reduce((sum, row) =>
-      sum + Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.unitPrice ?? 0), 0);
-    const projectedExposure = currentDebt + reservedExposure + totalAmount;
-    const limitAmount = limit && limit.effectiveFrom <= new Date() ? Number(limit.amount) : null;
-    const restricted = policy?.creditStatus === 'restricted' || policy?.creditStatus === 'blocked';
-    const exceedsLimit = limitAmount !== null && projectedExposure > limitAmount;
-    const overrideUsed = restricted || exceedsLimit;
-    if (overrideUsed && !actor.permissions.includes('credit.override')) {
-      throw new ForbiddenException(restricted
-        ? 'الحساب الائتماني مقيّد؛ يلزم تفويض تجاوز موثق'
-        : `الحجز يرفع التعرض إلى ${projectedExposure} ${dto.currencyCode} متجاوزًا السقف ${limitAmount}`);
-    }
-    if (overrideUsed && !dto.overrideReason?.trim()) {
-      throw new BadRequestException('سبب تجاوز سقف الائتمان إلزامي');
-    }
+    const currencyCode = dto.currencyCode.trim().toUpperCase();
+    const currency = await this.prisma.currency.findUnique({ where: { code: currencyCode } });
+    if (!currency) throw new BadRequestException('عملة النظام الأساسية غير مهيأة');
+    const tonUnit = dto.unitId || dto.unit
+      ? await this.resolveUnit(dto.unitId, dto.unit)
+      : await this.prisma.unit.findFirst({
+          where: { isActive: true, OR: [{ code: { in: ['TON', 'T'] } }, { nameAr: { contains: 'طن' } }] },
+          orderBy: { code: 'asc' },
+        });
 
     const reservation = await this.prisma.reservation.create({
       data: {
@@ -315,15 +332,17 @@ export class ReservationsService {
         // Legacy required column from the pre-PR-F credit-reservation shape — unused by goods
         // reservations, kept at 0 rather than relaxing the NOT NULL constraint on old data.
         creditAmount: 0,
-        itemName: dto.itemName,
-        itemType: dto.itemType,
-        quantity: dto.quantity,
-        unit: unit.nameAr,
-        unitId: unit.id,
+        itemName: dto.itemName?.trim() || null,
+        itemType: dto.itemType?.trim() || 'aggregate_tons',
+        quantity: dto.totalTons,
+        unit: tonUnit?.nameAr ?? 'طن',
+        unitId: tonUnit?.id ?? null,
         unitPrice: dto.unitPrice,
-        totalAmount,
-        remainingQty: dto.quantity,
-        currencyCode: dto.currencyCode,
+        totalAmount: dto.totalTons * dto.unitPrice,
+        remainingQty: dto.totalTons,
+        totalTons: dto.totalTons,
+        remainingTons: dto.totalTons,
+        currencyCode,
         warehouse: dto.warehouse,
         documentNumber: dto.documentNumber,
         notes: dto.notes,
@@ -335,28 +354,16 @@ export class ReservationsService {
     await this.audit.log({
       userId: actor.id, action: 'reservation_created', entityTable: 'reservations', entityId: reservation.id,
       newValue: {
-        customerId: dto.customerId, itemName: dto.itemName, quantity: dto.quantity,
-        unitId: unit.id, unit: unit.nameAr, unitPrice: dto.unitPrice, totalAmount, currencyCode: dto.currencyCode,
-        creditControl: { currentDebt, reservedExposure, projectedExposure, limitAmount, overrideUsed },
+        customerId: dto.customerId,
+        totalTons: dto.totalTons,
+        unitPrice: dto.unitPrice,
+        totalAmount: dto.totalTons * dto.unitPrice,
+        currencyCode,
+        unit: 'طن',
+        approvedItemAssignment: 'deferred_until_sales_invoice',
       },
-      reason: overrideUsed ? dto.overrideReason : undefined,
       req,
     });
-    if (overrideUsed) {
-      await this.notifications.notifyFinance(actor.organizationId, 'credit_limit_overridden', {
-        reservationId: reservation.id,
-        customerId: dto.customerId,
-        amount: totalAmount,
-        currency: dto.currencyCode,
-        currentDebt,
-        reservedExposure,
-        projectedExposure,
-        limitAmount,
-        reason: dto.overrideReason?.trim(),
-        actorName: actor.fullName,
-        href: `/customers/${dto.customerId}`,
-      });
-    }
     this.invalidateSummary(actor.organizationId);
     return reservation;
   }
@@ -391,7 +398,7 @@ export class ReservationsService {
     if (before.status === 'cancelled' || before.status === 'completed') {
       throw new BadRequestException(`Reservation is not open for issuing (status: "${before.status}")`);
     }
-    const remaining = Number(before.remainingQty);
+    const remaining = Number(before.remainingTons ?? before.remainingQty ?? before.quantity ?? 0);
     if (dto.qty > remaining) {
       throw new BadRequestException(`Issue quantity (${dto.qty}) exceeds remaining quantity (${remaining})`);
     }
@@ -402,7 +409,12 @@ export class ReservationsService {
 
     const reservation = await this.prisma.reservation.update({
       where: { id },
-      data: { issuedQty: newIssuedQty, remainingQty: newRemainingQty, status: newStatus },
+      data: {
+        issuedQty: newIssuedQty,
+        remainingQty: newRemainingQty,
+        remainingTons: newRemainingQty,
+        status: newStatus,
+      },
     });
 
     await this.audit.log({

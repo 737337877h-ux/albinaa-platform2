@@ -1,3 +1,5 @@
+import {BadRequestException} from '@nestjs/common';
+import {customerExportCsv,customerExportWorkbook} from './customer-export';
 import {
   Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res,
 } from '@nestjs/common';
@@ -38,6 +40,24 @@ export class CustomersController {
   })
   findAll(@CurrentUser() user: AuthUser, @Query() q: QueryCustomersDto) {
     return this.customers.findAll(user, q);
+  }
+
+  @Get('export/full')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'تصدير بيانات العملاء الكاملة ضمن نطاق صلاحيات المستخدم' })
+  async exportFull(@CurrentUser() user: AuthUser, @Res() res: Response, @Query('format') format?: string) {
+    if(format && format!=='csv' && format!=='xlsx')throw new BadRequestException('صيغة التصدير غير مدعومة');
+    const rows=await this.customers.exportFull(user);
+    const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Aden',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    if(format==='xlsx'){
+      const buffer=await customerExportWorkbook(rows);
+      res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition',`attachment; filename="albinaa-customers-${day}.xlsx"`);
+      res.send(buffer);return;
+    }
+    res.setHeader('Content-Type','text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition',`attachment; filename="albinaa-customers-${day}.csv"`);
+    res.send(customerExportCsv(rows));
   }
 
   @Get('duplicates')
@@ -96,6 +116,15 @@ export class CustomersController {
     @Req() req: Request,
   ) {
     return this.customers.reviewFinancialAdjustmentRequest(user, requestId, dto, req);
+  }
+
+  @Get('financial-adjustment-requests/:requestId/journal-draft')
+  @RequirePermissions('oracle_test_requests.journal.create')
+  financialAdjustmentJournalDraft(
+    @CurrentUser() user: AuthUser,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+  ) {
+    return this.customers.financialAdjustmentJournalDraft(user, requestId);
   }
 
   @Patch('duplicates/:pairId')
@@ -273,6 +302,7 @@ export class CustomersController {
     @Res() res: Response,
   ) {
     const buffer = await this.customers.statementPdf(user, id, q);
+    res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="customer-statement-${id}-${q.currency}.pdf"`);
     res.send(buffer);

@@ -1,17 +1,18 @@
 'use client';
+import {notificationHref} from '@/lib/notification-target';
+import {KIND_AR,describeNotification} from '@/lib/notification-presentation';
 import { useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BellOff, Check, CheckCheck } from 'lucide-react';
 import { api } from '@/lib/api';
-import { fmtDateTime, fmtMoney } from '@/lib/format';
+import { fmtDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/app-shell';
 import { DataState } from '@/components/ui/data-state';
 import { toast } from '@/components/ui/toast';
 import { Badge, Button, Card, Pagination } from '@/components/ui/primitives';
-import { notificationHref } from '@/lib/notification-target';
-import { financialAdjustmentDecisionAr, financialAdjustmentTypeAr, isFinancialAdjustmentEvent } from '@/lib/financial-adjustment';
+import { isFinancialAdjustmentEvent } from '@/lib/financial-adjustment';
 
 /* ────────────────────────────── Types ────────────────────────────────── */
 
@@ -33,111 +34,6 @@ interface NotificationsResponse {
 }
 
 /* ────────────────────────────── Helpers ──────────────────────────────── */
-
-type KindTone = 'neutral' | 'pine' | 'hazard' | 'debt';
-
-const KIND_AR: Record<string, { label: string; tone: KindTone }> = {
-  promise_due: { label: 'وعد مستحق', tone: 'hazard' },
-  promise_overdue: { label: 'وعد متأخر', tone: 'debt' },
-  collection_created: { label: 'تحصيل جديد', tone: 'pine' },
-  collection_reversal_requested: { label: 'طلب عكس تحصيل', tone: 'debt' },
-  finance_alert: { label: 'تنبيه مالي فوري', tone: 'debt' },
-  scheduled_job_failed: { label: 'فشل مهمة مجدولة', tone: 'debt' },
-  oracle_exception_movement_published: { label: 'حركة Oracle استثنائية', tone: 'hazard' },
-  customer_transferred: { label: 'نقل عميل', tone: 'neutral' },
-};
-
-function describe(n: NotificationItem): { title: string; text: string; href?: string } {
-  const p = n.payload ?? {};
-  const customerName = (p.customerName as string | undefined) ?? '';
-  const money =
-    p.amount != null && p.currency
-      ? `${fmtMoney(p.amount as number)} ${String(p.currency)}`
-      : null;
-  const customerHref = notificationHref(n);
-
-  switch (n.kind) {
-    case 'promise_due':
-      return {
-        title: 'تذكير بوعد سداد',
-        text: money
-          ? `وعد سداد من ${customerName || 'عميل'} بمبلغ ${money}${p.dueDate ? ` — يستحق ${fmtDateTime(p.dueDate as string)}` : ''}`
-          : `وعد سداد من ${customerName || 'عميل'} يستحق قريبًا`,
-        href: customerHref,
-      };
-    case 'promise_overdue':
-      return {
-        title: 'وعد سداد متأخر',
-        text: money
-          ? `تجاوز ${customerName || 'العميل'} موعد الوفاء بوعد بمبلغ ${money}${p.reason ? ` (${p.reason})` : ''}`
-          : `تجاوز ${customerName || 'العميل'} موعد الوفاء بوعد${p.reason ? ` (${p.reason})` : ''}`,
-        href: customerHref,
-      };
-    case 'collection_created':
-      return {
-        title: 'تحصيل جديد بانتظار الاستلام',
-        text: `سُجّل تحصيل من ${customerName || ''}${money ? ` بمبلغ ${money}` : ''}${p.method ? ` — ${p.method}` : ''}${p.collectorName ? ` بواسطة ${p.collectorName}` : ''}`,
-        href: customerHref,
-      };
-    case 'collection_reversal_requested':
-      return {
-        title: 'طلب عكس يحتاج موافقة مالية',
-        text: `طُلب عكس تحصيل${money ? ` بمبلغ ${money}` : ''}${p.reason ? ` — ${p.reason}` : ''}`,
-        href: '/collections/reconciliation',
-      };
-    case 'finance_alert': {
-      if (p.event === 'financial_adjustment_requested') {
-        const type = financialAdjustmentTypeAr(p.requestType);
-        return {
-          title: `طلب ${type} يحتاج موافقة مالية`,
-          text: `${customerName || 'عميل'}${money ? ` — ${money}` : ''}${p.requesterName ? ` — مقدم الطلب: ${p.requesterName}` : ''}${p.reason ? ` — السبب: ${p.reason}` : ''}`,
-          href: notificationHref(n),
-        };
-      }
-      if (p.event === 'financial_adjustment_reviewed') {
-        const type = financialAdjustmentTypeAr(p.requestType);
-        return {
-          title: `تمت معالجة طلب ${type}`,
-          text: `${customerName || 'عميل'} — الحالة: ${financialAdjustmentDecisionAr(p.decision)}${money ? ` — ${money}` : ''}${p.reviewerName ? ` — المراجع: ${p.reviewerName}` : ''}${p.reviewNotes ? ` — الملاحظات: ${p.reviewNotes}` : ''}`,
-          href: notificationHref(n),
-        };
-      }
-      const labels: Record<string, string> = {
-        collection_reversed: 'تم عكس تحصيل',
-        manual_balance_adjustment: 'تم تعديل رصيد يدويًا',
-        credit_limit_overridden: 'تم تجاوز سقف ائتمان',
-        customer_merged: 'تم دمج سجلّي عميل',
-        import_reversed: 'تم التراجع عن دفعة استيراد',
-      };
-      const eventLabel = labels[String(p.event)] ?? 'تمت عملية مالية حساسة';
-      return {
-        title: eventLabel,
-        text: `${eventLabel}${money ? ` بمبلغ ${money}` : ''}${p.actorName ? ` بواسطة ${p.actorName}` : ''}${p.reason ? ` — ${p.reason}` : ''}`,
-        href: typeof p.href === 'string' ? p.href : undefined,
-      };
-    }
-    case 'scheduled_job_failed':
-      return {
-        title: 'تعطلت مهمة مجدولة',
-        text: `فشلت المهمة ${p.job ?? ''}${p.message ? ` — ${p.message}` : ''}`,
-        href: typeof p.href === 'string' ? p.href : '/admin/audit',
-      };
-    case 'oracle_exception_movement_published':
-      return {
-        title: String(p.title ?? 'نشر حركة Oracle استثنائية'),
-        text: String(p.message ?? 'نُشرت حركة تاريخية أو معدلة وفق Oracle مع حفظ سجل المراجعة.'),
-        href: notificationHref(n),
-      };
-    case 'customer_transferred':
-      return {
-        title: 'نُقل إليك عميل',
-        text: `نُقل إليك العميل ${customerName || ''}${p.customerCode ? ` (${p.customerCode})` : ''}${p.reason ? ` — ${p.reason}` : ''}`,
-        href: customerHref,
-      };
-    default:
-      return { title: n.kind, text: '', href: notificationHref(n) };
-  }
-}
 
 /* ────────────────────────────── Page ─────────────────────────────────── */
 
@@ -224,7 +120,7 @@ export default function NotificationsPage() {
           <ul className="divide-y divide-concrete-100 dark:divide-white/10">
             {data?.items.map((n) => {
               const meta = KIND_AR[n.kind];
-              const desc = describe(n);
+              const desc = describeNotification(n);
               const unread = !n.readAt;
               return (
                 <li key={n.id} className={cn('relative flex cursor-pointer items-start gap-3 px-4 py-3.5 hover:bg-concrete-50 dark:hover:bg-white/5', unread && 'bg-pine-50/40 dark:bg-pine-900/15')}>
@@ -240,7 +136,7 @@ export default function NotificationsPage() {
                       {meta ? (
                         <Badge tone={meta.tone}>{meta.label}</Badge>
                       ) : (
-                        <Badge>{n.kind}</Badge>
+                        <Badge>إشعار</Badge>
                       )}
                       <p className={cn('text-sm', unread ? 'font-semibold text-iron-900 dark:text-concrete-100' : 'text-concrete-600 dark:text-concrete-400')}>
                         {desc.title}

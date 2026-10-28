@@ -5,8 +5,14 @@ import { ChevronLeft } from 'lucide-react';
 
 /** تُعرَّف تسميات المسارات هنا مركزيًا مع إضافة كل صفحة جديدة. */
 const LABELS: Record<string, string> = {
+  hr: 'الموارد البشرية',
+  employees: 'الموظفون والرواتب',
+  payroll: 'كشف الموظف ومسودة الراتب',
+  requests: 'طلبات السلف والإجازات',
+  attendance: 'الحضور والانصراف',
   dashboard: 'لوحة التحكم',
   customers: 'العملاء',
+  'sales-order-drafts': 'مسودات طلبات العملاء',
   advances: 'السلف',
   followups: 'المتابعات',
   promises: 'وعود السداد',

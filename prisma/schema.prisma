@@ -30,43 +30,263 @@ model Organization {
   name      String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  branches                 Branch[]
-  users                    User[]
-  roles                    Role[]
-  documentTypes            DocumentType[]
-  customers                Customer[]
-  importTemplates          ImportTemplate[]
-  importJobs               ImportJob[]
-  collectionMethods        CollectionMethod[]
-  followupTypes            FollowupType[]
-  followupResults          FollowupResult[]
-  systemSettings           SystemSetting[]
-  analyticalAccounts       AnalyticalAccount[]
-  customerAliases          CustomerAlias[]
-  customerMerges           CustomerMerge[]
-  customerAccountLinks     CustomerAccountLink[]
-  agingSnapshots           AgingSnapshot[]
-  handoverVouchers         CollectionHandoverVoucher[]
-  messageCampaigns         MessageCampaign[]
-  assignmentChangeRequests AssignmentChangeRequest[]
+  branches                    Branch[]
+  hrEmployees                 HrEmployee[]
+  users                       User[]
+  roles                       Role[]
+  documentTypes               DocumentType[]
+  customers                   Customer[]
+  importTemplates             ImportTemplate[]
+  importJobs                  ImportJob[]
+  collectionMethods           CollectionMethod[]
+  followupTypes               FollowupType[]
+  followupResults             FollowupResult[]
+  systemSettings              SystemSetting[]
+  analyticalAccounts          AnalyticalAccount[]
+  customerAliases             CustomerAlias[]
+  customerMerges              CustomerMerge[]
+  customerAccountLinks        CustomerAccountLink[]
+  agingSnapshots              AgingSnapshot[]
+  handoverVouchers            CollectionHandoverVoucher[]
+  messageCampaigns            MessageCampaign[]
+  assignmentChangeRequests    AssignmentChangeRequest[]
   financialAdjustmentRequests FinancialAdjustmentRequest[]
-  oracleInventorySyncRuns  OracleInventorySyncRun[]
-  oracleActiveSnapshots    OracleInventoryActiveSnapshot[]
-  oracleItemGroups         OracleItemGroupMirror[]
-  oracleItems              OracleItemMirror[]
-  oracleItemUnits          OracleItemUnitMirror[]
-  oracleWarehouseGroups    OracleWarehouseGroupMirror[]
-  oracleWarehouses         OracleWarehouseMirror[]
-  oracleStockBalances      OracleStockBalanceMirror[]
-  oracleBranchMappings     OracleBranchMapping[]
-  oracleSyncIssues         OracleSyncIssue[]
-  oracleCustomerSyncRuns   OracleCustomerSyncRun[]
-  oracleCustomers          OracleCustomerMirror[]
-  oracleCustomerCurrencies OracleCustomerCurrencyMirror[]
-  oracleCustomerBalances   OracleCustomerBalanceMirror[]
-  inventoryTransferRequests InventoryTransferRequest[]
+  oracleInventorySyncRuns     OracleInventorySyncRun[]
+  oracleActiveSnapshots       OracleInventoryActiveSnapshot[]
+  oracleItemGroups            OracleItemGroupMirror[]
+  oracleItems                 OracleItemMirror[]
+  oracleItemUnits             OracleItemUnitMirror[]
+  oracleWarehouseGroups       OracleWarehouseGroupMirror[]
+  oracleWarehouses            OracleWarehouseMirror[]
+  oracleStockBalances         OracleStockBalanceMirror[]
+  oracleBranchMappings        OracleBranchMapping[]
+  oracleSyncIssues            OracleSyncIssue[]
+  oracleCustomerSyncRuns      OracleCustomerSyncRun[]
+  oracleCustomers             OracleCustomerMirror[]
+  oracleCustomerCurrencies    OracleCustomerCurrencyMirror[]
+  oracleCustomerBalances      OracleCustomerBalanceMirror[]
+  inventoryTransferRequests   InventoryTransferRequest[]
 
   @@map("organizations")
+}
+
+model HrEmployee {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employeeNo String @map("employee_no")
+  fullName String @map("full_name")
+  jobTitle String @map("job_title")
+  managerNo String? @map("manager_no")
+  active Boolean @default(true)
+  workMode String @map("work_mode")
+  attendanceExempt Boolean @default(false) @map("attendance_exempt")
+  startTime String? @map("start_time")
+  endTime String? @map("end_time")
+  breakMinutes Int @default(90) @map("break_minutes")
+  breakStartTime String? @default("13:00") @map("break_start_time")
+  breakEndTime String? @default("14:30") @map("break_end_time")
+  workDays Int[] @map("work_days")
+  notes String @default("")
+  profile Json @default("{}")
+  payrollStart DateTime @map("payroll_start") @db.Date
+  legacyInstallmentsPending Boolean @default(true) @map("legacy_installments_pending")
+  accountLinks Json @default("[]") @map("account_links")
+  version Int @default(1)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  salaries HrSalary[]
+  payrollDrafts HrPayrollDraft[]
+  loginUserId String? @unique @map("login_user_id") @db.Uuid
+  loginUser User? @relation(fields:[loginUserId],references:[id])
+  requests HrRequest[]
+  attendance HrAttendance[]
+  taskAssignments HrTaskAssignment[]
+  @@unique([organizationId, employeeNo])
+  @@map("hr_employees")
+}
+
+model HrSalary {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+  employee HrEmployee @relation(fields: [employeeId], references: [id])
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  baseSalary Decimal @map("base_salary") @db.Decimal(18,2)
+  fixedAllowance Decimal? @map("fixed_allowance") @db.Decimal(18,2)
+  currency String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  @@unique([employeeId, effectiveFrom])
+  @@map("hr_salaries")
+}
+
+model HrTask {
+ id String @id @db.Uuid
+ organizationId String @map("organization_id") @db.Uuid
+ createdBy String @map("created_by") @db.Uuid
+ title String
+ description String
+ dueDate DateTime @map("due_date") @db.Date
+ creationHash String @map("creation_hash")
+ createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+ assignments HrTaskAssignment[]
+ @@index([organizationId,dueDate])
+ @@map("hr_tasks")
+}
+model HrTaskAssignment {
+ id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+ taskId String @map("task_id") @db.Uuid
+ task HrTask @relation(fields:[taskId],references:[id])
+ employeeId String @map("employee_id") @db.Uuid
+ employee HrEmployee @relation(fields:[employeeId],references:[id])
+ status String @default("assigned")
+ completionNote String? @map("completion_note")
+ submittedAt DateTime? @map("submitted_at") @db.Timestamptz()
+ reviewNote String? @map("review_note")
+ rating Int?
+ reviewedBy String? @map("reviewed_by") @db.Uuid
+ reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz()
+ version Int @default(1)
+ lastOperationId String? @unique @map("last_operation_id") @db.Uuid
+ lastOperationHash String? @map("last_operation_hash")
+ @@unique([taskId,employeeId])
+ @@index([employeeId,status])
+ @@map("hr_task_assignments")
+}
+
+model HrAttendance {
+ id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+ employeeId String @map("employee_id") @db.Uuid
+ employee HrEmployee @relation(fields:[employeeId],references:[id])
+ workDate DateTime @map("work_date") @db.Date
+ checkIn DateTime @map("check_in") @db.Timestamptz()
+ checkOut DateTime? @map("check_out") @db.Timestamptz()
+ breakOut DateTime? @map("break_out") @db.Timestamptz()
+ breakIn DateTime? @map("break_in") @db.Timestamptz()
+ breakOutOperationId String? @unique @map("break_out_operation_id") @db.Uuid
+ breakInOperationId String? @unique @map("break_in_operation_id") @db.Uuid
+ breakOutEvidence Json? @map("break_out_evidence")
+ breakInEvidence Json? @map("break_in_evidence")
+ inOperationId String @unique @map("in_operation_id") @db.Uuid
+ outOperationId String? @unique @map("out_operation_id") @db.Uuid
+ inEvidence Json @map("in_evidence")
+ outEvidence Json? @map("out_evidence")
+ schedule Json
+ @@unique([employeeId,workDate])
+ @@map("hr_attendance")
+}
+
+model HrAttendancePolicy {
+ organizationId String @id @map("organization_id") @db.Uuid
+ startDate DateTime @map("start_date") @db.Date
+ payrollRules Json @default("[]") @map("payroll_rules")
+ version Int @default(1)
+ @@map("hr_attendance_policies")
+}
+model HrAttendanceDisplay {
+ id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+ organizationId String @map("organization_id") @db.Uuid
+ tokenHash String @unique @map("token_hash")
+ createdBy String @map("created_by") @db.Uuid
+ createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+ revokedAt DateTime? @map("revoked_at") @db.Timestamptz()
+ @@map("hr_attendance_displays")
+}
+model HrPushDelivery {
+ id String @id @db.Uuid
+ userId String @map("user_id") @db.Uuid
+ kind String
+ payload Json
+ status String @default("queued")
+ attempts Int @default(0)
+ nextAttempt DateTime @default(now()) @map("next_attempt") @db.Timestamptz()
+ result Json?
+ @@index([status,nextAttempt])
+ @@map("hr_push_deliveries")
+}
+
+model HrRequest {
+ id String @id @db.Uuid
+ employeeId String @map("employee_id") @db.Uuid
+ employee HrEmployee @relation(fields:[employeeId],references:[id])
+ submittedBy String @map("submitted_by") @db.Uuid
+ kind String
+ amount Decimal? @db.Decimal(18,2)
+ currency String?
+ startDate DateTime? @map("start_date") @db.Date
+ endDate DateTime? @map("end_date") @db.Date
+ leaveType String? @map("leave_type")
+ reason String
+ monthlyInstallment Decimal? @map("monthly_installment") @db.Decimal(18,2)
+ installmentStartMonth String? @map("installment_start_month")
+ status String @default("pending")
+ decisionReason String? @map("decision_reason")
+ reviewedBy String? @map("reviewed_by") @db.Uuid
+ reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz()
+ version Int @default(1)
+ createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+ @@index([employeeId,createdAt])
+ @@map("hr_requests")
+}
+
+model HrEmployeeDocument {
+ id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+ employeeId String @map("employee_id") @db.Uuid
+ name String
+ mime String
+ content Bytes
+ expiresOn DateTime? @map("expires_on") @db.Date
+ createdBy String @map("created_by") @db.Uuid
+ createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+ @@index([employeeId])
+ @@map("hr_employee_documents")
+}
+
+model HrAbsenceReview {
+ id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+ employeeId String @map("employee_id") @db.Uuid
+ workDate DateTime @map("work_date") @db.Date
+ status String
+ reason String
+ reviewedBy String @map("reviewed_by") @db.Uuid
+ reviewedAt DateTime @default(now()) @map("reviewed_at") @db.Timestamptz()
+ version Int @default(1)
+ @@unique([employeeId,workDate])
+ @@map("hr_absence_reviews")
+}
+
+model HrPayrollApproval {
+ id String @id @db.Uuid
+ organizationId String @map("organization_id") @db.Uuid
+ month String
+ revision Int
+ status String @default("approved")
+ snapshot Json
+ reviewHash String @map("review_hash")
+ reason String
+ approvedBy String @map("approved_by") @db.Uuid
+ approvedAt DateTime @default(now()) @map("approved_at") @db.Timestamptz()
+ reopenedBy String? @map("reopened_by") @db.Uuid
+ reopenedAt DateTime? @map("reopened_at") @db.Timestamptz()
+ reopenReason String? @map("reopen_reason")
+ reopenOperationId String? @unique @map("reopen_operation_id") @db.Uuid
+ version Int @default(1)
+ @@unique([organizationId,month,revision])
+ @@index([organizationId,month,status])
+ @@map("hr_payroll_approvals")
+}
+
+model HrPayrollDraft {
+ id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+ employeeId String @map("employee_id") @db.Uuid
+ employee HrEmployee @relation(fields:[employeeId],references:[id])
+ month String
+ inputs Json
+ calculation Json
+ snapshotHash String @map("snapshot_hash")
+ version Int @default(1)
+ updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+ @@unique([employeeId,month])
+ @@map("hr_payroll_drafts")
 }
 
 model Branch {
@@ -94,6 +314,7 @@ model Branch {
 // 2) المستخدمون والأدوار والصلاحيات (RBAC)
 // ---------------------------------------------------------------------------
 model User {
+  hrEmployee HrEmployee?
   id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   organizationId String    @map("organization_id") @db.Uuid
   branchId       String?   @map("branch_id") @db.Uuid
@@ -108,48 +329,49 @@ model User {
   organization Organization @relation(fields: [organizationId], references: [id])
   branch       Branch?      @relation(fields: [branchId], references: [id])
 
-  collector                        Collector?
-  userRoles                        UserRole[]                   @relation("UserOwnRoles")
-  rolesGranted                     UserRole[]                   @relation("RoleGranter")
-  assignmentsMade                  CustomerAssignment[]         @relation("AssignmentMaker")
-  creditDecisions                  CustomerCreditPolicy[]       @relation("CreditDecider")
-  creditLimitApprovals             CustomerCreditLimit[]        @relation("CreditLimitApprover")
-  collectorTargetsSet              CollectorTarget[]            @relation("CollectorTargetSetter")
-  duplicateReviews                 PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
-  customerMergesCreated            CustomerMerge[]              @relation("CustomerMergeCreator")
-  customerMergesReversed           CustomerMerge[]              @relation("CustomerMergeReverser")
-  importTemplates                  ImportTemplate[]
-  importJobs                       ImportJob[]
-  importJobsReversed               ImportJob[]                  @relation("ImportJobReverser")
-  ledgerEntries                    OperationalLedger[]
-  reconciliationsDone              BalanceReconciliation[]      @relation("ReconReviewer")
-  cashReceived                     CashHandover[]
-  handoverVouchersCreated          CollectionHandoverVoucher[]  @relation("HandoverVoucherCreator")
-  handoverVouchersMatched          CollectionHandoverVoucher[]  @relation("HandoverVoucherMatcher")
-  handoverVouchersApproved         CollectionHandoverVoucher[]  @relation("HandoverVoucherApprover")
-  reversalRequestsMade             CollectionReversalRequest[]  @relation("CollectionReversalRequester")
-  reversalRequestsReviewed         CollectionReversalRequest[]  @relation("CollectionReversalReviewer")
-  followups                        Followup[]
-  tasksCreated                     Task[]                       @relation("TaskCreator")
-  reservationsCreated              Reservation[]                @relation("ReservationCreator")
-  analyticalAccountsCreated        AnalyticalAccount[]          @relation("AnalyticalAccountCreator")
-  messageCampaignsCreated          MessageCampaign[]            @relation("MessageCampaignCreator")
-  attachments                      Attachment[]
-  gpsLogs                          GpsLog[]
-  notifications                    Notification[]
-  pushTokens                       DevicePushToken[]
-  auditLogs                        AuditLog[]
-  authSessions                     AuthSession[]
-  assignmentChangeRequestsMade     AssignmentChangeRequest[]    @relation("AssignmentChangeRequester")
-  assignmentChangeRequestsReviewed AssignmentChangeRequest[]    @relation("AssignmentChangeReviewer")
+  collector                           Collector?
+  userRoles                           UserRole[]                   @relation("UserOwnRoles")
+  rolesGranted                        UserRole[]                   @relation("RoleGranter")
+  assignmentsMade                     CustomerAssignment[]         @relation("AssignmentMaker")
+  creditDecisions                     CustomerCreditPolicy[]       @relation("CreditDecider")
+  creditLimitApprovals                CustomerCreditLimit[]        @relation("CreditLimitApprover")
+  collectorTargetsSet                 CollectorTarget[]            @relation("CollectorTargetSetter")
+  duplicateReviews                    PotentialDuplicateCustomer[] @relation("DuplicateReviewer")
+  customerMergesCreated               CustomerMerge[]              @relation("CustomerMergeCreator")
+  customerMergesReversed              CustomerMerge[]              @relation("CustomerMergeReverser")
+  importTemplates                     ImportTemplate[]
+  importJobs                          ImportJob[]
+  importJobsReversed                  ImportJob[]                  @relation("ImportJobReverser")
+  ledgerEntries                       OperationalLedger[]
+  reconciliationsDone                 BalanceReconciliation[]      @relation("ReconReviewer")
+  cashReceived                        CashHandover[]
+  handoverVouchersCreated             CollectionHandoverVoucher[]  @relation("HandoverVoucherCreator")
+  handoverVouchersMatched             CollectionHandoverVoucher[]  @relation("HandoverVoucherMatcher")
+  handoverVouchersApproved            CollectionHandoverVoucher[]  @relation("HandoverVoucherApprover")
+  reversalRequestsMade                CollectionReversalRequest[]  @relation("CollectionReversalRequester")
+  reversalRequestsReviewed            CollectionReversalRequest[]  @relation("CollectionReversalReviewer")
+  followups                           Followup[]
+  tasksCreated                        Task[]                       @relation("TaskCreator")
+  reservationsCreated                 Reservation[]                @relation("ReservationCreator")
+  analyticalAccountsCreated           AnalyticalAccount[]          @relation("AnalyticalAccountCreator")
+  messageCampaignsCreated             MessageCampaign[]            @relation("MessageCampaignCreator")
+  attachments                         Attachment[]
+  gpsLogs                             GpsLog[]
+  notifications                       Notification[]
+  pushTokens                          DevicePushToken[]
+  deviceSessions                      MobileDeviceSession[]
+  auditLogs                           AuditLog[]
+  authSessions                        AuthSession[]
+  assignmentChangeRequestsMade        AssignmentChangeRequest[]    @relation("AssignmentChangeRequester")
+  assignmentChangeRequestsReviewed    AssignmentChangeRequest[]    @relation("AssignmentChangeReviewer")
   financialAdjustmentRequestsMade     FinancialAdjustmentRequest[] @relation("FinancialAdjustmentRequester")
   financialAdjustmentRequestsReviewed FinancialAdjustmentRequest[] @relation("FinancialAdjustmentReviewer")
-  oracleSyncRunsTriggered          OracleInventorySyncRun[]     @relation("OracleSyncTriggeredBy")
-  oracleCustomerSyncRunsTriggered  OracleCustomerSyncRun[]      @relation("OracleCustomerSyncTriggeredBy")
-  inventoryTransfersCreated         InventoryTransferRequest[]   @relation("InventoryTransferCreator")
-  inventoryTransfersSubmitted       InventoryTransferRequest[]   @relation("InventoryTransferSubmitter")
-  inventoryTransfersReviewed        InventoryTransferRequest[]   @relation("InventoryTransferReviewer")
-  oracleBranchMappingsVerified     OracleBranchMapping[]        @relation("OracleBranchMappingVerifiedBy")
+  oracleSyncRunsTriggered             OracleInventorySyncRun[]     @relation("OracleSyncTriggeredBy")
+  oracleCustomerSyncRunsTriggered     OracleCustomerSyncRun[]      @relation("OracleCustomerSyncTriggeredBy")
+  inventoryTransfersCreated           InventoryTransferRequest[]   @relation("InventoryTransferCreator")
+  inventoryTransfersSubmitted         InventoryTransferRequest[]   @relation("InventoryTransferSubmitter")
+  inventoryTransfersReviewed          InventoryTransferRequest[]   @relation("InventoryTransferReviewer")
+  oracleBranchMappingsVerified        OracleBranchMapping[]        @relation("OracleBranchMappingVerifiedBy")
 
   @@unique([organizationId, username], map: "uq_users_org_username")
   @@map("users")
@@ -205,10 +427,11 @@ model UserRole {
 }
 
 model Collector {
-  id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId   String  @unique @map("user_id") @db.Uuid
-  branchId String? @map("branch_id") @db.Uuid
-  active   Boolean @default(true)
+  id                String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String  @unique @map("user_id") @db.Uuid
+  branchId          String? @map("branch_id") @db.Uuid
+  oracleCollectorNo Int?    @unique(map: "uq_collectors_oracle_collector_no") @map("oracle_collector_no") @db.SmallInt
+  active            Boolean @default(true)
 
   user   User    @relation(fields: [userId], references: [id])
   branch Branch? @relation(fields: [branchId], references: [id])
@@ -327,33 +550,33 @@ model Customer {
   mergedInto    Customer?    @relation("CustomerMergeTarget", fields: [mergedIntoId], references: [id])
   mergedSources Customer[]   @relation("CustomerMergeTarget")
 
-  balances                 CustomerBalance[]
-  creditPolicy             CustomerCreditPolicy?
-  creditLimits             CustomerCreditLimit[]
-  assignments              CustomerAssignment[]
-  importedTxns             ImportedTransaction[]
-  balanceSnapshots         BalanceSnapshot[]
-  ledgerEntries            OperationalLedger[]
-  reconciliations          BalanceReconciliation[]
-  followups                Followup[]
-  promises                 PaymentPromise[]
-  collections              Collection[]
-  reservations             Reservation[]
-  tasks                    Task[]
-  scores                   CustomerScore[]
-  duplicatesAsA            PotentialDuplicateCustomer[] @relation("DupCustomerA")
-  duplicatesAsB            PotentialDuplicateCustomer[] @relation("DupCustomerB")
-  agingRows                DebtAgingSummary[]
-  agingDocuments           DebtAgingDetail[]
-  aliases                  CustomerAlias[]              @relation("CustomerAliasTarget")
-  aliasesFromMerge         CustomerAlias[]              @relation("CustomerAliasSource")
-  mergeOperationsAsMaster  CustomerMerge[]              @relation("CustomerMergeMaster")
-  mergeOperationsAsSource  CustomerMerge[]              @relation("CustomerMergeSource")
-  primaryAccountLinks      CustomerAccountLink[]        @relation("PrimaryCustomerAccount")
-  childAccountLink         CustomerAccountLink?         @relation("ChildCustomerAccount")
-  agingSnapshots           AgingSnapshot[]
-  messageDispatches        MessageDispatch[]
-  assignmentChangeRequests AssignmentChangeRequest[]
+  balances                    CustomerBalance[]
+  creditPolicy                CustomerCreditPolicy?
+  creditLimits                CustomerCreditLimit[]
+  assignments                 CustomerAssignment[]
+  importedTxns                ImportedTransaction[]
+  balanceSnapshots            BalanceSnapshot[]
+  ledgerEntries               OperationalLedger[]
+  reconciliations             BalanceReconciliation[]
+  followups                   Followup[]
+  promises                    PaymentPromise[]
+  collections                 Collection[]
+  reservations                Reservation[]
+  tasks                       Task[]
+  scores                      CustomerScore[]
+  duplicatesAsA               PotentialDuplicateCustomer[] @relation("DupCustomerA")
+  duplicatesAsB               PotentialDuplicateCustomer[] @relation("DupCustomerB")
+  agingRows                   DebtAgingSummary[]
+  agingDocuments              DebtAgingDetail[]
+  aliases                     CustomerAlias[]              @relation("CustomerAliasTarget")
+  aliasesFromMerge            CustomerAlias[]              @relation("CustomerAliasSource")
+  mergeOperationsAsMaster     CustomerMerge[]              @relation("CustomerMergeMaster")
+  mergeOperationsAsSource     CustomerMerge[]              @relation("CustomerMergeSource")
+  primaryAccountLinks         CustomerAccountLink[]        @relation("PrimaryCustomerAccount")
+  childAccountLink            CustomerAccountLink?         @relation("ChildCustomerAccount")
+  agingSnapshots              AgingSnapshot[]
+  messageDispatches           MessageDispatch[]
+  assignmentChangeRequests    AssignmentChangeRequest[]
   financialAdjustmentRequests FinancialAdjustmentRequest[]
 
   @@unique([organizationId, externalCustomerCode], map: "uq_customers_org_code")
@@ -490,6 +713,8 @@ model FinancialAdjustmentRequest {
   status          String    @default("pending")
   reviewedBy      String?   @map("reviewed_by") @db.Uuid
   reviewNotes     String?   @map("review_notes")
+  journalDraft    Json?     @map("journal_draft") @db.JsonB
+  journalStatus   String?   @map("journal_status")
   reviewedAt      DateTime? @map("reviewed_at") @db.Timestamptz()
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz()
@@ -1045,6 +1270,9 @@ model PaymentPromise {
   dueDate          DateTime @map("due_date") @db.Date
   statusReason     String?  @map("status_reason")
   fulfilledAmount  Decimal? @map("fulfilled_amount") @db.Decimal(18, 4)
+  settlementDate   DateTime? @map("settlement_date") @db.Date
+  settledLate      Boolean  @default(false) @map("settled_late")
+  missedDueDate    DateTime? @map("missed_due_date") @db.Date
   expectedAmount   Decimal  @map("expected_amount") @db.Decimal(18, 4)
   currencyCode     String   @map("currency_code")
   expectedMethodId String?  @map("expected_method_id") @db.Uuid
@@ -1057,11 +1285,34 @@ model PaymentPromise {
   currency       Currency          @relation(fields: [currencyCode], references: [code])
   expectedMethod CollectionMethod? @relation(fields: [expectedMethodId], references: [id])
   tasks          Task[]
+  receiptAllocations PaymentPromiseReceiptAllocation[]
 
   @@index([promiseDate, status], map: "idx_promises_date")
   @@index([customerId, status], map: "idx_promises_customer")
   @@index([dueDate, status], map: "idx_promises_due")
   @@map("payment_promises")
+}
+
+model PaymentPromiseReceiptAllocation {
+  id             String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  promiseId      String @map("promise_id") @db.Uuid
+  customerId     String @map("customer_id") @db.Uuid
+  currencyCode   String @map("currency_code")
+  receiptKey     String @map("receipt_key") @db.VarChar(500)
+  receiptAmount  Decimal @map("receipt_amount") @db.Decimal(18, 4)
+  amount         Decimal @db.Decimal(18, 4)
+  receiptDate    DateTime @map("receipt_date") @db.Date
+  source         String @db.VarChar(30)
+  sourceId       String @map("source_id")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  promise PaymentPromise @relation(fields: [promiseId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, receiptKey, promiseId], map: "uq_promise_receipt_allocation")
+  @@index([organizationId, receiptKey], map: "idx_promise_receipt_capacity")
+  @@index([promiseId], map: "idx_promise_receipt_promise")
+  @@map("payment_promise_receipt_allocations")
 }
 
 model Task {
@@ -1103,18 +1354,20 @@ model Reservation {
   paymentDate  DateTime? @map("payment_date") @db.Date
 
   // --- Goods reservation fields (PR-F) — nullable so this ADD COLUMN stays non-destructive ---
-  itemName     String?  @map("item_name")
-  itemType     String?  @map("item_type")
-  quantity     Decimal? @db.Decimal(18, 4)
-  unit         String?
-  unitId       String?  @map("unit_id") @db.Uuid
-  unitPrice    Decimal? @map("unit_price") @db.Decimal(18, 4)
-  totalAmount  Decimal? @map("total_amount") @db.Decimal(18, 4)
-  issuedQty    Decimal  @default(0) @map("issued_qty") @db.Decimal(18, 4)
-  remainingQty Decimal? @map("remaining_qty") @db.Decimal(18, 4)
-  createdBy    String?  @map("created_by") @db.Uuid
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  itemName      String?  @map("item_name")
+  itemType      String?  @map("item_type")
+  quantity      Decimal? @db.Decimal(18, 4)
+  unit          String?
+  unitId        String?  @map("unit_id") @db.Uuid
+  unitPrice     Decimal? @map("unit_price") @db.Decimal(18, 4)
+  totalAmount   Decimal? @map("total_amount") @db.Decimal(18, 4)
+  totalTons     Decimal? @map("total_tons") @db.Decimal(18, 6)
+  remainingTons Decimal? @map("remaining_tons") @db.Decimal(18, 6)
+  issuedQty     Decimal  @default(0) @map("issued_qty") @db.Decimal(18, 4)
+  remainingQty  Decimal? @map("remaining_qty") @db.Decimal(18, 4)
+  createdBy     String?  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
   documentNumber String?   @map("document_number")
   warehouse      String?
@@ -1123,15 +1376,39 @@ model Reservation {
   status         String    @default("open")
   notes          String?
 
-  customer    Customer          @relation(fields: [customerId], references: [id])
-  currency    Currency          @relation(fields: [currencyCode], references: [code])
-  creator     User?             @relation("ReservationCreator", fields: [createdBy], references: [id])
-  measureUnit Unit?             @relation(fields: [unitId], references: [id])
+  customer    Customer                @relation(fields: [customerId], references: [id])
+  currency    Currency                @relation(fields: [currencyCode], references: [code])
+  creator     User?                   @relation("ReservationCreator", fields: [createdBy], references: [id])
+  measureUnit Unit?                   @relation(fields: [unitId], references: [id])
   items       ReservationItem[]
+  adjustments ReservationAdjustment[]
 
   @@index([customerId], map: "idx_reservations_customer")
   @@index([status, expiresAt], map: "idx_reservations_status_expiry")
   @@map("reservations")
+}
+
+model ReservationAdjustment {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reservationId     String    @map("reservation_id") @db.Uuid
+  sourceMovementId  String?   @map("source_movement_id") @db.Uuid
+  sourceFingerprint String    @map("source_fingerprint") @db.VarChar(64)
+  adjustmentType    String    @map("adjustment_type") @db.VarChar(20)
+  externalItemCode  String    @map("external_item_code") @db.VarChar(30)
+  rodsQuantity      Decimal   @map("rods_quantity") @db.Decimal(18, 4)
+  rodsPerTon        Int       @map("rods_per_ton")
+  tonsDelta         Decimal   @map("tons_delta") @db.Decimal(18, 6)
+  documentType      String?   @map("document_type") @db.VarChar(20)
+  documentNumber    String?   @map("document_number") @db.VarChar(50)
+  movementDate      DateTime  @map("movement_date") @db.Date
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  reversedAt        DateTime? @map("reversed_at") @db.Timestamptz()
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  @@unique([reservationId, sourceFingerprint], map: "uq_reservation_adjustment_source")
+  @@index([reservationId, createdAt], map: "idx_reservation_adjustments_reservation")
+  @@map("reservation_adjustments")
 }
 
 model Unit {
@@ -1273,6 +1550,8 @@ model DevicePushToken {
   userId     String   @map("user_id") @db.Uuid
   token      String   @unique
   platform   String
+  applicationId String @default("com.albinaa.collector") @map("application_id")
+  notificationChannelId String? @map("notification_channel_id")
   deviceName String?  @map("device_name")
   lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz()
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
@@ -1281,6 +1560,26 @@ model DevicePushToken {
 
   @@index([userId], map: "idx_device_push_tokens_user")
   @@map("device_push_tokens")
+}
+
+model MobileDeviceSession {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  deviceId        String    @map("device_id") @db.VarChar(120)
+  deviceName      String?   @map("device_name") @db.VarChar(160)
+  platform        String    @db.VarChar(30)
+  appVersion      String?   @map("app_version") @db.VarChar(30)
+  lastConnectedAt DateTime  @default(now()) @map("last_connected_at") @db.Timestamptz()
+  lastSyncedAt    DateTime? @map("last_synced_at") @db.Timestamptz()
+  lastResponseMs  Int?      @map("last_response_ms")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceId], map: "uq_mobile_device_sessions_user_device")
+  @@index([lastConnectedAt], map: "idx_mobile_device_sessions_connected")
+  @@map("mobile_device_sessions")
 }
 
 model AccountingPeriod {
@@ -1543,6 +1842,7 @@ model OracleItemUnitMirror {
   usesSerialNumber Boolean   @default(false) @map("uses_serial_number")
   isInactive       Boolean   @default(false) @map("is_inactive")
   inactiveReason   String?   @map("inactive_reason") @db.VarChar(250)
+  salePrice        Decimal?  @map("sale_price") @db.Decimal(38, 16)
   sourceUpdatedAt  DateTime? @map("source_updated_at") @db.Timestamp(0)
   sourceHash       String    @map("source_hash") @db.VarChar(64)
   loadedAt         DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
@@ -1687,7 +1987,8 @@ model OracleSyncIssue {
 // ---------------------------------------------------------------------------
 // Oracle customer and balance mirror — Batch F.
 // This is deliberately separate from operational Customer/CustomerBalance.
-// A loaded run remains validating and cannot affect customer-facing data.
+// A loaded run is validated first, then marked published after the controlled
+// movement publication/reconciliation completes.
 // ---------------------------------------------------------------------------
 model OracleCustomerSyncRun {
   id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -1698,6 +1999,7 @@ model OracleCustomerSyncRun {
   startedAt          DateTime  @default(now()) @map("started_at") @db.Timestamptz()
   extractedAt        DateTime? @map("extracted_at") @db.Timestamptz()
   validatedAt        DateTime? @map("validated_at") @db.Timestamptz()
+  publishedAt        DateTime? @map("published_at") @db.Timestamptz()
   sourceCounts       Json?     @map("source_counts") @db.JsonB
   loadedCounts       Json?     @map("loaded_counts") @db.JsonB
   validationSummary  Json?     @map("validation_summary") @db.JsonB
@@ -1738,8 +2040,8 @@ model OracleCustomerMirror {
   sourceHash            String    @map("source_hash") @db.VarChar(64)
   loadedAt              DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
 
-  syncRun      OracleCustomerSyncRun        @relation(fields: [syncRunId], references: [id])
-  organization Organization                 @relation(fields: [organizationId], references: [id])
+  syncRun      OracleCustomerSyncRun          @relation(fields: [syncRunId], references: [id])
+  organization Organization                   @relation(fields: [organizationId], references: [id])
   currencies   OracleCustomerCurrencyMirror[]
   balances     OracleCustomerBalanceMirror[]
 
@@ -1770,26 +2072,26 @@ model OracleCustomerCurrencyMirror {
 }
 
 model OracleCustomerBalanceMirror {
-  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  syncRunId             String    @map("sync_run_id") @db.Uuid
-  organizationId        String    @map("organization_id") @db.Uuid
-  externalCustomerCode  String    @map("external_customer_code") @db.VarChar(30)
-  currencyCode          String    @map("currency_code") @db.VarChar(10)
-  transactionCount      Int       @map("transaction_count")
-  openingDebitLocal     Decimal   @map("opening_debit_local") @db.Decimal(38, 16)
-  openingCreditLocal    Decimal   @map("opening_credit_local") @db.Decimal(38, 16)
-  balanceLocal          Decimal   @map("balance_local") @db.Decimal(38, 16)
-  openingDebitForeign   Decimal   @map("opening_debit_foreign") @db.Decimal(38, 16)
-  openingCreditForeign  Decimal   @map("opening_credit_foreign") @db.Decimal(38, 16)
-  balanceForeign        Decimal   @map("balance_foreign") @db.Decimal(38, 16)
-  firstTransactionDate  DateTime? @map("first_transaction_date") @db.Date
-  lastTransactionDate   DateTime? @map("last_transaction_date") @db.Date
-  sourceHash            String    @map("source_hash") @db.VarChar(64)
-  loadedAt              DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId            String    @map("sync_run_id") @db.Uuid
+  organizationId       String    @map("organization_id") @db.Uuid
+  externalCustomerCode String    @map("external_customer_code") @db.VarChar(30)
+  currencyCode         String    @map("currency_code") @db.VarChar(10)
+  transactionCount     Int       @map("transaction_count")
+  openingDebitLocal    Decimal   @map("opening_debit_local") @db.Decimal(38, 16)
+  openingCreditLocal   Decimal   @map("opening_credit_local") @db.Decimal(38, 16)
+  balanceLocal         Decimal   @map("balance_local") @db.Decimal(38, 16)
+  openingDebitForeign  Decimal   @map("opening_debit_foreign") @db.Decimal(38, 16)
+  openingCreditForeign Decimal   @map("opening_credit_foreign") @db.Decimal(38, 16)
+  balanceForeign       Decimal   @map("balance_foreign") @db.Decimal(38, 16)
+  firstTransactionDate DateTime? @map("first_transaction_date") @db.Date
+  lastTransactionDate  DateTime? @map("last_transaction_date") @db.Date
+  sourceHash           String    @map("source_hash") @db.VarChar(64)
+  loadedAt             DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
 
-  syncRun         OracleCustomerSyncRun        @relation(fields: [syncRunId], references: [id])
-  organization    Organization                 @relation(fields: [organizationId], references: [id])
-  customer         OracleCustomerMirror         @relation(fields: [syncRunId, externalCustomerCode], references: [syncRunId, externalCustomerCode], map: "oracle_customer_balances_mirror_customer_fkey")
+  syncRun      OracleCustomerSyncRun @relation(fields: [syncRunId], references: [id])
+  organization Organization          @relation(fields: [organizationId], references: [id])
+  customer     OracleCustomerMirror  @relation(fields: [syncRunId, externalCustomerCode], references: [syncRunId, externalCustomerCode], map: "oracle_customer_balances_mirror_customer_fkey")
 
   @@unique([syncRunId, externalCustomerCode, currencyCode], map: "uq_oracle_cust_balance_run_key")
   @@index([syncRunId, currencyCode], map: "idx_oracle_cust_balance_run_currency")
@@ -1797,7 +2099,7 @@ model OracleCustomerBalanceMirror {
 }
 
 // Oracle detailed movements mirror. It is isolated from operational ledgers and
-// stock documents; every loaded run remains validating until explicitly reviewed.
+// stock documents; loaded runs are validated before controlled publication.
 model OracleMovementSyncRun {
   id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   organizationId    String    @map("organization_id") @db.Uuid
@@ -1806,6 +2108,8 @@ model OracleMovementSyncRun {
   triggeredBy       String?   @map("triggered_by") @db.Uuid
   startedAt         DateTime  @default(now()) @map("started_at") @db.Timestamptz()
   extractedAt       DateTime? @map("extracted_at") @db.Timestamptz()
+  validatedAt       DateTime? @map("validated_at") @db.Timestamptz()
+  publishedAt       DateTime? @map("published_at") @db.Timestamptz()
   sourceCounts      Json?     @map("source_counts") @db.JsonB
   loadedCounts      Json?     @map("loaded_counts") @db.JsonB
   validationSummary Json?     @map("validation_summary") @db.JsonB
@@ -1820,6 +2124,7 @@ model OracleMovementSyncRun {
 }
 
 model OracleCustomerMovementMirror {
+  collectorNo          String?   @map("collector_no") @db.VarChar(30)
   id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   syncRunId            String    @map("sync_run_id") @db.Uuid
   organizationId       String    @map("organization_id") @db.Uuid
@@ -1848,48 +2153,49 @@ model OracleCustomerMovementMirror {
 
   @@unique([syncRunId, sourceFingerprint], map: "uq_oracle_customer_movements_run_fingerprint")
   @@index([syncRunId, externalCustomerCode, currencyCode, documentDate], map: "idx_oracle_customer_movements_lookup")
+  @@index([organizationId, sourceCreatedAt], map: "idx_oracle_customer_movements_created")
   @@map("oracle_customer_movements_mirror")
 }
 
 model OracleInventoryMovementMirror {
-  id                            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  syncRunId                     String    @map("sync_run_id") @db.Uuid
-  organizationId                String    @map("organization_id") @db.Uuid
-  sourceFingerprint             String    @map("source_fingerprint") @db.VarChar(64)
-  sourceHash                    String    @map("source_hash") @db.VarChar(64)
-  duplicateOrdinal              Int       @map("duplicate_ordinal")
-  documentType                  String    @map("document_type") @db.VarChar(20)
-  billDocumentType              String?   @map("bill_document_type") @db.VarChar(20)
-  documentNumber                String    @map("document_number") @db.VarChar(50)
-  documentSerial                String    @map("document_serial") @db.VarChar(50)
-  recordNumber                  String?   @map("record_number") @db.VarChar(50)
-  documentSequence              String    @map("document_sequence") @db.VarChar(50)
-  serialNumber                  String    @map("serial_number") @db.VarChar(50)
-  movementDate                  DateTime  @map("movement_date") @db.Date
-  externalItemCode              String    @map("external_item_code") @db.VarChar(30)
-  unitName                      String    @map("unit_name") @db.VarChar(30)
-  packageSize                   Decimal   @map("package_size") @db.Decimal(38, 16)
-  itemQuantity                  Decimal   @map("item_quantity") @db.Decimal(38, 16)
-  freeQuantity                  Decimal   @map("free_quantity") @db.Decimal(38, 16)
-  primaryQuantity               Decimal   @map("primary_quantity") @db.Decimal(38, 16)
-  primaryFreeQuantity           Decimal   @map("primary_free_quantity") @db.Decimal(38, 16)
-  inOut                         Int       @map("in_out")
-  externalWarehouseCode         String    @map("external_warehouse_code") @db.VarChar(30)
-  externalWarehouseGroupCode    String?   @map("external_warehouse_group_code") @db.VarChar(30)
-  itemCost                      Decimal?  @map("item_cost") @db.Decimal(38, 16)
-  stockCost                     Decimal?  @map("stock_cost") @db.Decimal(38, 16)
-  currencyCode                  String?   @map("currency_code") @db.VarChar(10)
-  externalCustomerCode          String?   @map("external_customer_code") @db.VarChar(30)
-  externalVendorCode            String?   @map("external_vendor_code") @db.VarChar(30)
-  description                   String?   @db.Text
-  referenceNumber               String?   @map("reference_number") @db.VarChar(100)
-  barcode                       String?   @db.VarChar(100)
-  companyNumber                 String?   @map("company_number") @db.VarChar(20)
-  branchNumber                  String?   @map("branch_number") @db.VarChar(20)
-  branchYear                    String?   @map("branch_year") @db.VarChar(20)
-  sourceCreatedAt               DateTime? @map("source_created_at") @db.Timestamp(0)
-  sourceUpdatedAt               DateTime? @map("source_updated_at") @db.Timestamp(0)
-  loadedAt                      DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
+  id                         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syncRunId                  String    @map("sync_run_id") @db.Uuid
+  organizationId             String    @map("organization_id") @db.Uuid
+  sourceFingerprint          String    @map("source_fingerprint") @db.VarChar(64)
+  sourceHash                 String    @map("source_hash") @db.VarChar(64)
+  duplicateOrdinal           Int       @map("duplicate_ordinal")
+  documentType               String    @map("document_type") @db.VarChar(20)
+  billDocumentType           String?   @map("bill_document_type") @db.VarChar(20)
+  documentNumber             String    @map("document_number") @db.VarChar(50)
+  documentSerial             String    @map("document_serial") @db.VarChar(50)
+  recordNumber               String?   @map("record_number") @db.VarChar(50)
+  documentSequence           String    @map("document_sequence") @db.VarChar(50)
+  serialNumber               String    @map("serial_number") @db.VarChar(50)
+  movementDate               DateTime  @map("movement_date") @db.Date
+  externalItemCode           String    @map("external_item_code") @db.VarChar(30)
+  unitName                   String    @map("unit_name") @db.VarChar(30)
+  packageSize                Decimal   @map("package_size") @db.Decimal(38, 16)
+  itemQuantity               Decimal   @map("item_quantity") @db.Decimal(38, 16)
+  freeQuantity               Decimal   @map("free_quantity") @db.Decimal(38, 16)
+  primaryQuantity            Decimal   @map("primary_quantity") @db.Decimal(38, 16)
+  primaryFreeQuantity        Decimal   @map("primary_free_quantity") @db.Decimal(38, 16)
+  inOut                      Int       @map("in_out")
+  externalWarehouseCode      String    @map("external_warehouse_code") @db.VarChar(30)
+  externalWarehouseGroupCode String?   @map("external_warehouse_group_code") @db.VarChar(30)
+  itemCost                   Decimal?  @map("item_cost") @db.Decimal(38, 16)
+  stockCost                  Decimal?  @map("stock_cost") @db.Decimal(38, 16)
+  currencyCode               String?   @map("currency_code") @db.VarChar(10)
+  externalCustomerCode       String?   @map("external_customer_code") @db.VarChar(30)
+  externalVendorCode         String?   @map("external_vendor_code") @db.VarChar(30)
+  description                String?   @db.Text
+  referenceNumber            String?   @map("reference_number") @db.VarChar(100)
+  barcode                    String?   @db.VarChar(100)
+  companyNumber              String?   @map("company_number") @db.VarChar(20)
+  branchNumber               String?   @map("branch_number") @db.VarChar(20)
+  branchYear                 String?   @map("branch_year") @db.VarChar(20)
+  sourceCreatedAt            DateTime? @map("source_created_at") @db.Timestamp(0)
+  sourceUpdatedAt            DateTime? @map("source_updated_at") @db.Timestamp(0)
+  loadedAt                   DateTime  @default(now()) @map("loaded_at") @db.Timestamptz()
 
   syncRun OracleMovementSyncRun @relation(fields: [syncRunId], references: [id])
 
@@ -1902,33 +2208,35 @@ model OracleInventoryMovementMirror {
 // Only explicitly approved inventory movements are copied here. Historical
 // mirror rows remain isolated and are never published implicitly.
 model PublishedInventoryMovement {
-  id                            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId                String    @map("organization_id") @db.Uuid
-  sourceSchema                  String    @map("source_schema") @db.VarChar(30)
-  sourceRunId                   String    @map("source_run_id") @db.Uuid
-  sourceFingerprint             String    @map("source_fingerprint") @db.VarChar(64)
-  publicationBatchId            String    @map("publication_batch_id") @db.Uuid
-  externalItemCode              String    @map("external_item_code") @db.VarChar(30)
-  movementDate                  DateTime  @map("movement_date") @db.Date
-  documentType                  String    @map("document_type") @db.VarChar(20)
-  documentNumber                String    @map("document_number") @db.VarChar(50)
-  documentSequence              String    @map("document_sequence") @db.VarChar(50)
-  serialNumber                  String    @map("serial_number") @db.VarChar(50)
-  unitName                      String    @map("unit_name") @db.VarChar(30)
-  packageSize                   Decimal   @map("package_size") @db.Decimal(38, 16)
-  itemQuantity                  Decimal   @map("item_quantity") @db.Decimal(38, 16)
-  freeQuantity                  Decimal   @map("free_quantity") @db.Decimal(38, 16)
-  primaryQuantity               Decimal   @map("primary_quantity") @db.Decimal(38, 16)
-  primaryFreeQuantity           Decimal   @map("primary_free_quantity") @db.Decimal(38, 16)
-  inOut                         Int       @map("in_out")
-  externalWarehouseCode         String    @map("external_warehouse_code") @db.VarChar(30)
-  externalWarehouseGroupCode    String?   @map("external_warehouse_group_code") @db.VarChar(30)
-  description                   String?   @db.Text
-  referenceNumber               String?   @map("reference_number") @db.VarChar(100)
-  barcode                       String?   @db.VarChar(100)
-  publishedBy                   String    @map("published_by") @db.Uuid
-  publishedAt                   DateTime  @default(now()) @map("published_at") @db.Timestamptz()
-  reversedAt                    DateTime? @map("reversed_at") @db.Timestamptz()
+  id                         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId             String    @map("organization_id") @db.Uuid
+  sourceSchema               String    @map("source_schema") @db.VarChar(30)
+  sourceRunId                String    @map("source_run_id") @db.Uuid
+  sourceFingerprint          String    @map("source_fingerprint") @db.VarChar(64)
+  publicationBatchId         String    @map("publication_batch_id") @db.Uuid
+  externalItemCode           String    @map("external_item_code") @db.VarChar(30)
+  movementDate               DateTime  @map("movement_date") @db.Date
+  documentType               String    @map("document_type") @db.VarChar(20)
+  billDocumentType           String?   @map("bill_document_type") @db.VarChar(20)
+  documentNumber             String    @map("document_number") @db.VarChar(50)
+  documentSequence           String    @map("document_sequence") @db.VarChar(50)
+  serialNumber               String    @map("serial_number") @db.VarChar(50)
+  unitName                   String    @map("unit_name") @db.VarChar(30)
+  packageSize                Decimal   @map("package_size") @db.Decimal(38, 16)
+  itemQuantity               Decimal   @map("item_quantity") @db.Decimal(38, 16)
+  freeQuantity               Decimal   @map("free_quantity") @db.Decimal(38, 16)
+  primaryQuantity            Decimal   @map("primary_quantity") @db.Decimal(38, 16)
+  primaryFreeQuantity        Decimal   @map("primary_free_quantity") @db.Decimal(38, 16)
+  inOut                      Int       @map("in_out")
+  externalWarehouseCode      String    @map("external_warehouse_code") @db.VarChar(30)
+  externalWarehouseGroupCode String?   @map("external_warehouse_group_code") @db.VarChar(30)
+  description                String?   @db.Text
+  referenceNumber            String?   @map("reference_number") @db.VarChar(100)
+  barcode                    String?   @db.VarChar(100)
+  externalCustomerCode       String?   @map("external_customer_code") @db.VarChar(30)
+  publishedBy                String    @map("published_by") @db.Uuid
+  publishedAt                DateTime  @default(now()) @map("published_at") @db.Timestamptz()
+  reversedAt                 DateTime? @map("reversed_at") @db.Timestamptz()
 
   @@index([organizationId, externalItemCode, movementDate], map: "idx_published_inventory_movements_item")
   @@index([organizationId, externalWarehouseCode, movementDate], map: "idx_published_inventory_movements_warehouse")
@@ -1957,23 +2265,23 @@ model OracleMovementPublicationBatch {
 }
 
 model OracleMovementPublicationLedger {
-  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId       String    @map("organization_id") @db.Uuid
-  sourceSchema         String    @map("source_schema") @db.VarChar(30)
-  movementKind         String    @map("movement_kind") @db.VarChar(20)
-  sourceFingerprint    String    @map("source_fingerprint") @db.VarChar(64)
-  sourceHash           String    @map("source_hash") @db.VarChar(64)
-  sourceRunId          String    @map("source_run_id") @db.Uuid
-  status               String    @db.VarChar(30)
-  reasonCode           String?   @map("reason_code") @db.VarChar(50)
-  businessKey          String?   @map("business_key") @db.Text
-  publicationBatchId   String?   @map("publication_batch_id") @db.Uuid
-  platformEntityId     String?   @map("platform_entity_id") @db.Uuid
-  details              Json?     @db.JsonB
-  firstSeenAt          DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
-  lastSeenAt           DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz()
-  publishedAt          DateTime? @map("published_at") @db.Timestamptz()
-  reversedAt           DateTime? @map("reversed_at") @db.Timestamptz()
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId     String    @map("organization_id") @db.Uuid
+  sourceSchema       String    @map("source_schema") @db.VarChar(30)
+  movementKind       String    @map("movement_kind") @db.VarChar(20)
+  sourceFingerprint  String    @map("source_fingerprint") @db.VarChar(64)
+  sourceHash         String    @map("source_hash") @db.VarChar(64)
+  sourceRunId        String    @map("source_run_id") @db.Uuid
+  status             String    @db.VarChar(30)
+  reasonCode         String?   @map("reason_code") @db.VarChar(50)
+  businessKey        String?   @map("business_key") @db.Text
+  publicationBatchId String?   @map("publication_batch_id") @db.Uuid
+  platformEntityId   String?   @map("platform_entity_id") @db.Uuid
+  details            Json?     @db.JsonB
+  firstSeenAt        DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
+  lastSeenAt         DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz()
+  publishedAt        DateTime? @map("published_at") @db.Timestamptz()
+  reversedAt         DateTime? @map("reversed_at") @db.Timestamptz()
 
   publicationBatch OracleMovementPublicationBatch? @relation(fields: [publicationBatchId], references: [id])
 
@@ -1994,6 +2302,7 @@ model InventoryTransferRequest {
   destinationWarehouseCode        String    @map("destination_warehouse_code")
   status                          String    @default("draft")
   notes                           String?
+  oracleOutReqNo                  String?   @map("oracle_out_req_no")
   oracleOutReqSer                 String?   @map("oracle_out_req_ser")
   oracleTransferDocumentNumber    String?   @map("oracle_transfer_document_number")
   oracleSourceTransferSerial      String?   @map("oracle_source_transfer_serial")
@@ -2036,4 +2345,124 @@ model InventoryTransferLine {
 
   @@unique([requestId, lineNo], map: "uq_inventory_transfer_line_no")
   @@map("inventory_transfer_lines")
+}
+
+// ---------------------------------------------------------------------------
+// Customer sales-order drafts — platform only; never writes to Oracle
+// ---------------------------------------------------------------------------
+model SalesOrderDraft {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId        String   @map("organization_id") @db.Uuid
+  sourceSchema          String   @map("source_schema") @db.VarChar(30)
+  sourceOrderNo         String   @map("source_order_no") @db.VarChar(30)
+  sourceOrderSerial     String   @map("source_order_serial") @db.VarChar(30)
+  sourceOrderDate       DateTime @map("source_order_date") @db.Date
+  status                String   @default("draft_review") @db.VarChar(30)
+  sourceCustomerCode    String?  @map("source_customer_code") @db.VarChar(30)
+  sourceCustomerName    String?  @map("source_customer_name") @db.VarChar(250)
+  sourceCustomerMobile  String?  @map("source_customer_mobile") @db.VarChar(100)
+  sourceCustomerAddress String?  @map("source_customer_address") @db.Text
+  proposedCustomerCode  String?  @map("proposed_customer_code") @db.VarChar(30)
+  proposedCustomerName  String?  @map("proposed_customer_name") @db.VarChar(250)
+  currencyCode          String   @map("currency_code") @db.VarChar(10)
+  sourceAmount          Decimal  @map("source_amount") @db.Decimal(38, 16)
+  billDocumentType      String?  @map("bill_document_type") @db.VarChar(10)
+  orderKind             String   @default("other") @map("order_kind") @db.VarChar(10)
+  customerBindingStatus String   @default("not_checked") @map("customer_binding_status") @db.VarChar(30)
+  sourceApproved        Boolean  @default(false) @map("source_approved")
+  sourceProcessed       Boolean  @default(false) @map("source_processed")
+  sourceUpdatedAt       DateTime? @map("source_updated_at") @db.Timestamptz()
+  syncedAt              DateTime? @map("synced_at") @db.Timestamptz()
+  validationStatus      String   @default("blocked") @map("validation_status") @db.VarChar(20)
+  validationSummary     Json     @map("validation_summary") @db.JsonB
+  notes                 String?  @db.Text
+  oracleWriteEnabled    Boolean  @default(false) @map("oracle_write_enabled")
+  createdBy             String   @map("created_by") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  lines SalesOrderDraftLine[]
+
+  @@unique([organizationId, sourceSchema, sourceOrderSerial], map: "uq_sales_order_draft_source")
+  @@index([organizationId, status, createdAt], map: "idx_sales_order_draft_org_status")
+  @@map("sales_order_drafts")
+}
+
+model SalesOrderDraftLine {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  draftId               String   @map("draft_id") @db.Uuid
+  lineNo                Int      @map("line_no")
+  itemCode              String   @map("item_code") @db.VarChar(30)
+  itemName              String?  @map("item_name") @db.VarChar(250)
+  unitCode              String   @map("unit_code") @db.VarChar(30)
+  packageSize           Decimal  @map("package_size") @db.Decimal(38, 16)
+  quantity              Decimal  @db.Decimal(38, 16)
+  sourcePrice           Decimal  @map("source_price") @db.Decimal(38, 16)
+  sourceWarehouseCode   String?  @map("source_warehouse_code") @db.VarChar(30)
+  proposedWarehouseCode String?  @map("proposed_warehouse_code") @db.VarChar(30)
+  originalAvailableQty  Decimal? @map("original_available_qty") @db.Decimal(38, 16)
+  totalAvailableQty     Decimal  @map("total_available_qty") @db.Decimal(38, 16)
+  validationStatus      String   @map("validation_status") @db.VarChar(30)
+  issues                Json     @db.JsonB
+  alternativeWarehouses Json     @map("alternative_warehouses") @db.JsonB
+
+  draft SalesOrderDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, lineNo], map: "uq_sales_order_draft_line")
+  @@index([itemCode, unitCode], map: "idx_sales_order_draft_line_item")
+  @@map("sales_order_draft_lines")
+}
+
+model HrTaskAttachment {
+ id String @id @db.Uuid
+ organizationId String @map("organization_id") @db.Uuid
+ uploadedBy String @map("uploaded_by") @db.Uuid
+ purpose String
+ targetId String @map("target_id") @db.Uuid
+ taskId String? @map("task_id") @db.Uuid
+ assignmentId String? @map("assignment_id") @db.Uuid
+ submissionVersion Int? @map("submission_version")
+ name String
+ mime String
+ size Int
+ digest String
+ content Bytes
+ createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+ @@index([taskId])
+ @@index([assignmentId])
+ @@index([uploadedBy,createdAt])
+ @@map("hr_task_attachments")
+}
+// USB print queue. "submitted" confirms Windows spool acceptance, not paper output.
+model BarcodePrintJob {
+  id             String    @id @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  operationId    String    @map("operation_id") @db.Uuid
+  payload        Json      @db.JsonB
+  status         String    @default("queued")
+  claim          String?   @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  claimedAt      DateTime? @map("claimed_at") @db.Timestamptz
+  finishedAt     DateTime? @map("finished_at") @db.Timestamptz
+
+  @@unique([organizationId, operationId], map: "barcode_print_jobs_organization_id_operation_id_key")
+  @@index([organizationId, status, createdAt], map: "barcode_print_jobs_pending")
+  @@map("barcode_print_jobs")
+}
+// The SQL migration additionally enforces one pending attempt per user/customer.
+model ContactAttempt {
+ id String @id @db.Uuid
+ organizationId String @map("organization_id") @db.Uuid
+ userId String @map("user_id") @db.Uuid
+ customerId String @map("customer_id") @db.Uuid
+ collectorId String? @map("collector_id") @db.Uuid
+ channel String
+ occurredAt DateTime @map("occurred_at") @db.Timestamptz
+ dueAt DateTime @map("due_at") @db.Timestamptz
+ baseline String
+ status String @default("pending")
+ finishedAt DateTime? @map("finished_at") @db.Timestamptz
+ @@index([status,dueAt],map:"contact_attempts_due")
+ @@map("contact_attempts")
 }

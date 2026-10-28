@@ -18,9 +18,39 @@ describe('ReadOnlyOracleHttpReader', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('schema=IAS20262'), expect.anything());
   });
 
+  it('discovers transfer documents by OUT_REQ_SER using the SELECT-only gateway', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ documents: [{ transferSerial: '202600000111131' }] }),
+    } as Response);
+    const reader = new ReadOnlyOracleHttpReader(new ConfigService({ ORACLE_READ_API_URL: 'http://oracle-read.test' }));
+    await expect(reader.transferDocumentsByOutRequest('20260000015')).resolves.toEqual([
+      { transferSerial: '202600000111131' },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://oracle-read.test/inventory/transfers/by-out-request?outReqSer=20260000015&schema=IAS20261',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
   it('fails closed when the read-only gateway is not configured', async () => {
     const reader = new ReadOnlyOracleHttpReader(new ConfigService({}));
     await expect(reader.warehouseExists('W1')).rejects.toThrow('غير مهيأة');
+  });
+
+  it('allows direct lookup reads for the configured allowlisted schema only when explicitly enabled', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ snapshotRunId: 'live:IAS20261', items: [] }) } as Response);
+    const enabled = new ReadOnlyOracleHttpReader(new ConfigService({
+      ORACLE_READ_API_URL: 'http://oracle-read.test', ORACLE_READ_SCHEMA: 'IAS20261',
+      ORACLE_TEST_DIRECT_LOOKUPS_ENABLED: 'true',
+    }));
+    await expect(enabled.directItems('حديد', 20)).resolves.toEqual(expect.objectContaining({ snapshotRunId: 'live:IAS20261' }));
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/inventory/items?limit=20&search='), expect.objectContaining({ method: 'GET' }));
+
+    const disabled = new ReadOnlyOracleHttpReader(new ConfigService({
+      ORACLE_READ_API_URL: 'http://oracle-read.test', ORACLE_READ_SCHEMA: 'IAS20261',
+    }));
+    await expect(disabled.directWarehouses()).rejects.toThrow('غير مفعلة');
   });
 
   it('recognizes the verified completed transfer through DOC_SER and the linked destination document', () => {

@@ -1,10 +1,15 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
-import { priorityOfTaskType } from '../tasks/tasks.service';
-import { isActionableDebtorBalance } from '../common/debt-followup-policy';
+import { priorityOfTaskType, REFRESHED_DAILY_TASK_TYPES } from '../tasks/tasks.service';
+import { isActionableDebtorBalance, isSignificantBalance } from '../common/debt-followup-policy';
 import { orgDateOnly, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
+import { durableOracleRequest } from '../common/oracle-request-audit';
+import { oracleReceiptActivity } from '../common/oracle-receipt-activity';
+import { reconcileReceiptRequests, countableReceiptRequest, recordedLocalReceiptFinals } from '../common/oracle-receipt-reconciliation';
+import { OracleTestRequestsService } from '../oracle-test-requests/oracle-test-requests.service';
 import { AgingService } from '../aging/aging.service';
+import { effectiveBalances as loadEffectiveBalances } from './effective-balances';
 
 type DebtSnapshot = {
   customerId: string;
@@ -34,6 +39,30 @@ type SnapshotImport = {
   fileName: string;
   snapshots: DebtSnapshot[];
 };
+
+type CustomerAlertCandidate = {
+  id: string;
+  name: string;
+  externalCustomerCode: string;
+  createdAt: Date;
+  assigned: boolean;
+};
+
+export function buildCustomerAlerts(candidates: CustomerAlertCandidate[], since: Date) {
+  const newestFirst = [...candidates].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const shape = (customer: CustomerAlertCandidate) => ({
+    id: customer.id,
+    name: customer.name,
+    externalCustomerCode: customer.externalCustomerCode,
+    createdAt: customer.createdAt,
+  });
+  const unassigned = newestFirst.filter((customer) => !customer.assigned);
+  const recent = newestFirst.filter((customer) => customer.createdAt >= since);
+  return {
+    unassigned: { count: unassigned.length, items: unassigned.slice(0, 5).map(shape) },
+    newCustomers: { count: recent.length, since, items: recent.slice(0, 5).map(shape) },
+  };
+}
 
 const snapshotKey = (snapshot: Pick<DebtSnapshot, 'customerId' | 'currencyCode'>) =>
   `${snapshot.customerId}|${snapshot.currencyCode}`;
@@ -144,6 +173,34 @@ export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapsh
   return perCurrency;
 }
 
+/** Gross movement must not disappear when an account has equal incoming/outgoing entries. */
+export function applyGrossLedgerMovement(summary: ReturnType<typeof summarizeDebtChange>, rows: { currencyCode: string; amountSigned: unknown }[]) {
+  for (const row of Object.values(summary)) { row.positiveIncreases = 0; row.decreases = 0; }
+  for (const entry of rows) {
+    const row = summary[entry.currencyCode];
+    const amount = Number(entry.amountSigned);
+    if (!row || !Number.isFinite(amount)) continue;
+    if (amount > 0) row.positiveIncreases += amount;
+    else row.decreases -= amount;
+  }
+  return summary;
+}
+
+type DebtMovement = {
+  customerId: string;
+  currencyCode: string;
+  amountSigned: number;
+  occurredAt: Date;
+  source: 'platform' | 'oracle';
+  documentKey?: string | null;
+};
+
+/** Prefer the published Oracle copy when the same receipt is also present in the platform ledger. */
+export function deduplicateDebtMovements<T extends DebtMovement>(rows: T[]) {
+  const oracleKeys = new Set(rows.filter((row) => row.source === 'oracle' && row.documentKey).map((row) => row.documentKey!));
+  return rows.filter((row) => row.source === 'oracle' || !row.documentKey || !oracleKeys.has(row.documentKey));
+}
+
 /**
  * Dashboard API — المؤشرات الأساسية المتاحة من بيانات المرحلة الحالية.
  * ملاحظات منهجية موثقة (من مرحلة التحقق):
@@ -154,7 +211,8 @@ export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapsh
  */
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService, private readonly agingService: AgingService) {}
+  constructor(private readonly prisma: PrismaService, private readonly agingService: AgingService,
+    @Optional() private readonly oracleRequests?: OracleTestRequestsService) {}
 
   async navCounts(user: AuthUser) {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -163,10 +221,18 @@ export class DashboardService {
       : await this.prisma.collector.findUnique({ where: { userId: user.id }, select: { id: true } });
     const customerScope = user.permissions.includes('customers.read_all')
       ? { organizationId: user.organizationId }
-      : { organizationId: user.organizationId, assignments: { some: { collectorId: collector?.id ?? 'no-access', effectiveTo: null } } };
+      : { organizationId: user.organizationId, assignments: { some: { collectorId: collector?.id ?? { in: [] }, effectiveTo: null } } };
     const taskWhere = user.permissions.includes('customers.read_all')
-      ? { status: 'open', customer: { organizationId: user.organizationId } }
-      : { status: 'open', assignedTo: collector?.id ?? 'no-access' };
+      ? {
+          status: 'open',
+          taskType: { notIn: [...REFRESHED_DAILY_TASK_TYPES] },
+          customer: { organizationId: user.organizationId },
+        }
+      : {
+          status: 'open',
+          taskType: { notIn: [...REFRESHED_DAILY_TASK_TYPES] },
+          assignedTo: collector?.id ?? { in: [] },
+        };
     const tasks = await this.prisma.task.count({ where: taskWhere });
     const followups = await this.prisma.followup.count({ where: { customer: customerScope, deletedAt: null, nextFollowupDate: { lte: today } } });
     const promises = await this.prisma.paymentPromise.count({ where: { customer: customerScope, status: { in: ['upcoming', 'due_today', 'unfulfilled'] }, dueDate: { lte: today } } });
@@ -198,18 +264,26 @@ export class DashboardService {
         }),
       ]);
 
-    const withOperationalBalance = async <T extends { customerId: string; currencyCode: string; accountingBalance: unknown; lastImportJob: { importedAt: Date } | null }>(rows: T[]) => Promise.all(rows.map(async (row) => {
-      const ledger = await this.prisma.operationalLedger.aggregate({
-        _sum: { amountSigned: true },
-        where: {
-          customerId: row.customerId, currencyCode: row.currencyCode,
-          ...(row.lastImportJob ? { createdAt: { gt: row.lastImportJob.importedAt } } : {}),
-        },
-      });
-      return { ...row, effectiveBalance: Number(row.accountingBalance) + Number(ledger._sum.amountSigned ?? 0) };
-    }));
-    const effectiveBalances = await withOperationalBalance(balances);
-    const effectiveAdvanceBalances = await withOperationalBalance(advanceBalances);
+    const allEffectiveBalances = await loadEffectiveBalances(this.prisma, [...balances, ...advanceBalances]);
+    const effectiveBalances = allEffectiveBalances.slice(0, balances.length);
+    const effectiveAdvanceBalances = allEffectiveBalances.slice(balances.length);
+    const actionableCustomerIds = [...new Set(effectiveBalances
+      .filter((balance) => isActionableDebtorBalance(balance.effectiveBalance, balance.currencyCode))
+      .map((balance) => balance.customerId))];
+    const newCustomerSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const customerAlertCandidates = actionableCustomerIds.length
+      ? await this.prisma.customer.findMany({
+          where: { id: { in: actionableCustomerIds }, organizationId: orgId, status: 'active' },
+          select: {
+            id: true, name: true, externalCustomerCode: true, createdAt: true,
+            assignments: { where: { effectiveTo: null }, select: { id: true }, take: 1 },
+          },
+        })
+      : [];
+    const customerAlerts = buildCustomerAlerts(
+      customerAlertCandidates.map((customer) => ({ ...customer, assigned: customer.assignments.length > 0 })),
+      newCustomerSince,
+    );
 
     // ---- تجميع حسب العملة: مدينون/دائنون/صفر + الإجماليات ----
     const byCurrency: Record<string, {
@@ -226,11 +300,28 @@ export class DashboardService {
       else byCurrency[ccy].zero += 1;
     }
 
-    const advanceByCurrency: Record<string, { accounts: number; balance: number }> = {};
+    const advanceByCurrency: Record<string, {
+      accounts: number; debtorAccounts: number; debtorBalance: number;
+      creditorAccounts: number; creditorBalance: number; netBalance: number;
+    }> = {};
+    const significantAdvanceAccounts = new Set<string>();
     for (const balance of effectiveAdvanceBalances) {
-      advanceByCurrency[balance.currencyCode] ??= { accounts: 0, balance: 0 };
-      advanceByCurrency[balance.currencyCode].accounts += 1;
-      advanceByCurrency[balance.currencyCode].balance += balance.effectiveBalance;
+      if (!isSignificantBalance(balance.effectiveBalance, balance.currencyCode)) continue;
+      significantAdvanceAccounts.add(balance.customerId);
+      advanceByCurrency[balance.currencyCode] ??= {
+        accounts: 0, debtorAccounts: 0, debtorBalance: 0,
+        creditorAccounts: 0, creditorBalance: 0, netBalance: 0,
+      };
+      const summary = advanceByCurrency[balance.currencyCode];
+      summary.accounts += 1;
+      summary.netBalance += balance.effectiveBalance;
+      if (balance.effectiveBalance > 0) {
+        summary.debtorAccounts += 1;
+        summary.debtorBalance += balance.effectiveBalance;
+      } else {
+        summary.creditorAccounts += 1;
+        summary.creditorBalance += -balance.effectiveBalance;
+      }
     }
 
     return {
@@ -239,11 +330,16 @@ export class DashboardService {
         active: activeCustomers,
         withBalances: new Set(effectiveBalances.filter((b) => Math.abs(b.effectiveBalance) > 0.005).map((b) => b.customerId)).size,
       },
-      advances: { accounts: new Set(effectiveAdvanceBalances.map((row) => row.customerId)).size, byCurrency: advanceByCurrency },
+      advances: {
+        accounts: significantAdvanceAccounts.size,
+        byCurrency: advanceByCurrency,
+        sourceAccountCodes: ['113101001', '113101002'],
+      },
       byCurrency,
       lastImport,
       pendingDuplicateAlerts: pendingDuplicates,
-      newDebt: await this.newDebtBetweenLastTwoImports(orgId),
+      customerAlerts,
+      newDebt: await this.debtChangeLast24Hours(user),
       agingEstimated: await this.estimatedAging(orgId),
       // مؤشرات المتابعات/الوعود/التحصيل تُفعَّل في مراحلها القادمة بنفس الـ endpoint
       followupsToday: null,
@@ -324,6 +420,122 @@ export class DashboardService {
     };
   }
 
+  /** صافي تغير المديونية من حركات المنصة وOracle المنشورة خلال آخر 24 ساعة، ضمن عملاء المستخدم فقط. */
+  async debtChangeLast24Hours(user: AuthUser) {
+    const now = new Date();
+    const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const canReadAll = user.permissions.includes('customers.read_all');
+    const collector = canReadAll
+      ? null
+      : await this.prisma.collector.findUnique({ where: { userId: user.id }, select: { id: true } });
+    const balances = await this.prisma.customerBalance.findMany({
+      where: {
+        customer: {
+          organizationId: user.organizationId,
+          status: 'active',
+          OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+          ...(canReadAll ? {} : {
+            assignments: { some: { collectorId: collector?.id ?? { in: [] }, effectiveTo: null } },
+          }),
+        },
+      },
+      select: {
+        customerId: true,
+        currencyCode: true,
+        accountingBalance: true,
+        lastImportJob: { select: { importedAt: true } },
+        customer: { select: { id: true, name: true, externalCustomerCode: true } },
+      },
+    });
+    if (!balances.length) {
+      return {
+        window: { from: since, to: now, hours: 24 },
+        source: 'platform_and_published_oracle_movements',
+        perCurrency: {},
+        note: 'لا توجد حسابات ضمن نطاق المستخدم.',
+      };
+    }
+    const earliestImport = balances.reduce<Date | null>((earliest, row) => {
+      const date = row.lastImportJob?.importedAt ?? null;
+      if (!date) return earliest;
+      return !earliest || date < earliest ? date : earliest;
+    }, null);
+    const ledgerFrom = earliestImport && earliestImport < since ? earliestImport : since;
+    const customerIds = [...new Set(balances.map((row) => row.customerId))];
+    const ledgerRows = await this.prisma.operationalLedger.findMany({
+      where: {
+        customerId: { in: customerIds },
+        createdAt: { gte: ledgerFrom },
+      },
+      select: { customerId: true, currencyCode: true, amountSigned: true, createdAt: true, sourceTable: true, sourceId: true },
+    });
+    const collectionIds = ledgerRows.filter((row) => row.sourceTable === 'collections').map((row) => row.sourceId);
+    const collections = collectionIds.length ? await this.prisma.collection.findMany({
+      where: { id: { in: collectionIds } },
+      select: { id: true, customerId: true, currencyCode: true, receiptNumber: true, referenceNumber: true },
+    }) : [];
+    const collectionById = new Map(collections.map((row) => [row.id, row]));
+    const publications = await this.prisma.oracleMovementPublicationLedger.findMany({
+      where: { organizationId: user.organizationId, movementKind: 'customer', status: 'published',
+        reversedAt: null, platformEntityId: { not: null } },
+      select: { sourceFingerprint: true, platformEntityId: true },
+    });
+    const fingerprints = publications.map((row) => row.sourceFingerprint);
+    const mirrors = fingerprints.length ? await this.prisma.oracleCustomerMovementMirror.findMany({
+      where: { organizationId: user.organizationId, sourceFingerprint: { in: fingerprints },
+        sourceCreatedAt: { gte: since, lte: now } },
+      orderBy: { loadedAt: 'desc' },
+      select: { sourceFingerprint: true, sourceCreatedAt: true, documentNumber: true, documentSerial: true },
+    }) : [];
+    const mirrorByFingerprint = new Map(mirrors.map((row) => [row.sourceFingerprint, row]));
+    const publicationByEntity = new Map(publications.map((row) => [row.platformEntityId!, row.sourceFingerprint]));
+    const oracleIds = publications.filter((row) => mirrorByFingerprint.has(row.sourceFingerprint)).map((row) => row.platformEntityId!);
+    const oracleRows = oracleIds.length ? await this.prisma.importedTransaction.findMany({
+      where: { id: { in: oracleIds }, customerId: { in: customerIds }, reversedAt: null },
+      select: { id: true, customerId: true, currencyCode: true, debit: true, credit: true },
+    }) : [];
+    const docKey = (customerId: string, currencyCode: string, value?: string | null) =>
+      value ? `${customerId}|${currencyCode}|${value}` : null;
+    const movements = deduplicateDebtMovements([
+      ...ledgerRows.map((row) => {
+        const collection = collectionById.get(row.sourceId);
+        return { customerId: row.customerId, currencyCode: row.currencyCode,
+          amountSigned: Number(row.amountSigned), occurredAt: row.createdAt, source: 'platform' as const,
+          documentKey: collection ? docKey(row.customerId, row.currencyCode, collection.referenceNumber ?? collection.receiptNumber) : null };
+      }),
+      ...oracleRows.map((row) => {
+        const mirror = mirrorByFingerprint.get(publicationByEntity.get(row.id)!)!;
+        return { customerId: row.customerId, currencyCode: row.currencyCode,
+          amountSigned: Number(row.debit) - Number(row.credit), occurredAt: mirror.sourceCreatedAt!, source: 'oracle' as const,
+          documentKey: docKey(row.customerId, row.currencyCode, mirror.documentSerial ?? mirror.documentNumber) };
+      }),
+    ]);
+    const current: DebtSnapshot[] = [];
+    const previous: DebtSnapshot[] = [];
+    for (const balance of balances) {
+      const matching = movements.filter((row) => row.customerId === balance.customerId && row.currencyCode === balance.currencyCode);
+      const importedAt = balance.lastImportJob?.importedAt;
+      const afterImport = matching.reduce((sum, row) =>
+        row.source === 'platform' && (!importedAt || row.occurredAt > importedAt) ? sum + row.amountSigned : sum, 0);
+      const recent = matching.reduce((sum, row) => row.occurredAt >= since ? sum + row.amountSigned : sum, 0);
+      const effective = Number(balance.accountingBalance) + afterImport;
+      const snapshot = {
+        customerId: balance.customerId,
+        currencyCode: balance.currencyCode,
+        customer: balance.customer,
+      };
+      current.push({ ...snapshot, balance: effective });
+      previous.push({ ...snapshot, balance: effective - recent });
+    }
+    return {
+      window: { from: since, to: now, hours: 24 },
+      source: 'platform_and_published_oracle_movements',
+      scope: canReadAll ? 'all_customers' : 'assigned_customers',
+      perCurrency: applyGrossLedgerMovement(summarizeDebtChange(current, previous), movements.filter(row => row.occurredAt >= since)),
+      note: 'يعرض حركات المنصة وحركات Oracle المنشورة خلال آخر 24 ساعة حسب وقت المستند، دون تكرار السندات المرتبطة، وضمن حسابات المستخدم المسموحة.',
+    };
+  }
+
   /**
    * أعمار الديون التقديرية: عمر أقدم حركة متاحة لكل حساب مدين.
    * estimated=true دائمًا — الملف لا يوفر تواريخ استحقاق الفواتير (قرار موثق: لا دقة زائفة).
@@ -397,7 +609,12 @@ export class DashboardService {
         select: { customerId: true, score: true, riskLevel: true },
       }),
       this.prisma.task.findMany({
-        where: { status: 'open', dueDate: { gte: today, lt: tomorrow }, customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
+        where: {
+          status: 'open',
+          taskType: { notIn: [...REFRESHED_DAILY_TASK_TYPES] },
+          dueDate: { gte: today, lt: tomorrow },
+          customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        },
         select: {
           id: true, customerId: true, assignedTo: true, taskType: true, priorityReason: true,
           expectedAmount: true, expectedCurrency: true,
@@ -560,30 +777,85 @@ export class DashboardService {
     const collectionsByCollector = await this.prisma.collection.groupBy({
       by: ['collectorId', 'currencyCode'],
       where: {
-        status: { not: 'reversed' },
+        status: 'recorded',
         collectedAt: { gte: today0, lt: tomorrow0 },
         collector: { user: { organizationId: orgId } },
       },
       _sum: { amount: true },
       _count: true,
     });
-    const perfCollectorIds = [...new Set(collectionsByCollector.map((c) => c.collectorId))];
-    const perfCollectors = perfCollectorIds.length
-      ? await this.prisma.collector.findMany({
-          where: { id: { in: perfCollectorIds } },
-          include: { user: { select: { fullName: true } } },
-        })
-      : [];
-    const perfNameMap = new Map(perfCollectors.map((c) => [c.id, c.user.fullName]));
-    const collectorPerformanceToday = collectionsByCollector
-      .map((c) => ({
-        collectorId: c.collectorId,
-        collectorName: perfNameMap.get(c.collectorId) ?? c.collectorId,
-        currency: c.currencyCode,
-        amount: Number(c._sum.amount ?? 0),
-        count: c._count,
-      }))
-      .sort((a, b) => b.amount - a.amount);
+    const [oracleReceiptAudits, perfCollectors, localFinalReceipts] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        where: {
+          action: 'oracle_test_request_created',
+          entityTable: 'IAS20261',
+          createdAt: { gte: today0, lt: tomorrow0 },
+          user: { organizationId: orgId },
+        },
+        select: {
+          id: true, entityId: true, newValue: true, createdAt: true,
+          user: {
+            select: {
+              fullName: true,
+              collector: { select: { id: true, active: true, oracleCollectorNo: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.collector.findMany({
+        where: { active: true, user: { organizationId: orgId } },
+        select: { id: true, oracleCollectorNo: true, user: { select: { fullName: true } } },
+      }),
+      this.prisma.collection.findMany({
+        where: { status: 'recorded', customer: { organizationId: orgId }, collectedAt: { gte: today0, lt: tomorrow0 },
+          ...(user.permissions.includes('customers.read_all') ? {} : { collector: { userId: user.id } }) },
+        select: { id: true, customerId: true, currencyCode: true, amount: true, collectedAt: true, status: true,
+          referenceNumber: true, receiptNumber: true, customer: { select: { externalCustomerCode: true } } },
+      }),
+    ]);
+    const collectorById = new Map(perfCollectors.map((collector) => [collector.id, collector]));
+    const collectorByNo = new Map(perfCollectors
+      .filter((collector) => collector.oracleCollectorNo !== null)
+      .map((collector) => [String(collector.oracleCollectorNo), collector]));
+    const performance = new Map<string, {
+      collectorId: string; collectorName: string; currency: string; amount: number; count: number;
+    }>();
+    const addPerformance = (collectorId: string, collectorName: string, currency: string, amount: number, count = 1) => {
+      const key = `${collectorId}|${currency}`;
+      const current = performance.get(key);
+      performance.set(key, {
+        collectorId, collectorName, currency,
+        amount: (current?.amount ?? 0) + amount,
+        count: (current?.count ?? 0) + count,
+      });
+    };
+    for (const collection of collectionsByCollector) {
+      const collector = collectorById.get(collection.collectorId);
+      addPerformance(
+        collection.collectorId,
+        collector?.user.fullName ?? collection.collectorId,
+        collection.currencyCode,
+        Number(collection._sum.amount ?? 0),
+        collection._count,
+      );
+    }
+    const directReceipts = await oracleReceiptActivity(this.prisma, user, todayDate);
+    const receiptStates = reconcileReceiptRequests(oracleReceiptAudits as any[],[...directReceipts,...recordedLocalReceiptFinals(localFinalReceipts)],
+      await this.oracleRequests?.receiptStatuses?.().catch(()=>[]) ?? []);
+    const stateByAudit = new Map(receiptStates.map(request=>[request.auditId,request]));
+    for (const receipt of directReceipts) {
+      addPerformance(receipt.collector.id, receipt.collector.user.fullName, receipt.currencyCode, receipt.amount);
+    }
+    for (const row of oracleReceiptAudits) {
+      const request = stateByAudit.get(row.id);
+      if (!request || !countableReceiptRequest(request)) continue;
+      if (request?.kind !== 'receipt' || request.amount === null || !request.currencyCode) continue;
+      const collector = request.collectorNo ? collectorByNo.get(String(request.collectorNo))
+        : row.user?.collector?.active ? collectorById.get(row.user.collector.id) : null;
+      if (!collector) continue;
+      addPerformance(collector.id, collector.user.fullName, request.currencyCode, request.amount);
+    }
+    const collectorPerformanceToday = [...performance.values()].sort((a, b) => b.amount - a.amount);
 
     return {
       customers: { total: totalCustomers, active: activeCustomers, debtors },

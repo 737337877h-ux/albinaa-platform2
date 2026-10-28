@@ -16,7 +16,7 @@ type OverallStatus = 'healthy' | 'degraded' | 'offline' | 'initializing';
 
 interface MirrorRun {
   id: string; sourceSchema: string; status: string; startedAt: string;
-  extractedAt: string | null; validatedAt: string | null;
+  extractedAt: string | null; validatedAt: string | null; publishedAt: string | null;
   loadedCounts: Record<string, number> | null;
   validationSummary: Record<string, unknown> | null;
   platformComparison: Record<string, unknown> | null;
@@ -33,6 +33,10 @@ interface MonitoringSummary {
   mode: 'read_only_mirror'; oracleWriteEnabled: false; scheduleMinutes: number;
   staleAfterMinutes: number; overallStatus: OverallStatus; checkedAt: string;
   heartbeats: MirrorHeartbeat[];
+  directReadGateway: {
+    configured: boolean; ready: boolean; status: string; expectedSchema: string;
+    reportedSchema?: string | null; capabilities?: string[]; missingCapabilities?: string[]; message: string;
+  };
   latest: { customers: MirrorRun | null; inventory: MirrorRun | null; movements: MirrorRun | null };
   history: { customers: MirrorRun[]; inventory: MirrorRun[]; movements: MirrorRun[] };
   operationalCounts: { customers: number; balances: number };
@@ -54,7 +58,7 @@ const statusCopy: Record<OverallStatus, { title: string; hint: string; tone: 'cr
 };
 const kindLabel: Record<MirrorKind, string> = { customers: 'العملاء والأرصدة', inventory: 'الأصناف والمخزون', movements: 'الحركات التفصيلية' };
 const runStatus: Record<string, string> = {
-  validating: 'للمراجعة', published: 'منشورة', rejected: 'مرفوضة', failed: 'فشلت', extracting: 'قيد الاستخراج',
+  validating: 'قيد التحقق', validated: 'تم التحقق', published: 'منشورة', rejected: 'مرفوضة', failed: 'فشلت', extracting: 'قيد الاستخراج',
 };
 
 function elapsed(seconds: number) {
@@ -144,6 +148,26 @@ export default function OracleMonitoringPage() {
               </div>
             </Card>
 
+            <Card className={summary.data.directReadGateway.ready ? 'border-credit-600/25' : 'border-debt-600/30'}>
+              <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <Database className={summary.data.directReadGateway.ready ? 'mt-0.5 h-5 w-5 text-credit-600' : 'mt-0.5 h-5 w-5 text-debt-600'} aria-hidden />
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="font-display font-bold">بوابة الأطراف والحسابات المباشرة</h2>
+                      <Badge tone={summary.data.directReadGateway.ready ? 'credit' : 'debt'}>
+                        {summary.data.directReadGateway.ready ? 'جاهزة' : 'متوقفة'}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-ink-mid">{summary.data.directReadGateway.message}</p>
+                  </div>
+                </div>
+                <div className="text-sm text-ink-mid">
+                  المخطط: <strong dir="ltr">{summary.data.directReadGateway.reportedSchema ?? summary.data.directReadGateway.expectedSchema}</strong>
+                </div>
+              </div>
+            </Card>
+
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <StatCard label="عملاء المرآة" value={count(summary.data.latest.customers, 'customers')} icon={<Users className="h-4 w-4" />} hint={`التشغيلي: ${summary.data.operationalCounts.customers.toLocaleString('en-US')}`} />
               <StatCard label="أرصدة المرآة" value={count(summary.data.latest.customers, 'customer_balances')} icon={<Database className="h-4 w-4" />} hint={`التشغيلي: ${summary.data.operationalCounts.balances.toLocaleString('en-US')}`} />
@@ -162,9 +186,14 @@ export default function OracleMonitoringPage() {
                       <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">آخر فحص</span><strong>{heartbeat ? elapsed(heartbeat.ageSeconds) : 'لم يصل بعد'}</strong></div>
                       <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">نتيجة الفحص</span><span>{heartbeat?.lastStatus === 'ok' ? 'نجح' : heartbeat ? 'فشل' : '—'}</span></div>
                       <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">هل تغيرت البيانات؟</span><span>{heartbeat ? (heartbeat.lastChanged ? 'نعم، حُمّلت لقطة جديدة' : 'لا، بدون تكرار') : '—'}</span></div>
-                      <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">حالة أحدث لقطة</span><Badge tone={latest?.status === 'validating' ? 'hazard' : 'neutral'}>{latest ? (runStatus[latest.status] ?? latest.status) : 'لا توجد'}</Badge></div>
+                      <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">حالة أحدث لقطة</span><Badge tone={latest?.status === 'published' ? 'credit' : latest?.status === 'validated' ? 'neutral' : latest?.status === 'validating' ? 'hazard' : 'neutral'}>{latest ? (runStatus[latest.status] ?? latest.status) : 'لا توجد'}</Badge></div>
                       {kind === 'movements' && <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">عدد الحركات</span><strong className="tnum">{count(latest, 'customer_movements').toLocaleString('en-US')} عميل / {count(latest, 'inventory_movements').toLocaleString('en-US')} مخزون</strong></div>}
                       <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">وقت أحدث لقطة</span><span dir="ltr" className="tnum">{latest ? fmtDateTime(latest.startedAt) : '—'}</span></div>
+                      {kind === 'inventory' && <>
+                        <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">اللقطة المنشورة الفعالة</span><Badge tone={summary.data.activePublishedInventory ? 'credit' : 'debt'}>{summary.data.activePublishedInventory ? 'منشورة' : 'لا توجد'}</Badge></div>
+                        <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">وقت النشر</span><span dir="ltr" className="tnum">{summary.data.activePublishedInventory ? fmtDateTime(summary.data.activePublishedInventory.activatedAt) : '—'}</span></div>
+                        {summary.data.activePublishedInventory && <div className="flex items-center justify-between gap-3"><span className="text-ink-mid">رقم اللقطة الفعالة</span><span dir="ltr" className="tnum text-xs">{summary.data.activePublishedInventory.runId.slice(0, 8)}</span></div>}
+                      </>}
                     </div>
                   </Card>
                 );

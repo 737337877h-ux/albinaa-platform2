@@ -1,4 +1,5 @@
 'use client';
+import {describeNotification} from '@/lib/notification-presentation';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
@@ -7,44 +8,10 @@ import { api, tokenStore } from '@/lib/api';
 import { fmtDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { notificationHref } from '@/lib/notification-target';
-import { financialAdjustmentDecisionAr, financialAdjustmentTypeAr } from '@/lib/financial-adjustment';
 
 interface NotificationItem {
   id: string; kind: string; readAt: string | null; createdAt: string;
   payload: Record<string, unknown>;
-}
-
-function describe(n: NotificationItem): string {
-  const p = n.payload ?? {};
-  switch (n.kind) {
-    case 'promise_due': return `تذكير: وعد سداد من ${p.customerName ?? 'عميل'}`;
-    case 'promise_overdue': return `وعد متأخر من ${p.customerName ?? 'عميل'}`;
-    case 'collection_created': return `تحصيل جديد من ${p.customerName ?? ''}`;
-    case 'collection_reversal_requested': return `طلب عكس تحصيل: ${p.amount ?? ''} ${p.currency ?? ''}`;
-    case 'finance_alert': {
-      if (p.event === 'financial_adjustment_requested') {
-        const type = financialAdjustmentTypeAr(p.requestType);
-        const amount = p.amount != null ? Number(p.amount).toLocaleString('en-US') : '';
-        return `طلب ${type} يحتاج المراجعة — ${String(p.customerName ?? 'عميل')}${amount ? ` — ${amount} ${String(p.currency ?? '')}` : ''}`;
-      }
-      if (p.event === 'financial_adjustment_reviewed') {
-        const type = financialAdjustmentTypeAr(p.requestType);
-        return `طلب ${type} ${financialAdjustmentDecisionAr(p.decision)} — ${String(p.customerName ?? 'عميل')}`;
-      }
-      const labels: Record<string, string> = {
-        collection_reversed: 'تم عكس تحصيل',
-        manual_balance_adjustment: 'تم تعديل رصيد يدويًا',
-        credit_limit_overridden: 'تم تجاوز سقف ائتمان',
-        customer_merged: 'تم دمج عميلين',
-        import_reversed: 'تم التراجع عن استيراد',
-      };
-      return `تنبيه مالي: ${labels[String(p.event)] ?? 'عملية حساسة'}`;
-    }
-    case 'scheduled_job_failed': return `تعطلت مهمة مجدولة: ${p.job ?? ''}`;
-    case 'oracle_exception_movement_published': return String(p.message ?? 'نُشرت حركة Oracle استثنائية مع حفظ سجل المراجعة');
-    case 'customer_transferred': return `نُقل إليك العميل ${p.customerName ?? ''}`;
-    default: return n.kind;
-  }
 }
 
 export function NotificationsMenu() {
@@ -54,7 +21,7 @@ export function NotificationsMenu() {
   const { data } = useQuery({
     queryKey: ['notifications-preview'],
     queryFn: () => api<{ unread: number; items: NotificationItem[] }>('/notifications?limit=6'),
-    refetchInterval: 60_000,
+    refetchInterval: 5_000,
     enabled: typeof window !== 'undefined' && !!tokenStore.access,
   });
 
@@ -103,7 +70,7 @@ export function NotificationsMenu() {
                       !n.readAt && 'bg-pine-50/50 dark:bg-pine-900/20',
                     )}
                   >
-                    <p className={cn(!n.readAt && 'font-medium')}>{describe(n)}</p>
+                    <p className={cn(!n.readAt && 'font-medium')}>{describeNotification(n).title}</p>
                     <p className="mt-0.5 text-xs text-concrete-400">{fmtDateTime(n.createdAt)}</p>
                   </Link>
                 </li>

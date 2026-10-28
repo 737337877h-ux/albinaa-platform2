@@ -16,6 +16,12 @@ function parseBoolean(value: unknown): unknown {
   return value;
 }
 
+export const ORACLE_INVENTORY_DECISION_TYPES = [
+  'negative_stock', 'stockout_risk', 'reorder', 'dead_stock',
+  'slow_moving', 'overstock', 'seasonal_candidate', 'fast_moving',
+  'insufficient_history',
+] as const;
+
 export class OracleInventorySourceQueryDto {
   @IsOptional()
   @IsString()
@@ -23,11 +29,7 @@ export class OracleInventorySourceQueryDto {
   sourceSchema?: string;
 
   @IsOptional()
-  @IsIn([
-    'negative_stock', 'stockout_risk', 'reorder', 'dead_stock',
-    'slow_moving', 'overstock', 'seasonal_candidate', 'fast_moving',
-    'insufficient_history',
-  ])
+  @IsIn(ORACLE_INVENTORY_DECISION_TYPES)
   decisionType?: string;
 
   @IsOptional()

@@ -1,5 +1,6 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
@@ -13,7 +14,7 @@ import { OracleInventoryReadService } from './oracle-inventory-read.service';
 
 @ApiTags('Oracle Inventory - Read Only')
 @ApiBearerAuth('access-token')
-@RequirePermissions('reports.read')
+@RequirePermissions('inventory.read')
 @Controller('oracle-inventory')
 export class OracleInventoryReadController {
   constructor(private readonly inventory: OracleInventoryReadService) {}
@@ -56,5 +57,21 @@ export class OracleInventoryReadController {
   @ApiOperation({ summary: 'Published Oracle stock balances with search and pagination (read only)' })
   stockBalances(@CurrentUser() actor: AuthUser, @Query() query: OracleInventoryStockQueryDto) {
     return this.inventory.stockBalances(actor, query);
+  }
+
+  @Post('barcode-prints')
+  @ApiOperation({ summary: 'Record a barcode print or ZPL preparation event' })
+  recordBarcodePrint(
+    @CurrentUser() actor: AuthUser,
+    @Body() body: { itemCode?: string; copies?: number; channel?: string; sourceSchema?: string },
+    @Req() req: Request,
+  ) {
+    return this.inventory.recordBarcodePrint(actor, body, req);
+  }
+
+  @Get('barcode-prints/report')
+  @ApiOperation({ summary: 'Barcode printing coverage and history' })
+  barcodePrintReport(@CurrentUser() actor: AuthUser, @Query('sourceSchema') sourceSchema?: string) {
+    return this.inventory.barcodePrintReport(actor, sourceSchema);
   }
 }

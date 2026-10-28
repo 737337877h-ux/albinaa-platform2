@@ -21,6 +21,7 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next ./.next
@@ -29,4 +30,4 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/public ./public
 USER app
 EXPOSE 3001
-CMD ["npm", "start"]
+CMD ["node", "server.js"]

@@ -48,6 +48,42 @@ export const TASK_TYPE_PRIORITY: Record<string, number> = {
   followup_normal: 12,
 };
 
+/**
+ * أسباب تُعاد هندستها كل يوم من الرصيد والمخاطر والتقادم الحالي. لا يجوز أن
+ * تتحول نسخة الأمس منها إلى مهمة متأخرة جديدة لنفس العميل؛ مهام الوعود
+ * والمتابعة المحددة والتحصيل الجزئي ليست ضمن هذه القائمة وتبقى حتى الإنجاز.
+ */
+export const REFRESHED_DAILY_TASK_TYPES = [
+  'followup_overdue',
+  'risk_critical',
+  'risk_high',
+  'large_debt_7plus',
+  'debt_120plus',
+  'high_balance_no_followup',
+  'repeated_no_answer',
+  'needs_visit',
+  'followup_periodic_medium',
+  'followup_normal',
+  'escalation_message_30',
+  'escalation_call_60',
+  'escalation_visit_90',
+  'escalation_legal_120',
+  'account_group_priority',
+  'account_group_risk_critical',
+  'account_group_risk_high',
+] as const;
+
+/**
+ * المهام التي أنشأها موظف أو نتجت عن وعد/متابعة/تحصيل جزئي. هذه وحدها
+ * تُعرض في عداد «مهام اليوم»؛ أما توصيات المخاطر اليومية فتبقى في لوحة
+ * الأولويات ولا تتحول إلى مئات المهام المجدولة.
+ */
+export function isScheduledTaskType(taskType: string | null | undefined): boolean {
+  return !REFRESHED_DAILY_TASK_TYPES.includes(
+    String(taskType ?? '') as (typeof REFRESHED_DAILY_TASK_TYPES)[number],
+  );
+}
+
 export type DebtEscalationTaskType =
   | 'escalation_message_30'
   | 'escalation_call_60'
@@ -310,6 +346,7 @@ export class TasksService {
     const tasks = await this.prisma.task.findMany({
       where: {
         status: 'open',
+        taskType: { notIn: [...REFRESHED_DAILY_TASK_TYPES] },
         dueDate,
         customer: { organizationId: orgId },
         ...(collectorIdParam
@@ -518,6 +555,20 @@ export class TasksService {
 
     // 0) مسح الوعود المتأخرة أولاً (idempotent) — التصعيدات جزء من القائمة
     await this.promises.sweepOverdue(orgId);
+
+    // مهام الأولوية المحسوبة هي لقطة يومية وليست مواعيد مستقلة. إغلاق نسخة
+    // الأيام السابقة يمنع تكرار العميل في «اليوم» و«المتأخرة» معًا، مع إبقاء
+    // الوعود والمتابعات اليدوية وموعد متبقي التحصيل مفتوحة كما هي.
+    const refreshedPreviousTasks = await this.prisma.task.updateMany({
+      where: {
+        status: 'open',
+        dueDate: { lt: today },
+        sourcePromiseId: null,
+        taskType: { in: [...REFRESHED_DAILY_TASK_TYPES] },
+        customer: { organizationId: orgId },
+      },
+      data: { status: 'done' },
+    });
 
     const [
       customers,
@@ -925,6 +976,7 @@ export class TasksService {
       enabled: true,
       generatedAt: new Date().toISOString(),
       date: today,
+      refreshedPreviousTasks: refreshedPreviousTasks.count,
       createdTasks: createdCount,
       assignedTasks,
       unassignedTasks,

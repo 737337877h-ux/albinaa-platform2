@@ -6,8 +6,12 @@ import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { BRANDING_KEYS } from '../common/branding';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { isSignificantBalance } from '../common/debt-followup-policy';
+import { smartSearchTerms } from '../common/smart-search';
 import { normalizeUploadedFilename } from '../common/uploaded-filename';
 import { NotificationsService } from '../notifications/notifications.service';
+import { queueAssignmentNotification } from '../notifications/assignment-notification';
+import { OracleTestRequestsService } from '../oracle-test-requests/oracle-test-requests.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RiskRefreshService } from '../risk/risk-refresh.service';
 import { AssignCollectorDto } from './dto/assign-collector.dto';
@@ -22,6 +26,7 @@ import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
 import { CreateFinancialAdjustmentRequestDto } from './dto/create-financial-adjustment-request.dto';
 import { ReviewFinancialAdjustmentRequestDto } from './dto/review-financial-adjustment-request.dto';
 import { renderCustomerStatementPdf } from './statement-pdf.renderer';
+import { OracleAccountStatementReader } from './oracle-account-statement.reader';
 
 /**
  * شكل استجابة GET /customers/:id/balances — تعريف صريح (بدل مصفوفة فارغة
@@ -59,6 +64,8 @@ export class CustomersService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     @Optional() private readonly riskRefresh?: RiskRefreshService,
+    @Optional() private readonly oracleRequests?: OracleTestRequestsService,
+    @Optional() private readonly oracleStatement?: OracleAccountStatementReader,
   ) {}
 
   // --------------------------------------------------------------------------
@@ -90,7 +97,7 @@ export class CustomersService {
 
   private async assertAccess(user: AuthUser, customerId: string) {
     const where = await this.scopeWhere(user);
-    const found = await this.prisma.customer.findFirst({ where: { ...where, id: customerId } });
+    const found = await this.prisma.customer.findFirst({ where: { AND: [where, { id: customerId }] } });
     if (!found) throw new NotFoundException('العميل غير موجود أو خارج نطاق صلاحيتك');
     if (found.mergedIntoId) {
       throw new ConflictException(`تم دمج هذا السجل. استخدم العميل الأساسي: ${found.mergedIntoId}`);
@@ -110,40 +117,64 @@ export class CustomersService {
 
     if (q.search) {
       const s = q.search.trim();
-      where.OR = [
-        { nameNormalized: { contains: normalizeName(s) } },
-        { externalCustomerCode: { contains: s } },
-        { phonePrimary: { contains: s } },
-        { phoneSecondary: { contains: s } },
-        { whatsapp: { contains: s } },
-        { aliases: { some: { aliasNormalized: { contains: normalizeAlias(s) } } } },
-      ];
+      const terms = smartSearchTerms(s);
+      const searchFilters: Prisma.CustomerWhereInput[] = terms.map((term) => ({
+        OR: [
+          { nameNormalized: { contains: normalizeName(term) } },
+          { externalCustomerCode: { contains: term, mode: 'insensitive' } },
+          { phonePrimary: { contains: term } },
+          { phoneSecondary: { contains: term } },
+          { whatsapp: { contains: term } },
+          { aliases: { some: { aliasNormalized: { contains: normalizeAlias(term) } } } },
+        ],
+      }));
+      where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), ...searchFilters];
     }
     if (q.region) where.region = q.region;
     if (q.branchId) where.branchId = q.branchId;
     if (q.status) where.status = q.status;
     else where.status = { not: 'merged' };
+    if (q.createdSince) where.createdAt = { gte: new Date(`${q.createdSince.slice(0, 10)}T00:00:00.000Z`) };
     if (q.collectorId) {
       where.assignments = q.collectorId === 'unassigned'
         ? { none: { effectiveTo: null } }
         : { some: { collectorId: q.collectorId, effectiveTo: null } };
     }
-    if (q.currency && !q.balanceState) {
-      where.balances = { some: { currencyCode: q.currency } };
+    // Customer collections remain debtor-only. Advance accounts are an
+    // accounting directory, so significant debit and credit balances appear.
+    const currency = q.currency?.trim().toUpperCase();
+    const debtorByCurrency: Prisma.CustomerBalanceWhereInput[] = [
+      { currencyCode: { in: ['YER', 'YR'] }, accountingBalance: { gt: 3_000 } },
+      { currencyCode: { in: ['SAR', 'SR'] }, accountingBalance: { gt: 30 } },
+      { currencyCode: 'USD', accountingBalance: { gt: 5 } },
+      { currencyCode: { notIn: ['YER', 'YR', 'SAR', 'SR', 'USD'] }, accountingBalance: { gt: 0 } },
+    ];
+    const creditorByCurrency: Prisma.CustomerBalanceWhereInput[] = [
+      { currencyCode: { in: ['YER', 'YR'] }, accountingBalance: { lt: -3_000 } },
+      { currencyCode: { in: ['SAR', 'SR'] }, accountingBalance: { lt: -30 } },
+      { currencyCode: 'USD', accountingBalance: { lt: -5 } },
+      { currencyCode: { notIn: ['YER', 'YR', 'SAR', 'SR', 'USD'] }, accountingBalance: { lt: 0 } },
+    ];
+    const balanceFilters = q.accountClass === 'advance'
+      ? q.balanceState === 'debtor' ? debtorByCurrency
+        : q.balanceState === 'creditor' ? creditorByCurrency
+          : [...debtorByCurrency, ...creditorByCurrency]
+      : debtorByCurrency;
+    const matchingCurrency = currency
+      ? balanceFilters.filter((filter) => {
+          const code = filter.currencyCode;
+          if (typeof code === 'string') return code === currency;
+          const values = (code as { in?: string[]; notIn?: string[] }).in;
+          return values ? values.includes(currency) : !['YER', 'YR', 'SAR', 'SR', 'USD'].includes(currency);
+        })
+      : balanceFilters;
+    // An explicit directory search must also find scoped credit/zero accounts.
+    // Explicit financial filters still narrow those search results.
+    if (!q.search?.trim() || q.balanceState || q.currency || q.excludeZero) {
+      where.balances = { some: { OR: matchingCurrency } };
     }
-    if (q.balanceState) {
-      const balFilter: Prisma.CustomerBalanceWhereInput =
-        q.balanceState === 'debtor'
-          ? { accountingBalance: { gt: 0 } }
-          : q.balanceState === 'creditor'
-            ? { accountingBalance: { lt: 0 } }
-            : { accountingBalance: 0 };
-      if (q.currency) balFilter.currencyCode = q.currency;
-      where.balances = { some: balFilter };
-    } else if (q.excludeZero) {
-      const nonZero: Prisma.CustomerBalanceWhereInput = { accountingBalance: { not: 0 } };
-      if (q.currency) nonZero.currencyCode = q.currency;
-      where.balances = { some: nonZero };
+    if (q.balanceState === 'zero' || (q.accountClass !== 'advance' && q.balanceState === 'creditor')) {
+      where.id = 'excluded-non-actionable-balance';
     }
 
     // الترتيب بالرصيد يتطلب عملة محددة (رصيد العميل معرّف لكل عملة، لا إجمالي مخلوط)
@@ -695,6 +726,19 @@ export class CustomersService {
     });
   }
 
+  async financialAdjustmentJournalDraft(actor: AuthUser, requestId: string) {
+    const request = await this.prisma.financialAdjustmentRequest.findFirst({
+      where: { id: requestId, organizationId: actor.organizationId, status: 'approved' },
+      select: {
+        id: true, journalDraft: true, journalStatus: true,
+        customer: { select: { id: true, name: true, externalCustomerCode: true } },
+      },
+    });
+    if (!request) throw new NotFoundException('طلب الخصم أو التصفية المعتمد غير موجود');
+    if (!request.journalDraft) throw new ConflictException('لم تُجهز مسودة القيد لهذا الطلب');
+    return request;
+  }
+
   async reviewFinancialAdjustmentRequest(
     actor: AuthUser,
     requestId: string,
@@ -703,10 +747,131 @@ export class CustomersService {
   ) {
     const current = await this.prisma.financialAdjustmentRequest.findFirst({
       where: { id: requestId, organizationId: actor.organizationId },
-      include: { customer: { select: { name: true } } },
+      include: { customer: { select: { name: true, externalCustomerCode: true } } },
     });
     if (!current) throw new NotFoundException('طلب الخصم أو التصفية غير موجود');
     if (current.status !== 'pending') throw new ConflictException('تمت معالجة هذا الطلب سابقًا');
+    const description = `${current.requestType === 'settlement' ? 'تصفية الحساب' : 'خصم'} - ${current.reason}`;
+    let journalDraft: Record<string, unknown> | null = null;
+    if (dto.decision === 'approved') {
+      if (!actor.permissions.includes('oracle_test_requests.journal.create')) {
+        throw new ForbiddenException('اعتماد الخصم أو التصفية يحتاج صلاحية إنشاء مسودة قيد يومي');
+      }
+      if (!this.oracleRequests) {
+        throw new ConflictException('خدمة مسودات القيود اليومية غير متاحة حاليًا');
+      }
+      const customerCode = String(current.customer.externalCustomerCode ?? '').trim();
+      if (!customerCode) throw new BadRequestException('لا يمكن إنشاء القيد قبل ربط العميل برقم عميل Oracle');
+      const catalog = await this.oracleRequests.catalog('receipt', actor) as Record<string, unknown>;
+      const parties = catalog.parties as Record<string, unknown> | undefined;
+      const partyRows = Object.values(parties ?? {}).flatMap((rows) => Array.isArray(rows) ? rows : []);
+      const customerParty = (Array.isArray(parties?.customers) ? parties.customers : [])
+        .find((party) => String((party as Record<string, unknown>).code ?? '') === customerCode) as Record<string, unknown> | undefined;
+      const platformCurrencyCode = String(current.currencyCode).trim().toUpperCase();
+      const canonicalCurrency = (value: unknown) => {
+        const code = String(value ?? '').trim().toUpperCase();
+        if (code === 'YR' || code === 'YER') return 'YER';
+        if (code === 'SR' || code === 'SAR') return 'SAR';
+        if (code === '$' || code === 'US$' || code === 'USD') return 'USD';
+        return code;
+      };
+      const requestedCurrency = canonicalCurrency(platformCurrencyCode);
+      const linkCurrency = (link: unknown) => {
+        const row = link as Record<string, unknown>;
+        return Array.isArray(row.currencyCodes)
+          ? row.currencyCodes.map(String).find((code) => canonicalCurrency(code) === requestedCurrency)
+          : undefined;
+      };
+      const customerLinks = (Array.isArray(customerParty?.linkedAccounts) ? customerParty.linkedAccounts : [])
+        .filter((link) => Number((link as Record<string, unknown>).analyticalType) === 3 && linkCurrency(link)) as Array<Record<string, unknown>>;
+      if (customerLinks.length !== 1) {
+        throw new BadRequestException(customerLinks.length === 0
+          ? `حساب العميل ${customerCode} غير مفعّل بعملة ${platformCurrencyCode} في IAS20261`
+          : `يوجد أكثر من حساب عميل مفعّل بعملة ${platformCurrencyCode}؛ يلزم تحديد الحساب قبل الاعتماد`);
+      }
+      const sourceLinks = partyRows.flatMap((party) => {
+        const links = (party as Record<string, unknown>).linkedAccounts;
+        return Array.isArray(links) ? links : [];
+      }).filter((link) => {
+        const row = link as Record<string, unknown>;
+        return String(row.accountCode ?? '') === '312401001'
+          && Number(row.analyticalType) === 0 && linkCurrency(row);
+      }) as Array<Record<string, unknown>>;
+      if (sourceLinks.length !== 1) {
+        throw new BadRequestException(`الحساب 312401001 غير مفعّل بعملة ${platformCurrencyCode} في IAS20261`);
+      }
+      const customerLink = customerLinks[0];
+      const sourceLink = sourceLinks[0];
+      const customerOracleCurrency = linkCurrency(customerLink);
+      const sourceOracleCurrency = linkCurrency(sourceLink);
+      if (!customerOracleCurrency || !sourceOracleCurrency
+        || canonicalCurrency(customerOracleCurrency) !== canonicalCurrency(sourceOracleCurrency)) {
+        throw new BadRequestException(`تعذر مطابقة عملة ${platformCurrencyCode} بين طرفي القيد في IAS20261`);
+      }
+      const oracleCurrencyCode = customerOracleCurrency;
+      const payload = {
+        externalReference: `financial-adjustment:${requestId}`,
+        description,
+        lines: [
+          {
+            direction: 'debit',
+            accountCode: String(sourceLink.accountCode),
+            analyticalAccountCode: null,
+            analyticalType: 0,
+            currencyCode: oracleCurrencyCode,
+            amount: Number(current.requestedAmount),
+            description,
+          },
+          {
+            direction: 'credit',
+            accountCode: String(customerLink.accountCode),
+            analyticalAccountCode: String(customerLink.analyticalAccountCode),
+            analyticalType: Number(customerLink.analyticalType),
+            currencyCode: oracleCurrencyCode,
+            amount: Number(current.requestedAmount),
+            description,
+          },
+        ],
+      };
+      const dryRun = await this.oracleRequests.journalDryRun(payload) as Record<string, unknown>;
+      if (dryRun.valid !== true || dryRun.saveAllowed !== true) {
+        const issues = Array.isArray(dryRun.issues)
+          ? dryRun.issues.map((issue) => String((issue as Record<string, unknown>).message ?? '')).filter(Boolean)
+          : [];
+        throw new BadRequestException(issues.join('؛ ') || String(dryRun.saveBlockedReason ?? 'فشل فحص مسودة القيد اليومي'));
+      }
+      const created = await this.oracleRequests.journalCreate(payload) as Record<string, unknown>;
+      journalDraft = {
+        ...payload,
+        currencyCode: platformCurrencyCode,
+        oracleCurrencyCode,
+        amount: Number(current.requestedAmount),
+        sourceAccountCode: '312401001',
+        customerAccountCode: String(customerLink.accountCode),
+        customerCode,
+        status: 'created_in_oracle',
+        oracleWritePerformed: true,
+        requestNo: created.requestNo ?? null,
+        requestSerial: created.requestSerial ?? null,
+        verified: created.verified === true,
+      };
+      await this.audit.log({
+        userId: actor.id,
+        action: 'oracle_test_request_created',
+        entityTable: 'IAS20261',
+        entityId: created.requestSerial == null ? null : String(created.requestSerial),
+        newValue: {
+          kind: 'journal',
+          requestNo: created.requestNo,
+          requestSerial: created.requestSerial,
+          created: created.created,
+          externalReference: payload.externalReference,
+          financialAdjustmentId: requestId,
+        },
+        reason: 'إنشاء مسودة قيد يومي من طلب خصم أو تصفية معتمد دون ترحيل القيد',
+        req,
+      });
+    }
     const updated = await this.prisma.financialAdjustmentRequest.update({
       where: { id: requestId },
       data: {
@@ -714,6 +879,8 @@ export class CustomersService {
         reviewedBy: actor.id,
         reviewedAt: new Date(),
         reviewNotes: dto.reviewNotes?.trim() || null,
+        journalDraft: journalDraft ? journalDraft as Prisma.InputJsonValue : Prisma.DbNull,
+        journalStatus: journalDraft ? 'created_in_oracle' : null,
       },
     });
     await this.audit.log({
@@ -722,7 +889,7 @@ export class CustomersService {
       entityTable: 'financial_adjustment_requests',
       entityId: requestId,
       oldValue: { status: current.status },
-      newValue: { status: dto.decision, reviewNotes: dto.reviewNotes },
+      newValue: { status: dto.decision, reviewNotes: dto.reviewNotes, journalDraft },
       req,
     });
     await this.notifications.notifyUser(current.requestedBy, 'finance_alert', {
@@ -739,7 +906,7 @@ export class CustomersService {
       reviewNotes: dto.reviewNotes?.trim() || null,
       href: `/admin/financial-adjustments?requestId=${requestId}&status=${dto.decision}`,
     });
-    return updated;
+    return { ...updated, journalDraft };
   }
 
   // --------------------------------------------------------------------------
@@ -749,6 +916,13 @@ export class CustomersService {
     await this.assertAccess(user, id);
     const page = q.page ?? 1;
     const limit = q.limit ?? 50;
+    if (q.source === 'oracle_archive') {
+      if (!this.oracleStatement) throw new BadRequestException('الكشف التاريخي غير مهيأ');
+      const customer = await this.prisma.customer.findUniqueOrThrow({ where: { id } });
+      const report = await this.oracleStatement.read(customer, q);
+      return { ...report, page, limit, totalPages: Math.max(1, Math.ceil(report.total / limit)),
+        items: report.items.slice((page - 1) * limit, page * limit) };
+    }
 
     const balance = await this.prisma.customerBalance.findUnique({
       where: { customerId_currencyCode: { customerId: id, currencyCode: q.currency } },
@@ -986,6 +1160,7 @@ export class CustomersService {
         where: { customerId: id, status: 'open', assignedTo: null },
         data: { assignedTo: dto.collectorId },
       });
+      await queueAssignmentNotification(tx, assignment.id);
       return { assignment, tasksUpdated: tasksUpdated.count };
     });
 
@@ -1099,18 +1274,86 @@ export class CustomersService {
       where,
       select: {
         id: true,
-        balances: { select: { currencyCode: true, accountingBalance: true } },
+        balances: {
+          select: {
+            currencyCode: true,
+            accountingBalance: true,
+            lastImportJob: { select: { importedAt: true } },
+          },
+        },
       },
     });
-    const byCurrency: Record<string, { accounts: number; balance: number }> = {};
+    const cutoffs = new Map<string, number>();
     for (const row of rows) {
       for (const balance of row.balances) {
-        byCurrency[balance.currencyCode] ??= { accounts: 0, balance: 0 };
-        byCurrency[balance.currencyCode].accounts += 1;
-        byCurrency[balance.currencyCode].balance += Number(balance.accountingBalance);
+        cutoffs.set(`${row.id}:${balance.currencyCode}`,
+          balance.lastImportJob?.importedAt?.getTime() ?? Number.NEGATIVE_INFINITY);
       }
     }
-    return { accounts: rows.length, byCurrency };
+    const ledgerEntries = rows.length === 0 ? [] : await this.prisma.operationalLedger.findMany({
+      where: { customerId: { in: rows.map((row) => row.id) } },
+      select: { customerId: true, currencyCode: true, amountSigned: true, createdAt: true },
+    });
+    const ledgerDeltas = new Map<string, number>();
+    for (const entry of ledgerEntries) {
+      const key = `${entry.customerId}:${entry.currencyCode}`;
+      if (entry.createdAt.getTime() <= (cutoffs.get(key) ?? Number.NEGATIVE_INFINITY)) continue;
+      ledgerDeltas.set(key, (ledgerDeltas.get(key) ?? 0) + Number(entry.amountSigned));
+    }
+    const byCurrency: Record<string, {
+      accounts: number;
+      debtorAccounts: number;
+      debtorBalance: number;
+      creditorAccounts: number;
+      creditorBalance: number;
+      netBalance: number;
+    }> = {};
+    const significantAccountIds = new Set<string>();
+    for (const row of rows) {
+      for (const balance of row.balances) {
+        const amount = Number(balance.accountingBalance)
+          + (ledgerDeltas.get(`${row.id}:${balance.currencyCode}`) ?? 0);
+        if (!isSignificantBalance(amount, balance.currencyCode)) continue;
+        significantAccountIds.add(row.id);
+        byCurrency[balance.currencyCode] ??= {
+          accounts: 0, debtorAccounts: 0, debtorBalance: 0,
+          creditorAccounts: 0, creditorBalance: 0, netBalance: 0,
+        };
+        const summary = byCurrency[balance.currencyCode];
+        summary.accounts += 1;
+        summary.netBalance += amount;
+        if (amount > 0) {
+          summary.debtorAccounts += 1;
+          summary.debtorBalance += amount;
+        } else {
+          summary.creditorAccounts += 1;
+          summary.creditorBalance += -amount;
+        }
+      }
+    }
+    return { accounts: significantAccountIds.size, byCurrency };
+  }
+
+  async exportFull(user: AuthUser) {
+    const where = await this.scopeWhere(user);
+    where.status = { not: 'merged' };
+    return this.prisma.customer.findMany({
+      where,
+      orderBy: { externalCustomerCode: 'asc' },
+      select: {
+        externalCustomerCode: true, accountNumber: true, name: true, tradeName: true,
+        phonePrimary: true, phoneSecondary: true, whatsapp: true, region: true, address: true,
+        geoLat: true, geoLng: true, customerType: true, status: true,
+        relationshipStartDate: true, notes: true,
+        branch: { select: { name: true } },
+        balances: { select: { currencyCode: true, accountingBalance: true }, orderBy: { currencyCode: 'asc' } },
+        assignments: {
+          where: { effectiveTo: null },
+          take: 1,
+          select: { collector: { select: { user: { select: { fullName: true } } } } },
+        },
+      },
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -1367,6 +1610,17 @@ export class CustomersService {
         },
       },
     });
+    if (q.source === 'oracle_archive') {
+      if (!this.oracleStatement) throw new BadRequestException('الكشف التاريخي غير مهيأ');
+      const report = await this.oracleStatement.read(customer, q);
+      const pdfCustomer = { ...customer, externalCustomerCode: customer.customerType === 'advance'
+        ? customer.accountNumber! : customer.externalCustomerCode };
+      return renderCustomerStatementPdf(pdfCustomer, report, report.items, {
+        ...q, template: 'branded', printedBy: user.username,
+        accountGroupLabel: customer.customerType === 'advance' ? 'حسابات السلف' : 'حسابات العملاء',
+        sourceNote: `صادر من المنصة - قراءة Oracle: ${report.readAt}`,
+      });
+    }
     const first = await this.statement(user, id, { ...q, page: 1, limit: 200 });
     const items = [...first.items];
     for (let page = 2; page <= first.totalPages; page += 1) {

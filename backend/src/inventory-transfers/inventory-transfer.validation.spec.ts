@@ -10,6 +10,13 @@ describe('inventory transfer validation', () => {
     expect(issues).toEqual([expect.objectContaining({ code: 'INSUFFICIENT_SOURCE_STOCK', severity: 'error', lineNo: 2 })]);
   });
 
+  it('keeps insufficient stock as a warning for a YemenSoft draft request', () => {
+    const issues = validateStockLine(1, 1, {
+      warehouseExists: true, itemExists: true, unitExists: true, packageSize: 1, availableQuantity: 0,
+    }, true);
+    expect(issues).toEqual([expect.objectContaining({ code: 'INSUFFICIENT_SOURCE_STOCK', severity: 'warning' })]);
+  });
+
   it('reports item, unit and warehouse failures independently', () => {
     const codes = validateStockLine(1, 1, { warehouseExists: false, itemExists: false, unitExists: false, packageSize: null, availableQuantity: 0 }).map((issue) => issue.code);
     expect(codes).toEqual(['ITEM_NOT_FOUND', 'UNIT_NOT_FOUND', 'SOURCE_WAREHOUSE_NOT_FOUND', 'INSUFFICIENT_SOURCE_STOCK']);

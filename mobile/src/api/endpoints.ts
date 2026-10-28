@@ -114,6 +114,32 @@ export async function fetchInventoryItem(code: string) {
   return client.get(`/mobile/inventory/items/${encodeURIComponent(code)}`);
 }
 
+export interface InventoryCountDraftLine {
+  itemCode: string;
+  unitCode: string;
+  countedQuantity: number;
+  batchNo?: string;
+  expireDate?: string;
+}
+
+export interface InventoryCountDraftPayload {
+  inventoryType: 1 | 2;
+  warehouseCode: string;
+  description: string;
+  externalReference: string;
+  lines: InventoryCountDraftLine[];
+}
+
+export async function dryRunInventoryCount(data: InventoryCountDraftPayload) {
+  const client = await getClient();
+  return client.post('/oracle-test-requests/inventory-counts/dry-run', data);
+}
+
+export async function createInventoryCount(data: InventoryCountDraftPayload) {
+  const client = await getClient();
+  return client.post('/oracle-test-requests/inventory-counts', data);
+}
+
 export async function fetchCollectionMethods() {
   const client = await getClient();
   return client.get<NamedOption[]>('/collections/methods');

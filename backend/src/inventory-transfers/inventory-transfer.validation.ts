@@ -11,6 +11,7 @@ export function validateStockLine(
   lineNo: number,
   quantity: number,
   snapshot: OracleStockSnapshot,
+  allowInsufficientStock = false,
 ): TransferValidationIssue[] {
   const issues: TransferValidationIssue[] = [];
   if (!snapshot.itemExists) issues.push({ code: 'ITEM_NOT_FOUND', severity: 'error', lineNo, message: 'الصنف غير موجود في Oracle' });
@@ -21,8 +22,10 @@ export function validateStockLine(
   if (!snapshot.warehouseExists) issues.push({ code: 'SOURCE_WAREHOUSE_NOT_FOUND', severity: 'error', lineNo, message: 'المستودع المصدر غير موجود' });
   if (snapshot.availableQuantity < quantity) {
     issues.push({
-      code: 'INSUFFICIENT_SOURCE_STOCK', severity: 'error', lineNo,
-      message: `رصيد المصدر غير كافٍ: المتاح ${snapshot.availableQuantity} والمطلوب ${quantity}`,
+      code: 'INSUFFICIENT_SOURCE_STOCK', severity: allowInsufficientStock ? 'warning' : 'error', lineNo,
+      message: allowInsufficientStock
+        ? `الرصيد المتاح ${snapshot.availableQuantity} والمطلوب ${quantity}؛ تنبيه فقط لأن الناتج طلب مسودة لا حركة مخزون`
+        : `رصيد المصدر غير كافٍ: المتاح ${snapshot.availableQuantity} والمطلوب ${quantity}`,
     });
   }
   return issues;

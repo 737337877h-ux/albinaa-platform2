@@ -1,0 +1,14 @@
+{
+  "name": "albinaa-oracle-write-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "IAS20191-only draft outgoing-request writer for controlled AlBinaa testing",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "check": "node --check src/config.js && node --check src/oracle-writer.js && node --check src/server.js && node --check src/ias20261-purchase-config.js && node --check src/ias20261-purchase-writer.js && node --check src/ias20261-transfer-writer.js && node --check src/ias20261-receipt-writer.js && node --check src/ias20261-purchase-server.js && node --check src/ias20261-payment-config.js && node --check src/ias20261-payment-reader.js && node --check src/ias20261-payment-server.js && node --check src/ias20261-journal-config.js && node --check src/ias20261-journal-writer.js && node --check src/ias20261-journal-server.js && node --check src/ias20261-inventory-config.js && node --check src/ias20261-inventory-writer.js && node --check src/ias20261-inventory-server.js && node --check src/ias20261-unified-config.js && node --check src/ias20261-unified-server.js && node --check scripts/live-smoke.js && node --check scripts/purchase-request-live-smoke.js && node --check scripts/accounting-dry-run-live.js && node --check scripts/accounting-write-metadata-live.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": { "oracledb": "^6.9.0" }
+}

@@ -1,17 +1,241 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { Request } from 'express';
+import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { smartSearchTerms } from '../common/smart-search';
+import { RESERVATION_ITEM_BY_CODE, RESERVATION_ITEM_STANDARDS } from '../reservations/reservation-catalog';
 import {
+  ORACLE_INVENTORY_DECISION_TYPES,
   OracleInventoryItemsQueryDto,
   OracleInventorySourceQueryDto,
   OracleInventoryStockQueryDto,
   OracleInventoryWarehousesQueryDto,
 } from './dto/oracle-inventory-query.dto';
 
+type ItemActivityMovement = {
+  movementDate: Date;
+  inOut: number;
+  primaryQuantity: Prisma.Decimal;
+};
+
+type ItemPricingMovement = ItemActivityMovement & {
+  id: string;
+  itemQuantity: Prisma.Decimal;
+  unitName: string;
+  packageSize?: Prisma.Decimal;
+};
+
+type ItemPricingSource = {
+  itemCost: Prisma.Decimal | null;
+  stockCost: Prisma.Decimal | null;
+  currencyCode: string | null;
+};
+
+export function summarizeOracleMovementValuation(movements: Array<{
+  itemQuantity: Prisma.Decimal;
+  stockCost: Prisma.Decimal | null;
+  inOut: number;
+  externalWarehouseCode: string;
+}>) {
+  return movements.reduce((summary, row) => {
+    if (!['101', '102', '103', '104'].includes(row.externalWarehouseCode)
+      || Number(row.itemQuantity) === 0) return summary;
+    if (row.stockCost == null || !Number.isFinite(Number(row.stockCost))) {
+      summary.missingCostRows += 1;
+      return summary;
+    }
+    const direction = row.inOut === 1 ? 1 : row.inOut === -1 ? -1 : 0;
+    summary.totalInventoryCost += direction * Number(row.itemQuantity) * Number(row.stockCost);
+    summary.valuedRows += 1;
+    return summary;
+  }, { totalInventoryCost: 0, valuedRows: 0, missingCostRows: 0 });
+}
+
+export function summarizeMovementPricing(
+  movements: ItemPricingMovement[],
+  sources: Map<string, ItemPricingSource>,
+  baseUnit: { unitName: string; packageSize: number } = { unitName: 'الوحدة الأساسية', packageSize: 1 },
+) {
+  const normalizedPrice = (movement: ItemPricingMovement, price: Prisma.Decimal) => {
+    const movementPackageSize = Number(movement.packageSize ?? 1);
+    const value = Number(price);
+    if (!Number.isFinite(movementPackageSize) || movementPackageSize <= 0 || !Number.isFinite(value)) return null;
+    return Math.round(((value * baseUnit.packageSize / movementPackageSize) + Number.EPSILON) * 1e12) / 1e12;
+  };
+  const rowsForDirection = (direction: 1 | -1) => movements
+    .filter((movement) => movement.inOut === direction)
+    .map((movement) => ({ movement, source: sources.get(movement.id) }))
+    .filter((entry) => entry.source?.itemCost != null && entry.source.currencyCode);
+  const sales = rowsForDirection(-1);
+  const supplies = rowsForDirection(1);
+  const byCurrency = new Map<string, typeof sales>();
+  for (const row of sales) {
+    const currencyCode = row.source!.currencyCode!;
+    const values = byCurrency.get(currencyCode) ?? [];
+    values.push(row);
+    byCurrency.set(currencyCode, values);
+  }
+  const lastSalePrices = [...byCurrency.entries()].map(([currencyCode, rows]) => ({
+    currencyCode, price: String(normalizedPrice(rows[0].movement, rows[0].source!.itemCost!) ?? ''),
+    movementDate: rows[0].movement.movementDate, unitName: baseUnit.unitName,
+  })).filter((row) => row.price !== '');
+  const averageSalePrices = [...byCurrency.entries()].flatMap(([currencyCode, rows]) => {
+    const totals = rows.reduce((sum, row) => {
+      const quantity = Math.abs(Number(row.movement.primaryQuantity)) / baseUnit.packageSize;
+      const price = normalizedPrice(row.movement, row.source!.itemCost!);
+      return Number.isFinite(quantity) && quantity > 0 && price !== null
+        ? { value: sum.value + (price * quantity), quantity: sum.quantity + quantity }
+        : sum;
+    }, { value: 0, quantity: 0 });
+    return totals.quantity > 0 ? [{
+      currencyCode,
+      price: String(Math.round((((totals.value / totals.quantity) + Number.EPSILON) * 1e12)) / 1e12),
+      movementCount: rows.length,
+      unitName: baseUnit.unitName,
+    }] : [];
+  });
+  const lastSupplyByCurrency = new Map<string, typeof supplies[number]>();
+  for (const row of supplies) {
+    if (!lastSupplyByCurrency.has(row.source!.currencyCode!)) {
+      lastSupplyByCurrency.set(row.source!.currencyCode!, row);
+    }
+  }
+  const lastSupplyPrices = [...lastSupplyByCurrency.entries()].map(([currencyCode, row]) => ({
+    currencyCode, price: String(normalizedPrice(row.movement, row.source!.itemCost!) ?? ''),
+    movementDate: row.movement.movementDate, unitName: baseUnit.unitName,
+  })).filter((row) => row.price !== '');
+  return { lastSalePrices, averageSalePrices, lastSupplyPrices };
+}
+
+function inventoryDocumentTypeLabel(documentType: string, billDocumentType?: string | null) {
+  if (documentType === '7') return 'صرف تحويل مخزني';
+  if (documentType === '8') return 'استلام تحويل مخزني';
+  if (documentType === '4') return billDocumentType === '1' ? 'فاتورة مبيعات نقدية' : 'فاتورة مبيعات آجلة';
+  if (documentType === '5') return billDocumentType === '1' ? 'مردود مبيعات نقدي' : 'مردود مبيعات آجل';
+  if (documentType === '6') return billDocumentType === '1' ? 'فاتورة مشتريات نقدية' : 'فاتورة مشتريات آجلة';
+  return `مستند مخزني نوع ${documentType}`;
+}
+
+function summarizeItemActivity(movements: ItemActivityMovement[]) {
+  const now = Date.now();
+  const latestAt = movements[0]?.movementDate ?? null;
+  const ageDays = latestAt ? Math.floor((now - latestAt.getTime()) / 86_400_000) : null;
+  const inboundPrimaryQuantity = movements
+    .filter((movement) => movement.inOut === 1)
+    .reduce((total, movement) => total + Number(movement.primaryQuantity), 0);
+  const outboundPrimaryQuantity = movements
+    .filter((movement) => movement.inOut === -1)
+    .reduce((total, movement) => total + Number(movement.primaryQuantity), 0);
+  const status = ageDays === null || ageDays > 90 ? 'stagnant'
+    : ageDays <= 30 && outboundPrimaryQuantity > 0 ? 'demanded' : 'moving';
+  return {
+    status,
+    labelAr: status === 'demanded' ? 'مطلوب' : status === 'moving' ? 'متحرك' : 'راكد',
+    inboundPrimaryQuantity,
+    outboundPrimaryQuantity,
+    lastMovementAt: latestAt,
+    lastInboundAt: movements.find((movement) => movement.inOut === 1)?.movementDate ?? null,
+    lastOutboundAt: movements.find((movement) => movement.inOut === -1)?.movementDate ?? null,
+    basis: 'مرآة Oracle للقراءة فقط؛ مطلوب خلال 30 يومًا، متحرك خلال 90 يومًا، وإلا راكد',
+  };
+}
+
 @Injectable()
 export class OracleInventoryReadService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService) {}
+
+  async recordBarcodePrint(
+    actor: AuthUser,
+    input: { itemCode?: string; copies?: number; channel?: string; sourceSchema?: string },
+    req?: Request,
+  ) {
+    const itemCode = String(input.itemCode ?? '').trim();
+    const copies = Math.trunc(Number(input.copies ?? 1));
+    const channel = input.channel === 'zpl_download' ? 'zpl_download' : 'print_dialog';
+    if (!itemCode) throw new BadRequestException('كود الصنف مطلوب');
+    if (!Number.isFinite(copies) || copies < 1 || copies > 999) {
+      throw new BadRequestException('عدد النسخ يجب أن يكون بين 1 و999');
+    }
+    const snapshot = await this.activeSnapshot(actor.organizationId, input.sourceSchema);
+    const item = await this.prisma.oracleItemMirror.findFirst({
+      where: {
+        syncRunId: snapshot.activeRunId,
+        organizationId: actor.organizationId,
+        externalItemCode: itemCode,
+        isInactive: false,
+      },
+      select: { externalItemCode: true, nameAr: true },
+    });
+    if (!item) throw new NotFoundException('الصنف غير موجود في لقطة المخزون المنشورة');
+    const printedAt = new Date();
+    await this.audit.log({
+      userId: actor.id,
+      action: 'inventory_barcode_printed',
+      entityTable: 'oracle_inventory_items',
+      entityId: item.externalItemCode,
+      newValue: { copies, channel, itemName: item.nameAr, sourceSchema: snapshot.sourceSchema },
+      reason: channel === 'zpl_download' ? 'تنزيل ملف ZPL' : 'فتح أمر طباعة الباركود',
+      req,
+    });
+    return { recorded: true, itemCode: item.externalItemCode, itemName: item.nameAr, copies, channel, printedAt };
+  }
+
+  async barcodePrintReport(actor: AuthUser, sourceSchema?: string) {
+    const snapshot = await this.activeSnapshot(actor.organizationId, sourceSchema);
+    const [items, events] = await Promise.all([
+      this.prisma.oracleItemMirror.findMany({
+        where: { syncRunId: snapshot.activeRunId, organizationId: actor.organizationId, isInactive: false, isService: false },
+        select: { externalItemCode: true, nameAr: true },
+        orderBy: { nameAr: 'asc' },
+      }),
+      this.prisma.auditLog.findMany({
+        where: {
+          action: 'inventory_barcode_printed',
+          entityTable: 'oracle_inventory_items',
+          user: { organizationId: actor.organizationId },
+        },
+        include: { user: { select: { fullName: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 5000,
+      }),
+    ]);
+    const itemByCode = new Map(items.map((item) => [item.externalItemCode, item]));
+    const byCode = new Map<string, { itemCode: string; itemName: string; totalCopies: number; printEvents: number; lastPrintedAt: Date; lastPrintedBy: string | null }>();
+    for (const event of events) {
+      const code = String(event.entityId ?? '');
+      if (!itemByCode.has(code)) continue;
+      const payload = (event.newValue ?? {}) as Record<string, unknown>;
+      const eventCopies = Math.max(1, Number(payload.copies ?? 1) || 1);
+      const current = byCode.get(code);
+      if (current) {
+        current.totalCopies += eventCopies;
+        current.printEvents += 1;
+      } else {
+        byCode.set(code, {
+          itemCode: code,
+          itemName: itemByCode.get(code)!.nameAr,
+          totalCopies: eventCopies,
+          printEvents: 1,
+          lastPrintedAt: event.createdAt,
+          lastPrintedBy: event.user?.fullName ?? null,
+        });
+      }
+    }
+    const printed = [...byCode.values()].sort((a, b) => b.lastPrintedAt.getTime() - a.lastPrintedAt.getTime());
+    const unprinted = items.filter((item) => !byCode.has(item.externalItemCode));
+    return {
+      summary: {
+        totalItems: items.length,
+        printedItems: printed.length,
+        unprintedItems: unprinted.length,
+        totalCopies: printed.reduce((sum, item) => sum + item.totalCopies, 0),
+      },
+      printed,
+      unprinted,
+    };
+  }
 
   private async activeSnapshot(organizationId: string, sourceSchema?: string) {
     const snapshots = await this.prisma.oracleInventoryActiveSnapshot.findMany({
@@ -53,11 +277,11 @@ export class OracleInventoryReadService {
     const snapshot = await this.activeSnapshot(actor.organizationId, query.sourceSchema);
     const runId = snapshot.activeRunId;
     const movementRun = await this.prisma.oracleMovementSyncRun.findFirst({
-      where: { organizationId: actor.organizationId, sourceSchema: snapshot.sourceSchema },
+      where: { organizationId: actor.organizationId, sourceSchema: snapshot.sourceSchema, status: 'published' },
       orderBy: [{ extractedAt: 'desc' }, { startedAt: 'desc' }],
       select: { id: true, status: true, extractedAt: true },
     });
-    const [itemGroups, items, itemUnits, warehouseGroups, warehouses, stockBalances, branchMappings, valuationRows, decisionRows, movementCoverage] = await Promise.all([
+    const [itemGroups, items, itemUnits, warehouseGroups, warehouses, stockBalances, branchMappings, valuationRows, decisionRows, movementCoverage, approvedStockRows, reservationTons] = await Promise.all([
       this.prisma.oracleItemGroupMirror.count({ where: { syncRunId: runId, organizationId: actor.organizationId } }),
       this.prisma.oracleItemMirror.count({ where: { syncRunId: runId, organizationId: actor.organizationId } }),
       this.prisma.oracleItemUnitMirror.count({ where: { syncRunId: runId, organizationId: actor.organizationId } }),
@@ -97,18 +321,37 @@ export class OracleInventoryReadService {
           WHERE s.sync_run_id = ${runId}::uuid
             AND s.organization_id = ${actor.organizationId}::uuid
             AND s.is_inactive = false
+            AND u.is_inactive = false
+            AND EXISTS (
+              SELECT 1 FROM oracle_items_mirror i
+              WHERE i.sync_run_id = s.sync_run_id
+                AND i.external_item_code = s.external_item_code
+                AND i.is_inactive = false AND i.is_service = false
+            )
+        ), movement_value AS (
+          SELECT
+            COALESCE(SUM(CASE
+              WHEN in_out = 1 THEN item_quantity * COALESCE(stock_cost, 0)
+              WHEN in_out = -1 THEN -item_quantity * COALESCE(stock_cost, 0)
+              ELSE 0 END), 0) AS total_value,
+            COUNT(*) FILTER (WHERE stock_cost IS NOT NULL AND item_quantity <> 0) AS valued_rows,
+            COUNT(*) FILTER (WHERE stock_cost IS NULL AND item_quantity <> 0) AS missing_cost_rows
+          FROM oracle_inventory_movements_mirror
+          WHERE sync_run_id = ${movementRun?.id ?? null}::uuid
+            AND organization_id = ${actor.organizationId}::uuid
+            AND external_warehouse_code IN ('101','102','103','104')
         )
-        SELECT
-          COALESCE(SUM(available_quantity * package_size * COALESCE(weighted_average_cost, primary_cost, 0)), 0) AS total_value,
-          COALESCE(SUM(available_quantity * package_size), 0) AS primary_quantity,
-          COUNT(*) FILTER (WHERE COALESCE(weighted_average_cost, primary_cost) IS NOT NULL) AS valued_rows,
-          COUNT(*) FILTER (WHERE COALESCE(weighted_average_cost, primary_cost) IS NULL AND available_quantity <> 0) AS missing_cost_rows
-        FROM ranked WHERE rn = 1
+        SELECT mv.total_value,
+          COALESCE((SELECT SUM(available_quantity * package_size) FROM ranked
+            WHERE rn = 1 AND external_warehouse_code IN ('101','102','103','104')), 0) AS primary_quantity,
+          mv.valued_rows, mv.missing_cost_rows
+        FROM movement_value mv
       `),
       this.prisma.$queryRaw<Array<{
         item_code: string;
         item_name: string;
         source_updated_at: Date | null;
+        has_stock_balance: boolean;
         current_quantity: Prisma.Decimal;
         stock_value: Prisma.Decimal;
         outbound_30: Prisma.Decimal;
@@ -177,11 +420,12 @@ export class OracleInventoryReadService {
           FROM movement_base
           GROUP BY external_item_code
         )
-        SELECT st.external_item_code AS item_code,
+        SELECT i.external_item_code AS item_code,
                i.name_ar AS item_name,
                i.source_updated_at,
-               st.current_quantity,
-               st.stock_value,
+               (st.external_item_code IS NOT NULL) AS has_stock_balance,
+               COALESCE(st.current_quantity, 0) AS current_quantity,
+               COALESCE(st.stock_value, 0) AS stock_value,
                COALESCE(m.outbound_30, 0) AS outbound_30,
                COALESCE(m.outbound_90, 0) AS outbound_90,
                COALESCE(m.outbound_180, 0) AS outbound_180,
@@ -193,11 +437,14 @@ export class OracleInventoryReadService {
                COALESCE(m.movement_count, 0) AS movement_count,
                COALESCE(ms.active_months, 0) AS active_months,
                COALESCE(ms.peak_month_outbound, 0) AS peak_month_outbound
-        FROM stock st
-        JOIN oracle_items_mirror i
-          ON i.sync_run_id = ${runId}::uuid AND i.external_item_code = st.external_item_code
-        LEFT JOIN movement m ON m.external_item_code = st.external_item_code
-        LEFT JOIN monthly_stats ms ON ms.external_item_code = st.external_item_code
+        FROM oracle_items_mirror i
+        LEFT JOIN stock st ON st.external_item_code = i.external_item_code
+        LEFT JOIN movement m ON m.external_item_code = i.external_item_code
+        LEFT JOIN monthly_stats ms ON ms.external_item_code = i.external_item_code
+        WHERE i.sync_run_id = ${runId}::uuid
+          AND i.organization_id = ${actor.organizationId}::uuid
+          AND i.is_inactive = false
+          AND i.is_service = false
       `),
       movementRun ? this.prisma.oracleInventoryMovementMirror.aggregate({
         where: { syncRunId: movementRun.id, organizationId: actor.organizationId },
@@ -205,6 +452,40 @@ export class OracleInventoryReadService {
         _min: { movementDate: true },
         _max: { movementDate: true },
       }) : Promise.resolve({ _count: { _all: 0 }, _min: { movementDate: null }, _max: { movementDate: null } }),
+      this.prisma.$queryRaw<Array<{
+        external_item_code: string;
+        primary_quantity: Prisma.Decimal;
+      }>>(Prisma.sql`
+        WITH ranked AS (
+          SELECT s.*,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY s.external_item_code, s.external_warehouse_code
+                   ORDER BY u.is_stock_unit DESC, u.is_main_unit DESC, s.package_size ASC
+                 ) AS rn
+          FROM oracle_stock_balances_mirror s
+          JOIN oracle_item_units_mirror u
+            ON u.sync_run_id = s.sync_run_id
+           AND u.external_item_code = s.external_item_code
+           AND u.unit_name = s.unit_name
+          WHERE s.sync_run_id = ${runId}::uuid
+            AND s.organization_id = ${actor.organizationId}::uuid
+            AND s.is_inactive = false
+            AND s.external_item_code IN (${Prisma.join(RESERVATION_ITEM_STANDARDS.map((item) => item.itemCode))})
+        )
+        SELECT external_item_code,
+               COALESCE(SUM(available_quantity * package_size), 0) AS primary_quantity
+        FROM ranked
+        WHERE rn = 1
+        GROUP BY external_item_code
+      `),
+      this.prisma.reservation.aggregate({
+        where: {
+          customer: { organizationId: actor.organizationId },
+          status: { in: ['open', 'partial'] },
+          OR: [{ expiresAt: null }, { expiresAt: { gte: new Date() } }],
+        },
+        _sum: { remainingTons: true },
+      }),
     ]);
 
     const valuation = valuationRows[0];
@@ -242,8 +523,13 @@ export class OracleInventoryReadService {
         recommendation = 'إيقاف القرار الآلي لهذا الصنف والتحقق من التحويلات والوحدات والتوريدات المتأخرة.';
       } else if (quantity <= 0 && outbound90 > 0) {
         type = 'stockout_risk'; severity = 'critical';
-        risk = 'نفاد فعلي مع وجود طلب حديث؛ توجد مخاطرة فقد مبيعات.';
-        recommendation = 'توفير كمية تغطي 60 يومًا بعد مراجعة أوامر الشراء المفتوحة.';
+        // Complete INVI008 snapshots omit zero balances. Keep missing balances
+        // visible without presenting an inferred zero as a confirmed live stockout.
+        risk = row.has_stock_balance
+          ? 'الرصيد صفر في اللقطة المنشورة مع وجود صرف حديث؛ توجد مخاطرة نفاد.'
+          : 'لا يظهر رصيد في اللقطة المنشورة مع وجود صرف حديث؛ توجد مخاطرة نفاد تستلزم التحقق من الرصيد.';
+        recommendation = 'تأكيد الرصيد الحالي ومراجعة أوامر الشراء المفتوحة قبل اعتماد كمية تغطي 60 يومًا.';
+        if (!row.has_stock_balance) confidence = 'preliminary';
       } else if (quantity > 0 && dailyDemand > 0 && daysOfCover !== null && daysOfCover < 21) {
         type = 'reorder'; severity = 'high';
         risk = `الرصيد يغطي نحو ${Math.round(daysOfCover)} يومًا فقط.`;
@@ -290,6 +576,7 @@ export class OracleInventoryReadService {
         confidence,
         itemCode: row.item_code,
         itemName: row.item_name,
+        hasStockBalance: row.has_stock_balance,
         currentQuantity: quantity,
         stockValue: Number(row.stock_value),
         outbound30,
@@ -307,6 +594,9 @@ export class OracleInventoryReadService {
         recommendation,
       };
     });
+    const emptyClassifications = Object.fromEntries(ORACLE_INVENTORY_DECISION_TYPES.map((type) => [
+      type, { type, count: 0, stockValue: 0, recommendedSupplyQuantity: 0 },
+    ]));
     const classificationSummary = Object.values(assessments.reduce<Record<string, {
       type: string; count: number; stockValue: number; recommendedSupplyQuantity: number;
     }>>((summary, item) => {
@@ -315,7 +605,7 @@ export class OracleInventoryReadService {
       bucket.stockValue += item.stockValue;
       bucket.recommendedSupplyQuantity += item.recommendedSupplyQuantity;
       return summary;
-    }, {})).sort((a, b) => b.count - a.count);
+    }, emptyClassifications)).sort((a, b) => b.count - a.count);
     const severityWeight = { critical: 4, high: 3, medium: 2, low: 1 };
     const decisionPage = query.decisionPage ?? 1;
     const decisionLimit = query.decisionLimit ?? 60;
@@ -330,6 +620,19 @@ export class OracleInventoryReadService {
       (decisionPage - 1) * decisionLimit,
       decisionPage * decisionLimit,
     );
+    const approvedItems = approvedStockRows.map((row) => {
+      const standard = RESERVATION_ITEM_BY_CODE.get(row.external_item_code)!;
+      const rods = Number(row.primary_quantity);
+      return {
+        itemCode: standard.itemCode,
+        itemName: standard.nameAr,
+        rodsPerTon: standard.rodsPerTon,
+        stockRods: rods,
+        stockTons: rods / standard.rodsPerTon,
+      };
+    });
+    const grossTons = approvedItems.reduce((sum, item) => sum + item.stockTons, 0);
+    const reservedTons = Number(reservationTons._sum.remainingTons ?? 0);
 
     return {
       snapshot: {
@@ -346,7 +649,16 @@ export class OracleInventoryReadService {
         totalPrimaryQuantity: Number(valuation?.primary_quantity ?? 0),
         valuedRows: Number(valuation?.valued_rows ?? 0),
         missingCostRows: Number(valuation?.missing_cost_rows ?? 0),
-        basis: 'stock-unit quantity × package size × Oracle weighted-average cost',
+        currencyCode: 'SAR',
+        warehouseCodes: ['101', '102', '103', '104'],
+        basis: 'مجموع حركات Oracle: الكمية × تكلفة المخزون مع اتجاه الوارد/المنصرف',
+      },
+      reservationStock: {
+        grossTons,
+        reservedTons,
+        netAvailableTons: grossTons - reservedTons,
+        basis: 'رصيد الأصناف العشرة المعتمدة بالسيخ ÷ معيار عدد الأسياخ في الطن، ثم طرح الحجوزات النشطة.',
+        approvedItems,
       },
       movementAnalysis: {
         source: 'oracle_read_only_mirror',
@@ -395,17 +707,18 @@ export class OracleInventoryReadService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 25;
     const search = query.search?.trim();
+    const searchTerms = smartSearchTerms(search);
     const where: Prisma.OracleItemMirrorWhereInput = {
       syncRunId: snapshot.activeRunId,
       organizationId: actor.organizationId,
       ...(query.groupCode ? { externalGroupCode: query.groupCode.trim() } : {}),
       ...(query.status === 'inactive' ? { isInactive: true } : query.status === 'all' ? {} : { isInactive: false }),
-      ...(search ? {
-        OR: [
-          { externalItemCode: { contains: search, mode: 'insensitive' } },
-          { nameAr: { contains: search, mode: 'insensitive' } },
-          { units: { some: { barcode: { contains: search, mode: 'insensitive' } } } },
-        ],
+      ...(searchTerms.length ? {
+        AND: searchTerms.map((term) => ({ OR: [
+          { externalItemCode: { contains: term, mode: 'insensitive' as const } },
+          { nameAr: { contains: term, mode: 'insensitive' as const } },
+          { units: { some: { barcode: { contains: term, mode: 'insensitive' as const } } } },
+        ] })),
       } : {}),
     };
     const [total, rows] = await Promise.all([
@@ -422,6 +735,12 @@ export class OracleInventoryReadService {
           isService: true,
           sourceUpdatedAt: true,
           group: { select: { nameAr: true, nameEn: true } },
+          units: {
+            select: {
+              packageSize: true,
+              stockRows: { select: { availableQuantity: true, isInactive: true } },
+            },
+          },
           _count: { select: { units: true } },
         },
         orderBy: { externalItemCode: 'asc' },
@@ -437,14 +756,42 @@ export class OracleInventoryReadService {
       snapshotRunId: snapshot.activeRunId,
       items: rows.map((row) => ({
         ...row,
+        units: undefined,
+        totalAvailablePrimaryQuantity: row.units.reduce((total, unit) =>
+          total + unit.stockRows
+            .filter((stock) => !stock.isInactive)
+            .reduce((sum, stock) => sum + Number(stock.availableQuantity) * Number(unit.packageSize), 0), 0).toString(),
         referencePrimaryCost: row.referencePrimaryCost?.toString() ?? null,
         referenceWeightedAverageCost: row.referenceWeightedAverageCost?.toString() ?? null,
       })),
     };
   }
 
+  async itemLabels(actor: AuthUser, externalItemCodes: string[], query: OracleInventorySourceQueryDto = {}) {
+    const codes = [...new Set(externalItemCodes.map((code) => code.trim()).filter(Boolean))];
+    if (codes.length === 0) return [];
+    const snapshot = await this.activeSnapshot(actor.organizationId, query.sourceSchema);
+    return this.prisma.oracleItemMirror.findMany({
+      where: {
+        syncRunId: snapshot.activeRunId,
+        organizationId: actor.organizationId,
+        externalItemCode: { in: codes },
+      },
+      select: { externalItemCode: true, nameAr: true },
+    });
+  }
+
   async item(actor: AuthUser, externalItemCode: string, query: OracleInventorySourceQueryDto) {
     const snapshot = await this.activeSnapshot(actor.organizationId, query.sourceSchema);
+    const movementRun = await this.prisma.oracleMovementSyncRun.findFirst({
+      where: {
+        organizationId: actor.organizationId,
+        sourceSchema: snapshot.sourceSchema,
+        status: 'published',
+      },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true },
+    });
     const [item, movements] = await Promise.all([this.prisma.oracleItemMirror.findFirst({
       where: {
         syncRunId: snapshot.activeRunId,
@@ -476,6 +823,7 @@ export class OracleInventoryReadService {
             usesSerialNumber: true,
             isInactive: true,
             inactiveReason: true,
+            salePrice: true,
             stockRows: {
               select: {
                 unitName: true,
@@ -493,18 +841,18 @@ export class OracleInventoryReadService {
           orderBy: [{ packageSize: 'asc' }, { unitName: 'asc' }],
         },
       },
-    }), this.prisma.publishedInventoryMovement.findMany({
+    }), this.prisma.oracleInventoryMovementMirror.findMany({
       where: {
         organizationId: actor.organizationId,
-        sourceSchema: snapshot.sourceSchema,
+        syncRunId: movementRun?.id ?? '00000000-0000-0000-0000-000000000000',
         externalItemCode,
-        reversedAt: null,
       },
       select: {
         id: true,
         sourceFingerprint: true,
         movementDate: true,
         documentType: true,
+        billDocumentType: true,
         documentNumber: true,
         documentSequence: true,
         unitName: true,
@@ -517,27 +865,29 @@ export class OracleInventoryReadService {
         externalWarehouseCode: true,
         description: true,
         referenceNumber: true,
-        publishedAt: true,
+        itemCost: true,
+        stockCost: true,
+        currencyCode: true,
+        externalCustomerCode: true,
+        loadedAt: true,
       },
       orderBy: [{ movementDate: 'desc' }, { documentSequence: 'desc' }],
       take: 100,
     })]);
     if (!item) throw new NotFoundException('Oracle inventory item was not found in the active snapshot.');
-    const movementIds = movements.map((movement) => movement.id);
-    const movementLedger = movementIds.length ? await this.prisma.$queryRaw<Array<{
-      platform_entity_id: string;
-      external_customer_code: string | null;
-    }>>(Prisma.sql`
-      SELECT DISTINCT ON (p.id) p.id AS platform_entity_id, m.external_customer_code
-      FROM published_inventory_movements p
-      JOIN oracle_inventory_movements_mirror m
-        ON m.organization_id=p.organization_id AND m.source_fingerprint=p.source_fingerprint
-      WHERE p.id IN (${Prisma.join(movementIds.map((id) => Prisma.sql`${id}::uuid`))})
-      ORDER BY p.id, m.loaded_at DESC
-    `) : [];
     const customerCodeByMovement = new Map<string, string>();
-    for (const ledger of movementLedger) {
-      if (ledger.external_customer_code) customerCodeByMovement.set(ledger.platform_entity_id, ledger.external_customer_code);
+    const sourceValuesByMovement = new Map<string, {
+      itemCost: Prisma.Decimal | null;
+      stockCost: Prisma.Decimal | null;
+      currencyCode: string | null;
+    }>();
+    for (const movement of movements) {
+      if (movement.externalCustomerCode) customerCodeByMovement.set(movement.id, movement.externalCustomerCode);
+      sourceValuesByMovement.set(movement.id, {
+        itemCost: movement.itemCost,
+        stockCost: movement.stockCost,
+        currencyCode: movement.currencyCode,
+      });
     }
     const customerCodes = [...new Set(customerCodeByMovement.values())];
     const customers = customerCodes.length ? await this.prisma.customer.findMany({
@@ -545,6 +895,20 @@ export class OracleInventoryReadService {
       select: { id: true, name: true, externalCustomerCode: true },
     }) : [];
     const customerByCode = new Map(customers.map((customer) => [customer.externalCustomerCode, customer]));
+    const baseUnit = item.units.find((unit) => unit.isMainUnit)
+      ?? item.units.find((unit) => unit.isStockUnit)
+      ?? item.units.find((unit) => Number(unit.packageSize) === 1)
+      ?? item.units[0];
+    const normalizedPricing = summarizeMovementPricing(movements, sourceValuesByMovement, {
+      unitName: baseUnit?.unitName ?? 'الوحدة الأساسية',
+      packageSize: Number(baseUnit?.packageSize ?? 1),
+    });
+    const priceSourceUnit = baseUnit?.salePrice != null
+      ? baseUnit
+      : item.units.find((unit) => unit.salePrice != null);
+    const normalizedSalePrice = priceSourceUnit?.salePrice == null || !baseUnit
+      ? null
+      : Number(priceSourceUnit.salePrice) * Number(baseUnit.packageSize) / Number(priceSourceUnit.packageSize);
     return {
       ...item,
       snapshotRunId: snapshot.activeRunId,
@@ -553,6 +917,7 @@ export class OracleInventoryReadService {
       units: item.units.map(({ stockRows: _stockRows, ...unit }) => ({
         ...unit,
         packageSize: unit.packageSize.toString(),
+        salePrice: unit.salePrice?.toString() ?? null,
       })),
       stockRows: item.units.flatMap((unit) => unit.stockRows.map((stock) => ({
           ...stock,
@@ -563,13 +928,34 @@ export class OracleInventoryReadService {
         }))),
       movements: movements.map((movement) => ({
         ...movement,
+        documentTypeLabelAr: inventoryDocumentTypeLabel(movement.documentType, movement.billDocumentType),
+        publishedAt: movement.loadedAt,
         customer: customerByCode.get(customerCodeByMovement.get(movement.id) ?? '') ?? null,
+        itemCost: sourceValuesByMovement.get(movement.id)?.itemCost?.toString() ?? null,
+        stockCost: sourceValuesByMovement.get(movement.id)?.stockCost?.toString() ?? null,
+        currencyCode: sourceValuesByMovement.get(movement.id)?.currencyCode ?? null,
         packageSize: movement.packageSize.toString(),
         itemQuantity: movement.itemQuantity.toString(),
         freeQuantity: movement.freeQuantity.toString(),
         primaryQuantity: movement.primaryQuantity.toString(),
         primaryFreeQuantity: movement.primaryFreeQuantity.toString(),
       })),
+      activity: summarizeItemActivity(movements),
+      pricing: {
+        baseUnitName: baseUnit?.unitName ?? null,
+        lastSupplyCost: normalizedPricing.lastSupplyPrices.length === 1 ? normalizedPricing.lastSupplyPrices[0].price : null,
+        lastSupplyPrices: normalizedPricing.lastSupplyPrices,
+        weightedAverageCost: item.referenceWeightedAverageCost?.toString() ?? null,
+        salePrice: normalizedSalePrice == null ? null : String(Math.round((normalizedSalePrice + Number.EPSILON) * 1e12) / 1e12),
+        salePriceUnit: baseUnit?.unitName ?? null,
+        averageSalePrice: normalizedPricing.averageSalePrices.length === 1 ? normalizedPricing.averageSalePrices[0].price : null,
+        lastSalePrice: normalizedPricing.lastSalePrices.length === 1 ? normalizedPricing.lastSalePrices[0].price : null,
+        lastSalePrices: normalizedPricing.lastSalePrices,
+        averageSalePrices: normalizedPricing.averageSalePrices,
+        noteAr: normalizedSalePrice == null
+          ? 'سعر البيع الافتراضي غير موجود في اللقطة الحالية. أعد نشر لقطة INVI008 المحدثة.'
+          : `الأسعار معروضة تلقائيًا حسب الوحدة الأساسية (${baseUnit?.unitName ?? 'غير محددة'}). آخر ومتوسط البيع محسوبان من أحدث 100 حركة Oracle لكل عملة دون خلط العملات.`,
+      },
     };
   }
 
@@ -619,6 +1005,219 @@ export class OracleInventoryReadService {
           ? mappingByCode.get(warehouse.externalBranchCode) ?? null
           : null,
       })),
+    };
+  }
+
+  /** Complete but compact catalog for first-run and daily mobile SQLite refreshes. */
+  async offlineReferenceCatalog(actor: AuthUser, sourceSchema = 'IAS20261') {
+    const snapshot = await this.activeSnapshot(actor.organizationId, sourceSchema);
+    const movementRun = await this.prisma.oracleMovementSyncRun.findFirst({
+      where: {
+        organizationId: actor.organizationId,
+        sourceSchema: snapshot.sourceSchema,
+        status: { in: ['validated', 'published', 'validating'] },
+      },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true },
+    });
+    const [warehouses, items, publishedMovements] = await Promise.all([
+      this.prisma.oracleWarehouseMirror.findMany({
+        where: { syncRunId: snapshot.activeRunId, organizationId: actor.organizationId, isInactive: false },
+        select: { externalWarehouseCode: true, nameAr: true, externalBranchCode: true, isInactive: true },
+        orderBy: { externalWarehouseCode: 'asc' },
+      }),
+      this.prisma.oracleItemMirror.findMany({
+        where: { syncRunId: snapshot.activeRunId, organizationId: actor.organizationId, isInactive: false, isService: false },
+        select: {
+          externalItemCode: true, nameAr: true, externalGroupCode: true, isInactive: true,
+          group: { select: { nameAr: true } },
+          units: {
+            where: { isInactive: false },
+            select: {
+              unitName: true, packageSize: true, isMainUnit: true, isPurchaseUnit: true,
+              isStockUnit: true, isSaleUnit: true, barcode: true, isInactive: true, salePrice: true,
+              stockRows: {
+                where: { isInactive: false },
+                select: {
+                  externalWarehouseCode: true,
+                  availableQuantity: true,
+                  primaryCost: true,
+                  weightedAverageCost: true,
+                  warehouse: { select: { nameAr: true } },
+                },
+                orderBy: { externalWarehouseCode: 'asc' },
+              },
+            },
+            orderBy: [{ packageSize: 'asc' }, { unitName: 'asc' }],
+          },
+        },
+        orderBy: { externalItemCode: 'asc' },
+      }),
+      this.prisma.oracleInventoryMovementMirror.findMany({
+        where: {
+          organizationId: actor.organizationId,
+          syncRunId: movementRun?.id ?? '00000000-0000-0000-0000-000000000000',
+        },
+        select: {
+          id: true,
+          externalItemCode: true,
+          movementDate: true,
+          documentType: true,
+          billDocumentType: true,
+          documentNumber: true,
+          documentSequence: true,
+          unitName: true,
+          packageSize: true,
+          itemQuantity: true,
+          primaryQuantity: true,
+          inOut: true,
+          externalWarehouseCode: true,
+          description: true,
+          itemCost: true,
+          stockCost: true,
+          currencyCode: true,
+          externalCustomerCode: true,
+        },
+        orderBy: [{ movementDate: 'desc' }, { documentSequence: 'desc' }],
+      }),
+    ]);
+    const offlineCustomerCodes = [...new Set(publishedMovements
+      .map((movement) => movement.externalCustomerCode)
+      .filter((code): code is string => Boolean(code)))];
+    const offlineCustomers = offlineCustomerCodes.length ? await this.prisma.customer.findMany({
+      where: { organizationId: actor.organizationId, externalCustomerCode: { in: offlineCustomerCodes } },
+      select: { id: true, name: true, externalCustomerCode: true },
+    }) : [];
+    const offlineCustomerByCode = new Map(offlineCustomers.map((customer) => [customer.externalCustomerCode, customer]));
+    const offlineSourceByMovement = new Map<string, ItemPricingSource>(publishedMovements.map((row) => [
+      row.id,
+      { itemCost: row.itemCost, stockCost: row.stockCost, currencyCode: row.currencyCode },
+    ] as const));
+    const movementsByItem = new Map<string, typeof publishedMovements>();
+    for (const movement of publishedMovements) {
+      const list = movementsByItem.get(movement.externalItemCode) ?? [];
+      list.push(movement);
+      movementsByItem.set(movement.externalItemCode, list);
+    }
+    // Each item/warehouse balance may be repeated in several units. Count the
+    // physical quantity once; inventory value comes from signed Oracle movement
+    // quantity × STK_COST so it matches the accounting valuation used by ONYX.
+    const stockRows = items.flatMap((item) => {
+      const seenWarehouses = new Set<string>();
+      return [...item.units].sort((a, b) => Number(b.isStockUnit) - Number(a.isStockUnit)
+        || Number(b.isMainUnit) - Number(a.isMainUnit) || Number(a.packageSize) - Number(b.packageSize))
+        .flatMap((unit) => unit.stockRows.filter((row) => {
+          if (!['101', '102', '103', '104'].includes(row.externalWarehouseCode)
+            || seenWarehouses.has(row.externalWarehouseCode)) return false;
+          seenWarehouses.add(row.externalWarehouseCode);
+          return true;
+        }).map((row) => ({
+        availableQuantity: Number(row.availableQuantity),
+        packageSize: Number(unit.packageSize),
+        cost: row.weightedAverageCost == null
+          ? row.primaryCost == null ? null : Number(row.primaryCost)
+          : Number(row.weightedAverageCost),
+      })));
+    });
+    const stockQuantity = stockRows.reduce((summary, row) => {
+      const primaryQuantity = row.availableQuantity * row.packageSize;
+      summary.totalPrimaryQuantity += primaryQuantity;
+      return summary;
+    }, { totalPrimaryQuantity: 0 });
+    const valuation = summarizeOracleMovementValuation(publishedMovements);
+    return {
+      snapshotRunId: snapshot.activeRunId,
+      warehouses,
+      items: items.map((item) => {
+        const itemMovements = movementsByItem.get(item.externalItemCode) ?? [];
+        const baseUnit = item.units.find((unit) => unit.isMainUnit)
+          ?? item.units.find((unit) => unit.isStockUnit)
+          ?? item.units.find((unit) => Number(unit.packageSize) === 1)
+          ?? item.units[0];
+        const movementPricing = summarizeMovementPricing(itemMovements, offlineSourceByMovement, {
+          unitName: baseUnit?.unitName ?? 'الوحدة الأساسية',
+          packageSize: Number(baseUnit?.packageSize ?? 1),
+        });
+        const priceSourceUnit = baseUnit?.salePrice != null
+          ? baseUnit
+          : item.units.find((unit) => unit.salePrice != null);
+        const normalizedSalePrice = priceSourceUnit?.salePrice == null || !baseUnit
+          ? null
+          : Number(priceSourceUnit.salePrice) * Number(baseUnit.packageSize) / Number(priceSourceUnit.packageSize);
+        return ({
+        externalItemCode: item.externalItemCode,
+        nameAr: item.nameAr,
+        externalGroupCode: item.externalGroupCode,
+        group: item.group,
+        isInactive: item.isInactive,
+        _count: { units: item.units.length },
+        units: item.units.map(({ stockRows: _stockRows, ...unit }) => ({
+          ...unit,
+          packageSize: unit.packageSize.toString(),
+          salePrice: unit.salePrice?.toString() ?? null,
+        })),
+        stockRows: item.units.flatMap((unit) => unit.stockRows.map((row) => ({
+          externalWarehouseCode: row.externalWarehouseCode,
+          unitName: unit.unitName,
+          packageSize: unit.packageSize.toString(),
+          availableQuantity: row.availableQuantity.toString(),
+          primaryCost: row.primaryCost?.toString() ?? null,
+          weightedAverageCost: row.weightedAverageCost?.toString() ?? null,
+          warehouse: row.warehouse,
+        }))),
+        activity: summarizeItemActivity(itemMovements),
+        pricing: {
+          baseUnitName: baseUnit?.unitName ?? null,
+          lastSupplyCost: movementPricing.lastSupplyPrices.length === 1
+            ? movementPricing.lastSupplyPrices[0].price : null,
+          lastSupplyPrices: movementPricing.lastSupplyPrices,
+          weightedAverageCost: item.units.flatMap((unit) => unit.stockRows)
+            .find((row) => row.weightedAverageCost !== null)?.weightedAverageCost?.toString() ?? null,
+          salePrice: normalizedSalePrice == null ? null : String(Math.round((normalizedSalePrice + Number.EPSILON) * 1e12) / 1e12),
+          salePriceUnit: baseUnit?.unitName ?? null,
+          averageSalePrice: movementPricing.averageSalePrices.length === 1
+            ? movementPricing.averageSalePrices[0].price : null,
+          lastSalePrice: movementPricing.lastSalePrices.length === 1
+            ? movementPricing.lastSalePrices[0].price : null,
+          lastSalePrices: movementPricing.lastSalePrices,
+          averageSalePrices: movementPricing.averageSalePrices,
+          noteAr: normalizedSalePrice == null
+            ? 'سعر البيع الافتراضي غير موجود في اللقطة الحالية. أعد نشر لقطة INVI008 المحدثة.'
+            : `الأسعار معروضة تلقائيًا حسب الوحدة الأساسية (${baseUnit?.unitName ?? 'غير محددة'}). آخر ومتوسط البيع محسوبان من مرآة حركات Oracle لكل عملة دون خلط العملات.`,
+        },
+        movements: itemMovements.slice(0, 20).map((movement) => ({
+          ...movement,
+          documentTypeLabelAr: inventoryDocumentTypeLabel(movement.documentType, movement.billDocumentType),
+          customer: movement.externalCustomerCode
+            ? offlineCustomerByCode.get(movement.externalCustomerCode) ?? null
+            : null,
+          itemCost: offlineSourceByMovement.get(movement.id)?.itemCost?.toString() ?? null,
+          stockCost: offlineSourceByMovement.get(movement.id)?.stockCost?.toString() ?? null,
+          currencyCode: offlineSourceByMovement.get(movement.id)?.currencyCode ?? null,
+          itemQuantity: movement.itemQuantity.toString(),
+          primaryQuantity: movement.primaryQuantity.toString(),
+        })),
+      }); }),
+      summary: {
+        snapshot: {
+          runId: snapshot.activeRunId,
+          sourceSchema: snapshot.sourceSchema,
+          publishedAt: snapshot.activeRun.publishedAt,
+        },
+        counts: {
+          items: items.length,
+          warehouses: warehouses.length,
+          stockBalances: items.reduce((total, item) => total
+            + item.units.reduce((unitTotal, unit) => unitTotal + unit.stockRows.length, 0), 0),
+        },
+        valuation: {
+          ...valuation,
+          totalPrimaryQuantity: stockQuantity.totalPrimaryQuantity,
+          currencyCode: 'SAR',
+          warehouseCodes: ['101', '102', '103', '104'],
+          basis: 'مجموع حركات Oracle: الكمية × تكلفة المخزون مع اتجاه الوارد/المنصرف',
+        },
+      },
     };
   }
 

@@ -23,3 +23,13 @@ export function isActionableDebtorBalance(
   const threshold = FOLLOWUP_MINIMUM_BY_CURRENCY[normalizedCurrencyCode(currency)] ?? 0;
   return amount > threshold + 0.00005;
 }
+
+/** Significant account balances for reporting, regardless of debit/credit side. */
+export function isSignificantBalance(
+  amount: number,
+  currency: string | null | undefined,
+): boolean {
+  if (!Number.isFinite(amount)) return false;
+  const threshold = FOLLOWUP_MINIMUM_BY_CURRENCY[normalizedCurrencyCode(currency)] ?? 0;
+  return Math.abs(amount) > threshold + 0.00005;
+}

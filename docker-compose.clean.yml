@@ -13,7 +13,7 @@ services:
     ports:
       - "16545:5432"
     volumes:
-      - ./data-clean/postgres:/var/lib/postgresql/data
+      - ${ALBINAA_POSTGRES_PATH:-./data-clean/postgres}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U albinaa -d albinaa_clean"]
       interval: 5s
@@ -43,16 +43,28 @@ services:
       TZ: Asia/Aden
       RISK_AUTO_RECALCULATE_ENABLED: ${RISK_AUTO_RECALCULATE_ENABLED:-true}
       RISK_RECALCULATE_HOUR: ${RISK_RECALCULATE_HOUR:-2}
-      ORACLE_READ_API_URL: http://host.docker.internal:3011
+      # Docker Desktop cannot reach a gateway bound to host loopback directly.
+      # Port 23018 is the loopback-restricted host bridge to the SELECT-only 3011 gateway.
+      ORACLE_READ_API_URL: http://host.docker.internal:23018
       ORACLE_READ_API_KEY: ${ORACLE_READ_API_KEY}
       ORACLE_READ_SCHEMA: ${ORACLE_READ_SCHEMA:-IAS20261}
-      PUSH_ENABLED: "false"
+      ORACLE_SALES_ORDERS_ORGANIZATION_ID: ${ORACLE_SALES_ORDERS_ORGANIZATION_ID:-}
+      ORACLE_SALES_ORDERS_WRITE_ENABLED: ${ORACLE_SALES_ORDERS_WRITE_ENABLED:-false}
+      ORACLE_SALES_ORDERS_WRITE_API_URL: http://host.docker.internal:13014
+      ORACLE_SALES_ORDERS_WRITE_API_KEY: ${ORACLE_IAS20261_RECEIPT_WRITE_API_KEY:-disabled}
+      ORACLE_TEST_DIRECT_LOOKUPS_ENABLED: ${ORACLE_TEST_DIRECT_LOOKUPS_ENABLED:-false}
+      ORACLE_WRITE_ENABLED: ${ORACLE_WRITE_ENABLED:-false}
+      ORACLE_WRITE_API_URL: ${ORACLE_WRITE_API_URL:-}
+      ORACLE_WRITE_API_KEY: ${ORACLE_WRITE_API_KEY:-}
+      ORACLE_WRITE_SCHEMA: ${ORACLE_WRITE_SCHEMA:-IAS20191}
+      PUSH_ENABLED: ${PUSH_ENABLED:-true}
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
     volumes:
       - ./data-clean/uploads:/data/uploads
     ports:
       - "18002:3000"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health/ready || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -78,7 +90,7 @@ services:
     ports:
       - "3003:3001"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10

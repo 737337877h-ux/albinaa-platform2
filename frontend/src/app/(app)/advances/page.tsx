@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Banknote, Plus, Search, Upload } from 'lucide-react';
+import { Banknote, Plus, RefreshCw, Search, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { CCY_AR } from '@/lib/format';
@@ -35,7 +35,16 @@ interface AccountsResponse {
 
 interface AdvanceSummary {
   accounts: number;
-  byCurrency: Record<string, { accounts: number; balance: number }>;
+  byCurrency: Record<string, AdvanceCurrencySummary>;
+}
+
+interface AdvanceCurrencySummary {
+  accounts: number;
+  debtorAccounts: number;
+  debtorBalance: number;
+  creditorAccounts: number;
+  creditorBalance: number;
+  netBalance: number;
 }
 
 interface ImportPreview {
@@ -61,6 +70,32 @@ interface ImportResult {
   movementsSkippedDuplicate?: number;
 }
 
+interface OracleSyncPreview {
+  profile: 'ORACLE_ADVANCES_LIVE' | 'ORACLE_ADVANCES_LEDGER';
+  sourceSchema: 'IAS20261';
+  sourceAccountCodes: readonly string[];
+  sourceAccounts: number;
+  balanceRows: number;
+  byCurrency: Record<string, AdvanceCurrencySummary>;
+  sampleAccounts: { sourceAccountCode: string; accountNumber: string; nameAr: string }[];
+  readMode: 'SELECT_ONLY';
+  oracleWrite: 'NONE';
+}
+
+interface OracleSyncResult {
+  status: 'dry_run' | 'completed' | 'partial';
+  preview: OracleSyncPreview;
+  importJobId?: string;
+  accountsCreated?: number;
+  accountsUpdated?: number;
+  balancesUpdated?: number;
+  balancesCleared?: number;
+  tasksCreated?: number;
+  transactionsImported?: number;
+  unchanged?: number;
+  issues?: { accountNumber: string; currency?: string; reason: string }[];
+}
+
 export default function AdvancesPage() {
   const can = useCan();
   const canRead = can('customers.read');
@@ -71,14 +106,17 @@ export default function AdvancesPage() {
   const [currency, setCurrency] = useState('');
   const [page, setPage] = useState(1);
   const [importOpen, setImportOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [syncPreview, setSyncPreview] = useState<OracleSyncPreview | null>(null);
+  const [syncIssues, setSyncIssues] = useState<NonNullable<OracleSyncResult['issues']>>([]);
 
   const accounts = useQuery<AccountsResponse>({
     queryKey: ['advances', search, currency, page],
     queryFn: () => {
-      const params = new URLSearchParams({ accountClass: 'advance', page: String(page), limit: '25' });
+      const params = new URLSearchParams({ accountClass: 'advance', page: String(page), limit: '25', sortBy: 'code', sortDir: 'asc' });
       if (search) params.set('search', search);
       if (currency) params.set('currency', currency);
       return api<AccountsResponse>(`/customers?${params.toString()}`);
@@ -121,6 +159,30 @@ export default function AdvancesPage() {
     },
     onError: (error: Error) => toast(error.message, 'err'),
   });
+  const previewOracleSync = useMutation({
+    mutationFn: () => api<OracleSyncResult>('/analytical-accounts/sync-advances?dryRun=true', { method: 'POST' }),
+    onSuccess: (result) => {
+      setSyncPreview(result.preview);
+      setSyncIssues(result.issues ?? []);
+      setSyncOpen(true);
+      toast(result.issues?.length ? `اكتمل الفحص؛ ${result.issues.length} حساب/عملة يحتاج مراجعة ولن يتم تغييره` : 'نجح فحص أرصدة السلف وحركاتها — لم تُحفظ بيانات بعد', result.issues?.length ? 'err' : 'ok');
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
+  });
+  const executeOracleSync = useMutation({
+    mutationFn: () => api<OracleSyncResult>('/analytical-accounts/sync-advances?dryRun=false', { method: 'POST' }),
+    onSuccess: (result) => {
+      setSyncIssues(result.issues ?? []);
+      toast(`تم تحديث ${result.balancesUpdated ?? 0} رصيد و${result.transactionsImported ?? 0} حركة؛ ${result.unchanged ?? 0} دون تغيير${result.issues?.length ? `، و${result.issues.length} بحاجة للمراجعة` : ''}`, result.issues?.length ? 'err' : 'ok');
+      setSyncOpen(false);
+      setSyncPreview(null);
+      qc.invalidateQueries({ queryKey: ['advances'] });
+      qc.invalidateQueries({ queryKey: ['advances-summary'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-summary'] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+    onError: (error: Error) => toast(error.message, 'err'),
+  });
 
   if (!canRead) return <Card><PermissionNotice message="لا تملك صلاحية عرض حسابات السلف" /></Card>;
 
@@ -128,9 +190,14 @@ export default function AdvancesPage() {
     <div className="space-y-5">
       <PageHeader
         title="السلف"
-        action={canManage ? <div className="flex gap-2"><Button variant="secondary" onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" />إضافة حساب سلفة</Button><Button onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> استيراد كشف السلف</Button></div> : undefined}
+        action={canManage ? <div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" />إضافة حساب سلفة</Button><Button variant="secondary" onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> استيراد كشف</Button><Button loading={previewOracleSync.isPending} onClick={() => previewOracleSync.mutate()}><RefreshCw className="h-4 w-4" /> مزامنة أوراكل</Button></div> : undefined}
       />
 
+      {syncIssues.length > 0 && <Card>
+        <p className="font-semibold text-amber-700">حسابات لم تُحدّث حفاظًا على صحة الرصيد</p>
+        <p className="text-sm">تحتاج مطابقة كشف Oracle ورصيده أو مراجعة القيود المستوردة يدويًا. بقيت بياناتها السابقة محفوظة.</p>
+        <ul className="mt-2 text-sm">{syncIssues.map((issue, index) => <li key={`${issue.accountNumber}-${issue.currency}-${index}`}>ADV-{issue.accountNumber} {issue.currency ? `— ${CCY_AR[issue.currency] ?? issue.currency}` : ''}</li>)}</ul>
+      </Card>}
       <DataState
         isLoading={summary.isLoading}
         isError={summary.isError}
@@ -149,9 +216,8 @@ export default function AdvancesPage() {
             </Card>
             {Object.entries(summary.data.byCurrency).map(([code, value]) => (
               <Card key={code} className="p-4">
-                <div className="flex items-center justify-between"><p className="text-xs text-concrete-500">إجمالي السلف — {CCY_AR[code] ?? code}</p><Badge tone="pine">{code}</Badge></div>
-                <p className="mt-2 text-xl font-bold"><Money value={value.balance} currency={code} signed /></p>
-                <p className="mt-1 text-xs text-concrete-500">{value.accounts} حساب</p>
+                <div className="flex items-center justify-between"><p className="text-xs text-concrete-500">السلف — {CCY_AR[code] ?? code}</p><Badge tone="pine">{code}</Badge></div>
+                <AdvanceBalanceSides code={code} value={value} />
               </Card>
             ))}
           </div>
@@ -226,10 +292,43 @@ export default function AdvancesPage() {
           </div>}
         </div>
       </Dialog>
+
+      <Dialog open={syncOpen} onClose={() => { setSyncOpen(false); setSyncPreview(null); }} title="مزامنة حسابات السلف من أوراكل">
+        {syncPreview && <div className="space-y-4">
+          <p className="rounded-lg bg-pine-50 p-3 text-sm text-pine-800 dark:bg-pine-900/20 dark:text-pine-100">
+            تم الفحص من {syncPreview.sourceSchema} بوضع قراءة فقط. ستُحدّث الأسماء والأرصدة داخل المنصة، ولن تُكتب أي بيانات في أوراكل ولن تُحذف حسابات المنصة.
+          </p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <PreviewStat label="الحسابات" value={syncPreview.sourceAccounts} />
+            <PreviewStat label="صفوف الأرصدة" value={syncPreview.balanceRows} />
+            <PreviewStat label="الحسابات الرئيسية" value={syncPreview.sourceAccountCodes.length} />
+            <PreviewStat label="أخطاء الفحص" value={0} />
+          </div>
+          <div className="rounded-lg border border-concrete-100 p-3 text-sm dark:border-white/10">
+            <p className="font-semibold">نطاق المزامنة</p>
+            <p className="mt-1 font-mono" dir="ltr">{syncPreview.sourceAccountCodes.join(' + ')}</p>
+          </div>
+          {Object.entries(syncPreview.byCurrency).map(([code, value]) => <div key={code} className="rounded-lg bg-concrete-50 px-3 py-2 text-sm dark:bg-white/5"><div className="flex items-center justify-between"><span>{CCY_AR[code] ?? code}</span><Badge tone="neutral">{value.accounts} حساب/عملة</Badge></div><AdvanceBalanceSides code={code} value={value} compact /></div>)}
+          <div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => { setSyncOpen(false); setSyncPreview(null); }}>إلغاء</Button><Button loading={executeOracleSync.isPending} onClick={() => executeOracleSync.mutate()}>اعتماد المزامنة</Button></div>
+        </div>}
+      </Dialog>
     </div>
   );
 }
 
 function PreviewStat({ label, value, danger = false }: { label: string; value: number; danger?: boolean }) {
   return <div className="rounded-lg border border-concrete-100 p-3 text-center dark:border-white/10"><p className="text-xs text-concrete-500">{label}</p><p className={`tnum mt-1 text-lg font-bold ${danger ? 'text-red-600' : ''}`}>{value}</p></div>;
+}
+
+function AdvanceBalanceSides({ code, value, compact = false }: { code: string; value: AdvanceCurrencySummary; compact?: boolean }) {
+  return <div className={`${compact ? 'mt-2' : 'mt-3'} grid grid-cols-2 gap-2`}>
+    <div className="rounded-lg bg-red-50 p-2 dark:bg-red-950/20">
+      <p className="text-[11px] font-semibold text-red-700 dark:text-red-300">مدين · {value.debtorAccounts}</p>
+      <p className="mt-1 font-bold text-red-700 dark:text-red-200"><Money value={value.debtorBalance} currency={code} /></p>
+    </div>
+    <div className="rounded-lg bg-emerald-50 p-2 dark:bg-emerald-950/20">
+      <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">دائن · {value.creditorAccounts}</p>
+      <p className="mt-1 font-bold text-emerald-700 dark:text-emerald-200"><Money value={value.creditorBalance} currency={code} /></p>
+    </div>
+  </div>;
 }

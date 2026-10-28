@@ -1,7 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize, IsArray, IsNotEmpty, IsOptional, IsString, MaxLength,
-  Min, ValidateNested,
+  Matches, Min, ValidateNested,
 } from 'class-validator';
 
 export class InventoryTransferLineDto {
@@ -38,4 +38,10 @@ export class CreateInventoryTransferDto {
 export class ReviewInventoryTransferDto {
   @IsOptional() @IsString() @MaxLength(1000)
   note?: string;
+}
+
+export class LinkOracleTransferDocumentDto {
+  @IsString()
+  @Matches(/^\d{1,30}$/, { message: 'رقم TR_SER يجب أن يتكون من أرقام فقط' })
+  sourceTransferSerial!: string;
 }

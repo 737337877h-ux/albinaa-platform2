@@ -11,13 +11,14 @@ import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Dialog } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
-import { Badge, Button, Card, Field, Select } from '@/components/ui/primitives';
+import { Badge, Button, Card, Field, Input, Select } from '@/components/ui/primitives';
 import { Table, THead, TRow, TD } from '@/components/ui/table';
 
 interface Collector {
   id: string;
   user: { id: string; username: string; fullName: string; phone: string; isActive: boolean };
   branch: { id: string; name: string } | null;
+  oracleCollectorNo: number | null;
   active: boolean;
 }
 
@@ -37,11 +38,13 @@ interface Branch {
 const createSchema = z.object({
   userId: z.string().min(1, 'يرجى اختيار مستخدم'),
   branchId: z.string().optional(),
+  oracleCollectorNo: z.string().trim().refine((value) => !value || (/^\d+$/.test(value) && Number(value) > 0), 'أدخل رقمًا صحيحًا أكبر من صفر'),
 });
 
 const editSchema = z.object({
   userId: z.string().min(1, 'يرجى اختيار مستخدم'),
   branchId: z.string().optional(),
+  oracleCollectorNo: z.string().trim().refine((value) => !value || (/^\d+$/.test(value) && Number(value) > 0), 'أدخل رقمًا صحيحًا أكبر من صفر'),
   active: z.boolean(),
 });
 
@@ -89,6 +92,7 @@ export default function CollectorsPage() {
         body: JSON.stringify({
           userId: data.userId,
           branchId: data.branchId || undefined,
+          oracleCollectorNo: data.oracleCollectorNo ? Number(data.oracleCollectorNo) : undefined,
         }),
       }),
     onSuccess: () => {
@@ -106,6 +110,7 @@ export default function CollectorsPage() {
         body: JSON.stringify({
           userId: data.userId,
           branchId: data.branchId || undefined,
+          oracleCollectorNo: data.oracleCollectorNo ? Number(data.oracleCollectorNo) : null,
           active: data.active,
         }),
       }),
@@ -150,10 +155,11 @@ export default function CollectorsPage() {
         >
           {collectors.data && (
             <Table>
-              <THead cols={['اسم المستخدم', 'الاسم الكامل', 'الهاتف', 'الفرع', 'حالة المستخدم', 'حالة المحصل', '']} />
+              <THead cols={['رقم Oracle', 'اسم المستخدم', 'الاسم الكامل', 'الهاتف', 'الفرع', 'حالة المستخدم', 'حالة المحصل', '']} />
               <tbody>
                 {collectors.data.map((c) => (
                   <TRow key={c.id}>
+                    <TD className="font-semibold text-pine-700 dark:text-pine-300">{c.oracleCollectorNo ?? '—'}</TD>
                     <TD className="font-medium">{c.user.username}</TD>
                     <TD className="text-concrete-600 dark:text-concrete-400">{c.user.fullName}</TD>
                     <TD className="text-xs text-concrete-500"><span dir="ltr">{c.user.phone}</span></TD>
@@ -223,6 +229,7 @@ function CreateDialog({
 }) {
   const { register, handleSubmit, reset, formState: { errors } } = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
+    defaultValues: { userId: '', branchId: '', oracleCollectorNo: '' },
   });
 
   const handleClose = () => {
@@ -253,6 +260,10 @@ function CreateDialog({
           </Select>
         </Field>
 
+        <Field label="رقم المحصل في Oracle" hint="يُستخدم لربط المنصة والتطبيق بسندات IAS20261" error={errors.oracleCollectorNo?.message}>
+          <Input inputMode="numeric" dir="ltr" placeholder="مثال: 1" {...register('oracleCollectorNo')} />
+        </Field>
+
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" type="button" onClick={handleClose}>إلغاء</Button>
           <Button type="submit" loading={loading}>
@@ -278,7 +289,12 @@ function EditDialog({
 }) {
   const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
-    values: item ? { userId: item.user.id, branchId: item.branch?.id ?? '', active: item.active } : undefined,
+    values: item ? {
+      userId: item.user.id,
+      branchId: item.branch?.id ?? '',
+      oracleCollectorNo: item.oracleCollectorNo == null ? '' : String(item.oracleCollectorNo),
+      active: item.active,
+    } : undefined,
   });
 
   const active = watch('active');
@@ -310,6 +326,10 @@ function EditDialog({
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}
           </Select>
+        </Field>
+
+        <Field label="رقم المحصل في Oracle" hint="يظهر اسمه تلقائيًا في سندات التحصيل المرتبطة" error={errors.oracleCollectorNo?.message}>
+          <Input inputMode="numeric" dir="ltr" placeholder="مثال: 1" {...register('oracleCollectorNo')} />
         </Field>
 
         <Field label="حالة المحصل">

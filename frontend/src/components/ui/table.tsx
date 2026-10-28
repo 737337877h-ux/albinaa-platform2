@@ -12,11 +12,11 @@ export function Table({ children, className }: { children: React.ReactNode; clas
     localStorage.setItem('albinaa.table-density', next ? 'compact' : 'comfortable');
   };
   return (
-    <div>
+    <div className="min-w-0 max-w-full">
       <div className="flex justify-end border-b border-line px-2 py-1 print:hidden">
         <button onClick={toggle} aria-pressed={compact} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-ink-mid hover:bg-surface-2"><Rows3 className="h-3.5 w-3.5" />{compact ? 'عرض مريح' : 'عرض مضغوط'}</button>
       </div>
-      <div className="overflow-x-auto">
+      <div role="region" aria-label="جدول بيانات — يمكن تمريره أفقيًا" tabIndex={0} className="max-w-full overflow-x-auto overscroll-x-contain focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand">
         <table className={cn('w-full text-sm', compact && 'data-density-compact', className)}>{children}</table>
       </div>
     </div>

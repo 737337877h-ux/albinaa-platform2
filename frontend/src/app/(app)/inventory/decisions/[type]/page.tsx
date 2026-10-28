@@ -14,7 +14,7 @@ import { inventoryNumber, OracleInventorySummary } from '@/lib/oracle-inventory'
 
 const DECISION_LABELS: Record<string, string> = {
   negative_stock: 'رصيد سالب يحتاج تحقيقًا',
-  stockout_risk: 'نفاد مع طلب قائم',
+  stockout_risk: 'مخاطر النفاد مع صرف حديث',
   reorder: 'يجب إعادة التوريد',
   dead_stock: 'الأصناف الراكدة',
   slow_moving: 'الأصناف بطيئة الحركة',
@@ -26,7 +26,7 @@ const DECISION_LABELS: Record<string, string> = {
 
 export default function InventoryDecisionPage() {
   const can = useCan();
-  const allowed = can('reports.read');
+  const allowed = can('inventory.read');
   const params = useParams<{ type: string }>();
   const decisionType = decodeURIComponent(String(params.type || ''));
   const [page, setPage] = useState(1);
@@ -93,6 +93,7 @@ export default function InventoryDecisionPage() {
                   <div className="mt-3 flex items-center gap-2"><Badge>{decision.confidence === 'high' ? 'ثقة عالية' : decision.confidence === 'medium' ? 'ثقة متوسطة' : 'تقييم أولي'}</Badge></div>
                   <p className="mt-3 text-xs text-debt-700"><b>المخاطرة:</b> {decision.risk}</p>
                   <p className="mt-2 text-xs text-brand"><b>القرار:</b> {decision.recommendation}</p>
+                  {decision.hasStockBalance === false && <p className="mt-2 text-xs text-hazard-700">لا يوجد صف رصيد في اللقطة؛ الكمية المقترحة تقديرية حتى تأكيد الرصيد الحالي.</p>}
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-ink-mid">
                     <span>الرصيد: <b className="tnum">{inventoryNumber(decision.currentQuantity)}</b></span>
                     <span>صرف 90 يومًا: <b className="tnum">{inventoryNumber(decision.outbound90)}</b></span>

@@ -66,6 +66,122 @@ class EnvVars {
   @IsOptional()
   @IsString()
   ORACLE_READ_SCHEMA?: string;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  ORACLE_TEST_DIRECT_LOOKUPS_ENABLED?: string;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  ORACLE_WRITE_ENABLED?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_WRITE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_WRITE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_WRITE_SCHEMA?: string;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  ORACLE_IAS20261_PURCHASE_WRITE_ENABLED?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_PURCHASE_WRITE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_PURCHASE_WRITE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_PURCHASE_WRITE_SCHEMA?: string;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  ORACLE_IAS20261_RECEIPT_WRITE_ENABLED?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_RECEIPT_WRITE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_RECEIPT_WRITE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_RECEIPT_WRITE_SCHEMA?: string;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  ORACLE_IAS20261_PAYMENT_WRITE_ENABLED?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_PAYMENT_WRITE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_PAYMENT_WRITE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_PAYMENT_WRITE_SCHEMA?: string;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  ORACLE_IAS20261_JOURNAL_WRITE_ENABLED?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_JOURNAL_WRITE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_JOURNAL_WRITE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_JOURNAL_WRITE_SCHEMA?: string;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  ORACLE_IAS20261_INVENTORY_WRITE_ENABLED?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_INVENTORY_WRITE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_INVENTORY_WRITE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_INVENTORY_WRITE_SCHEMA?: string;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  ORACLE_IAS20261_TRANSFER_WRITE_ENABLED?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_TRANSFER_WRITE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_TRANSFER_WRITE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  ORACLE_IAS20261_TRANSFER_WRITE_SCHEMA?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>) {
@@ -76,6 +192,14 @@ export function validateEnv(config: Record<string, unknown>) {
     MAX_SESSIONS_PER_USER: Number(config.MAX_SESSIONS_PER_USER ?? 5),
     RISK_AUTO_RECALCULATE_ENABLED: String(config.RISK_AUTO_RECALCULATE_ENABLED ?? 'true'),
     RISK_RECALCULATE_HOUR: Number(config.RISK_RECALCULATE_HOUR ?? 2),
+    ORACLE_WRITE_ENABLED: String(config.ORACLE_WRITE_ENABLED ?? 'false'),
+    ORACLE_IAS20261_PURCHASE_WRITE_ENABLED: String(config.ORACLE_IAS20261_PURCHASE_WRITE_ENABLED ?? 'false'),
+    ORACLE_IAS20261_RECEIPT_WRITE_ENABLED: String(config.ORACLE_IAS20261_RECEIPT_WRITE_ENABLED ?? 'false'),
+    ORACLE_IAS20261_PAYMENT_WRITE_ENABLED: String(config.ORACLE_IAS20261_PAYMENT_WRITE_ENABLED ?? 'false'),
+    ORACLE_IAS20261_JOURNAL_WRITE_ENABLED: String(config.ORACLE_IAS20261_JOURNAL_WRITE_ENABLED ?? 'false'),
+    ORACLE_IAS20261_INVENTORY_WRITE_ENABLED: String(config.ORACLE_IAS20261_INVENTORY_WRITE_ENABLED ?? 'false'),
+    ORACLE_IAS20261_TRANSFER_WRITE_ENABLED: String(config.ORACLE_IAS20261_TRANSFER_WRITE_ENABLED ?? 'false'),
+    ORACLE_TEST_DIRECT_LOOKUPS_ENABLED: String(config.ORACLE_TEST_DIRECT_LOOKUPS_ENABLED ?? 'false'),
   });
   const errors = validateSync(validated, { skipMissingProperties: false });
   if (errors.length > 0) {

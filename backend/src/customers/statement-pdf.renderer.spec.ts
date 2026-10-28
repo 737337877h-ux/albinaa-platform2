@@ -73,6 +73,8 @@ describe('branded customer statement PDF', () => {
       toDate: '2026-08-15',
       template: 'branded',
       printedBy: 'admin3',
+      sourceNote: 'صادر من المنصة - قراءة Oracle: 2026-09-06T12:00:00Z',
+      accountGroupLabel: 'حسابات السلف',
     });
 
     expect(pdfPageCount(buffer)).toBeGreaterThanOrEqual(3);

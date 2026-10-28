@@ -1,3 +1,5 @@
+import {pushMessage} from './push-message';
+import {notificationApplicationScope} from './application-scope';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -21,11 +23,15 @@ export class NotificationsService {
         userId: user.id,
         token: input.token,
         platform: input.platform,
+        applicationId: input.applicationId ?? 'com.albinaa.collector',
+        notificationChannelId: input.notificationChannelId ?? null,
         deviceName: input.deviceName?.trim() || null,
       },
       update: {
         userId: user.id,
         platform: input.platform,
+        applicationId: input.applicationId ?? 'com.albinaa.collector',
+        notificationChannelId: input.notificationChannelId ?? null,
         deviceName: input.deviceName?.trim() || null,
         lastSeenAt: new Date(),
       },
@@ -43,12 +49,15 @@ export class NotificationsService {
 
   async notifyUser(userId: string, kind: string, payload: Record<string, unknown>) {
     try {
-      await this.prisma.notification.create({ data: { userId, kind, payload: payload as any } });
+      await this.prisma.$transaction(async tx => {
+        const notification = await tx.notification.create({ data: { userId, kind, payload: payload as any } });
+        const content = pushMessage(kind, payload);
+        await tx.hrPushDelivery.create({ data: { id: notification.id, userId, kind, payload: { ...payload, title: content.title, message: content.body } as any } });
+      });
     } catch (e) {
       // فشل الإشعار لا يُسقط العملية الأصلية
       this.logger.error(`فشل إنشاء إشعار ${kind}`, e instanceof Error ? e.stack : String(e));
     }
-    await this.sendExternalPush(userId, kind, payload);
   }
 
   /** إشعار كل مستخدمي المنشأة الحاملين صلاحية معينة (مثل أمين الصندوق cash.receive). */
@@ -70,76 +79,22 @@ export class NotificationsService {
     }
   }
 
-  private pushMessage(kind: string, payload: Record<string, unknown>) {
-    const customerName = typeof payload.customerName === 'string' ? payload.customerName : '';
-    if (kind === 'finance_alert' && payload.event === 'financial_adjustment_requested') {
-      const type = payload.requestType === 'settlement' ? 'تصفية' : 'خصم';
-      const amount = payload.amount != null ? Number(payload.amount).toLocaleString('en-US') : '';
-      const currency = typeof payload.currency === 'string' ? payload.currency : '';
-      return {
-        title: `طلب ${type} يحتاج المراجعة`,
-        body: `${customerName || 'عميل'}${amount ? ` — ${amount} ${currency}` : ''}`,
-      };
-    }
-    if (kind === 'finance_alert' && payload.event === 'financial_adjustment_reviewed') {
-      const type = payload.requestType === 'settlement' ? 'التصفية' : 'الخصم';
-      const decision = payload.decision === 'approved' ? 'اعتماد' : 'رفض';
-      return {
-        title: `تم ${decision} طلب ${type}`,
-        body: customerName || 'تمت معالجة الطلب المالي',
-      };
-    }
-    const messages: Record<string, [string, string]> = {
-      followup_due: ['متابعة مستحقة', customerName ? `حان موعد متابعة ${customerName}` : 'لديك متابعة مستحقة'],
-      promise_due: ['وعد سداد مستحق', customerName ? `حان موعد وعد السداد للعميل ${customerName}` : 'لديك وعد سداد مستحق'],
-      promise_overdue: ['وعد سداد متأخر', customerName ? `تأخر وعد السداد للعميل ${customerName}` : 'لديك وعد سداد متأخر'],
-      customer_transferred: ['إسناد عميل جديد', customerName ? `تم إسناد ${customerName} إليك` : 'تم إسناد عميل جديد إليك'],
-      assignment_change_requested: ['طلب تغيير إسناد', customerName ? `طلب جديد لتغيير إسناد ${customerName}` : 'يوجد طلب تغيير إسناد يحتاج المراجعة'],
-      assignment_change_reviewed: ['نتيجة طلب تغيير الإسناد', customerName ? `تمت معالجة طلب إسناد ${customerName}` : 'تمت معالجة طلب تغيير الإسناد'],
-      finance_alert: ['تنبيه مالي مهم', 'يوجد إجراء مالي يتطلب المراجعة'],
-    };
-    const [title, body] = messages[kind] ?? ['تنبيه من الراقي', 'لديك تحديث جديد في نظام التحصيل'];
-    return { title, body };
-  }
-
-  private async sendExternalPush(userId: string, kind: string, payload: Record<string, unknown>) {
-    if (process.env.PUSH_ENABLED !== 'true') return;
+  /** Notify each matching user once when any of the supplied permissions is granted. */
+  async notifyByPermissions(orgId: string, permissionCodes: string[], kind: string, payload: Record<string, unknown>) {
     try {
-      const devices = await this.prisma.devicePushToken.findMany({
-        where: { userId },
-        select: { token: true },
+      const users = await this.prisma.user.findMany({
+        where: {
+          organizationId: orgId,
+          isActive: true,
+          userRoles: {
+            some: { role: { rolePermissions: { some: { permission: { code: { in: permissionCodes } } } } } },
+          },
+        },
+        select: { id: true },
       });
-      if (devices.length === 0) return;
-      const content = this.pushMessage(kind, payload);
-      const headers: Record<string, string> = {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      };
-      if (process.env.EXPO_ACCESS_TOKEN) {
-        headers.Authorization = `Bearer ${process.env.EXPO_ACCESS_TOKEN}`;
-      }
-      const response = await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(devices.map(({ token }) => ({
-          to: token,
-          sound: 'default',
-          channelId: 'albinaa-reminders',
-          ...content,
-          data: { kind, ...payload },
-        }))),
-      });
-      if (!response.ok) throw new Error(`Expo Push HTTP ${response.status}`);
-      const result = await response.json() as { data?: Array<{ details?: { error?: string } }> };
-      const invalid = devices.filter((_, index) => result.data?.[index]?.details?.error === 'DeviceNotRegistered');
-      if (invalid.length > 0) {
-        await this.prisma.devicePushToken.deleteMany({
-          where: { token: { in: invalid.map(({ token }) => token) } },
-        });
-      }
+      await Promise.all(users.map((u) => this.notifyUser(u.id, kind, payload)));
     } catch (e) {
-      // External delivery is best-effort; the in-app notification remains authoritative.
-      this.logger.error(`فشل إرسال Push للإشعار ${kind}`, e instanceof Error ? e.stack : String(e));
+      this.logger.error(`فشل تحديد مستلمي إشعار ${kind}`, e instanceof Error ? e.stack : String(e));
     }
   }
 
@@ -156,11 +111,12 @@ export class NotificationsService {
     });
   }
 
-  async listMine(user: AuthUser, unreadOnly = false, page = 1, limit = 25) {
-    const where = { userId: user.id, ...(unreadOnly ? { readAt: null } : {}) };
+  async listMine(user: AuthUser, unreadOnly = false, page = 1, limit = 25, application?:string) {
+    const baseWhere = {userId:user.id,...notificationApplicationScope(application)};
+    const where = { ...baseWhere, ...(unreadOnly ? { readAt: null } : {}) };
     const [total, unread, items] = await Promise.all([
-      this.prisma.notification.count({ where: { userId: user.id } }),
-      this.prisma.notification.count({ where: { userId: user.id, readAt: null } }),
+      this.prisma.notification.count({ where: baseWhere }),
+      this.prisma.notification.count({ where: { ...baseWhere, readAt: null } }),
       this.prisma.notification.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -177,9 +133,9 @@ export class NotificationsService {
     return this.prisma.notification.update({ where: { id }, data: { readAt: new Date() } });
   }
 
-  async markAllRead(user: AuthUser) {
+  async markAllRead(user: AuthUser, application?:string) {
     const res = await this.prisma.notification.updateMany({
-      where: { userId: user.id, readAt: null },
+      where: { userId: user.id, readAt: null, ...notificationApplicationScope(application) },
       data: { readAt: new Date() },
     });
     return { marked: res.count };

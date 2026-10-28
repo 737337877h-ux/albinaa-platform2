@@ -8,7 +8,7 @@ describe('PromiseReminderScheduler', () => {
   });
 
   it('creates one internal reminder and advances an upcoming promise', async () => {
-    const notificationCreate = jest.fn().mockResolvedValue({ id: 'notification-1' });
+    const notificationCreate = jest.fn().mockImplementation(async({data}:any)=>({id:'notification-1',...data}));
     const promiseUpdate = jest.fn().mockResolvedValue({ id: 'promise-1' });
     const prisma = {
       systemSetting: { findUnique: jest.fn().mockResolvedValue(null) },
@@ -25,7 +25,8 @@ describe('PromiseReminderScheduler', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         create: notificationCreate,
       },
-      $transaction: jest.fn((operations: Promise<unknown>[]) => Promise.all(operations)),
+      hrPushDelivery:{create:jest.fn()},
+      $transaction: jest.fn(async(fn:any)=>fn(prisma)),
     };
 
     const result = await new PromiseReminderScheduler(prisma as any)

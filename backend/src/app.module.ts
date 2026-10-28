@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { HrModule } from './hr/hr.module';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -34,6 +35,9 @@ import { AccountingPeriodsModule } from './accounting-periods/accounting-periods
 import { OracleInventorySyncModule } from './oracle-inventory-sync/oracle-inventory-sync.module';
 import { OracleMonitoringModule } from './oracle-monitoring/oracle-monitoring.module';
 import { InventoryTransfersModule } from './inventory-transfers/inventory-transfers.module';
+import { OracleTestRequestsModule } from './oracle-test-requests/oracle-test-requests.module';
+import { SalesOrderDraftsModule } from './sales-order-drafts/sales-order-drafts.module';
+import { MobileAppReleasesModule } from './mobile-app-releases/mobile-app-releases.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -41,6 +45,7 @@ import { IdempotencyInterceptor } from './common/interceptors/idempotency.interc
 
 @Module({
   imports: [
+    HrModule,
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     // حد عام: 100 طلب/دقيقة لكل IP — وحد أشد على /auth/login عبر @Throttle
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
@@ -75,6 +80,9 @@ import { IdempotencyInterceptor } from './common/interceptors/idempotency.interc
     OracleInventorySyncModule,
     OracleMonitoringModule,
     InventoryTransfersModule,
+    OracleTestRequestsModule,
+    SalesOrderDraftsModule,
+    MobileAppReleasesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },         // 1) Rate limiting

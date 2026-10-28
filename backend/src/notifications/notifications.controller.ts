@@ -33,16 +33,17 @@ export class NotificationsController {
     @Query('unreadOnly') unreadOnly?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('application') application?: string,
   ) {
     return this.notifications.listMine(
-      user, unreadOnly === 'true', Number(page ?? 1), Number(limit ?? 25),
+      user, unreadOnly === 'true', Number(page ?? 1), Number(limit ?? 25), application,
     );
   }
 
   @Patch('read-all')
   @ApiOperation({ summary: 'تحديد كل إشعاراتي كمقروءة' })
-  readAll(@CurrentUser() user: AuthUser) {
-    return this.notifications.markAllRead(user);
+  readAll(@CurrentUser() user: AuthUser, @Query('application') application?:string) {
+    return this.notifications.markAllRead(user, application);
   }
 
   @Patch(':id/read')

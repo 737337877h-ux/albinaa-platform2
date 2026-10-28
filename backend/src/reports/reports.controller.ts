@@ -13,6 +13,9 @@ import { ReportsService } from './reports.service';
 export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 
+  @Get('collector-performance') @RequirePermissions('reports.read')
+  collectorPerformance(@CurrentUser() user:AuthUser,@Query('from') from:string,@Query('to') to:string){return this.reports.collectorPerformance(user,from,to);}
+
   @Get('summary') @RequirePermissions('reports.read')
   @ApiOperation({ summary: 'ملخص شامل مفصول بالعملة: المديونية، أعلى المدينين، الحجوزات، المحصلون، والتعتيق' })
   summary(@CurrentUser() user: AuthUser, @Query('accountClass') accountClass?: string) {

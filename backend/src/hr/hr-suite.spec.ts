@@ -1,0 +1,15 @@
+import {DEFAULT_TIME_RULE} from './hr-time-policy';
+import {Prisma} from '@prisma/client';
+import {applyAdjustments} from './hr-payroll-adjustments';
+import {eligibleAbsence} from './hr-absence.service';
+import {leaveBalance} from './hr-profile.service';
+const e={active:true,attendanceExempt:false,payrollStart:'2026-10-01',createdAt:'2026-09-01',startTime:'08:00',endTime:'22:00',breakMinutes:90,workDays:[0,1,2,3,4,6]};
+const policy={startDate:'2026-09-01',payrollRules:[{...DEFAULT_TIME_RULE,automaticAbsence:false}]},now=new Date('2026-11-02');
+const context=()=>({absences:[{status:'confirmed',workDate:'2026-10-03'}],policy,leaves:[],attendance:[],previous:[] as any[]});
+const calculation=()=>({baseSalary:'90000',currency:'YER',net:'90000',warnings:[]});
+describe('approved HR payroll policy',()=>{
+ it('excludes holidays, exemptions, approved leave, any attendance and untracked dates',()=>{expect(eligibleAbsence(e,'2026-10-03',policy,[],[],now)).toBe(true);expect(eligibleAbsence(e,'2026-10-02',policy,[],[],now)).toBe(false);expect(eligibleAbsence({...e,attendanceExempt:true},'2026-10-03',policy,[],[],now)).toBe(false);expect(eligibleAbsence(e,'2026-10-03',policy,[{kind:'leave',status:'approved',startDate:'2026-10-03',endDate:'2026-10-03'}],[],now)).toBe(false);expect(eligibleAbsence(e,'2026-10-03',policy,[],[{workDate:'2026-10-03'}],now)).toBe(false);expect(eligibleAbsence(e,'2026-10-03',null,[],[],now)).toBe(false);});
+ it('deducts confirmed day at basic divided by 30 only',()=>{const c=applyAdjustments(calculation(),e,'2026-10',context(),[],[],{installments:0},now);expect(c.absenceDeduction).toBe('3000.00');expect(c.net).toBe('87000.00');const ctx=context();ctx.absences[0].status='excused';expect(applyAdjustments(calculation(),e,'2026-10',ctx,[],[],{installments:0},now).net).toBe('90000.00');});
+ it('does not deduct a merely approved advance; pays only remaining principal and enforces aggregate cap',()=>{const request={id:'r',amount:new Prisma.Decimal(10000),currency:'YER',monthlyInstallment:new Prisma.Decimal(9000),installmentStartMonth:'2026-10'};const ctx={...context(),absences:[]};expect(applyAdjustments(calculation(),e,'2026-10',ctx,[request],[],{installments:0},now).automaticInstallments).toBe('0.00');expect(applyAdjustments(calculation(),e,'2026-10',ctx,[request],[{id:'r',linkedMonth:'2026-10',linkedAmount:'10000'}],{installments:1},now).net).toBeNull();ctx.previous=[{month:'2026-10',workspace:{advanceLinks:[{id:'r',linkedMonth:'2026-10',linkedAmount:'10000'}],calculation:{automaticInstallmentLines:[{requestId:'r',amount:'9000'}]}}}];const c=applyAdjustments(calculation(),e,'2026-11',ctx,[request],[],{installments:0},now);expect(c.automaticInstallments).toBe('1000.00');expect(c.net).toBe('89000.00');});
+ it('never invents leave balances and excludes Friday from annual leave reservations',()=>{expect(leaveBalance({},[],e.workDays)).toBeNull();expect(leaveBalance({leaveOpeningDays:'10',leaveAsOf:'2026-10-01'},[{kind:'leave',status:'approved',leaveType:'annual',startDate:'2026-10-01',endDate:'2026-10-03'}],e.workDays)?.remaining).toBe(8);});
+});

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -19,6 +20,7 @@ type RunRow = {
   started_at: Date;
   extracted_at: Date | null;
   validated_at: Date | null;
+  published_at: Date | null;
   loaded_counts: unknown;
   validation_summary: unknown;
   platform_comparison?: unknown;
@@ -27,10 +29,42 @@ type RunRow = {
 
 @Injectable()
 export class OracleMonitoringService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly config: ConfigService) {}
+
+  private async directReadGateway() {
+    const baseUrl = this.config.get<string>('ORACLE_READ_API_URL')?.trim().replace(/\/$/, '');
+    const apiKey = this.config.get<string>('ORACLE_READ_API_KEY')?.trim();
+    const expectedSchema = this.config.get<string>('ORACLE_READ_SCHEMA')?.trim().toUpperCase() || 'IAS20261';
+    if (!baseUrl) return { configured: false, ready: false, status: 'missing', expectedSchema, message: 'بوابة القراءة غير مهيأة' };
+    try {
+      const response = await fetch(`${baseUrl}/health`, {
+        method: 'GET',
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        signal: AbortSignal.timeout(4_000),
+      });
+      const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+      const capabilities = Array.isArray(body?.capabilities) ? body.capabilities.map(String) : [];
+      const missingCapabilities = ['request-catalog', 'accounting-currencies']
+        .filter((capability) => !capabilities.includes(capability));
+      const ready = response.ok && body?.status === 'ok' && body?.mode === 'SELECT_ONLY'
+        && missingCapabilities.length === 0;
+      return {
+        configured: true, ready, status: ready ? 'ok' : 'incompatible', expectedSchema,
+        reportedSchema: typeof body?.schema === 'string' ? body.schema : null,
+        capabilities, missingCapabilities,
+        message: ready ? 'بوابة الأطراف والحسابات جاهزة' : 'بوابة القراءة تعمل بإصدار لا يوفر الأطراف والحسابات',
+      };
+    } catch (error) {
+      return {
+        configured: true, ready: false, status: 'offline', expectedSchema,
+        message: error instanceof Error ? error.message : 'تعذر الاتصال ببوابة القراءة',
+        capabilities: [], missingCapabilities: ['request-catalog', 'accounting-currencies'],
+      };
+    }
+  }
 
   async summary(organizationId: string) {
-    const [heartbeats, customerRuns, inventoryRuns, movementRuns, operational, activeInventory, publicationConfig, publicationLedger, publicationBatches] = await Promise.all([
+    const [heartbeats, customerRuns, inventoryRuns, movementRuns, operational, activeInventory, publicationConfig, publicationLedger, publicationBatches, directReadGateway] = await Promise.all([
       this.prisma.$queryRaw<HeartbeatRow[]>(Prisma.sql`
         SELECT source_schema, mirror_kind, last_checked_at, last_success_at,
                last_status, last_changed, last_sync_run_id
@@ -39,7 +73,7 @@ export class OracleMonitoringService {
         ORDER BY mirror_kind
       `),
       this.prisma.$queryRaw<RunRow[]>(Prisma.sql`
-        SELECT id, source_schema, status, started_at, extracted_at, validated_at,
+        SELECT id, source_schema, status, started_at, extracted_at, validated_at, published_at,
                loaded_counts, validation_summary, platform_comparison, manifest_hash
         FROM oracle_customer_sync_runs
         WHERE organization_id = ${organizationId}::uuid
@@ -47,7 +81,7 @@ export class OracleMonitoringService {
         LIMIT 8
       `),
       this.prisma.$queryRaw<RunRow[]>(Prisma.sql`
-        SELECT id, source_schema, status, started_at, extracted_at, validated_at,
+        SELECT id, source_schema, status, started_at, extracted_at, validated_at, published_at,
                loaded_counts, validation_summary, manifest_hash
         FROM oracle_inventory_sync_runs
         WHERE organization_id = ${organizationId}::uuid
@@ -55,7 +89,7 @@ export class OracleMonitoringService {
         LIMIT 8
       `),
       this.prisma.$queryRaw<RunRow[]>(Prisma.sql`
-        SELECT id, source_schema, status, started_at, extracted_at, NULL::timestamptz AS validated_at,
+        SELECT id, source_schema, status, started_at, extracted_at, validated_at, published_at,
                loaded_counts, validation_summary, manifest_hash
         FROM oracle_movement_sync_runs
         WHERE organization_id = ${organizationId}::uuid
@@ -97,6 +131,7 @@ export class OracleMonitoringService {
         ORDER BY started_at DESC
         LIMIT 8
       `),
+      this.directReadGateway(),
     ]);
 
     const now = Date.now();
@@ -117,11 +152,11 @@ export class OracleMonitoringService {
     });
     const expectedKinds = ['customers', 'inventory', 'movements'];
     const healthyKinds = heartbeatViews.filter((row) => row.healthy).length;
-    const overallStatus = healthyKinds === expectedKinds.length
+    const overallStatus = healthyKinds === expectedKinds.length && directReadGateway.ready
       ? 'healthy'
-      : heartbeats.length === 0
+      : heartbeats.length === 0 && !directReadGateway.ready
         ? 'initializing'
-        : healthyKinds > 0
+        : healthyKinds > 0 || directReadGateway.ready
           ? 'degraded'
           : 'offline';
 
@@ -132,6 +167,7 @@ export class OracleMonitoringService {
       startedAt: row.started_at,
       extractedAt: row.extracted_at,
       validatedAt: row.validated_at,
+      publishedAt: row.published_at,
       loadedCounts: row.loaded_counts,
       validationSummary: row.validation_summary,
       platformComparison: row.platform_comparison ?? null,
@@ -146,6 +182,7 @@ export class OracleMonitoringService {
       overallStatus,
       checkedAt: new Date(),
       heartbeats: heartbeatViews,
+      directReadGateway,
       latest: {
         customers: customerRuns[0] ? mapRun(customerRuns[0]) : null,
         inventory: inventoryRuns[0] ? mapRun(inventoryRuns[0]) : null,

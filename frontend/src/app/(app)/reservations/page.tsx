@@ -22,6 +22,8 @@ interface Reservation {
   itemType: string | null;
   quantity: string | number | null;
   remainingQty: string | number | null;
+  totalTons: string | number | null;
+  remainingTons: string | number | null;
   unitPrice: string | number | null;
   currencyCode: string;
   status: string;
@@ -45,15 +47,15 @@ interface ReservationSummary {
   unweightedUnits: { unitName: string; qty: number }[];
   expiringIn7Days: number;
 }
-interface CustomerSearchItem { id: string; name: string; externalCustomerCode: string | null }
+interface CustomerSearchItem { id: string; name: string; externalCustomerCode: string | null; accountNumber?: string | null }
+interface ApprovedReservationItem { itemCode: string; nameAr: string; rodsPerTon: number }
 
 const EMPTY_CREATE_FORM = {
-  customerId: '', customerLabel: '', itemName: '', itemType: '', quantity: '', unitId: '',
-  unitPrice: '', currencyCode: 'YER', warehouse: '', documentNumber: '', notes: '', expiresAt: '', overrideReason: '',
+  customerId: '', customerLabel: '', totalTons: '', unitPrice: '', currencyCode: 'YER', documentNumber: '', notes: '', expiresAt: '',
 };
 
 const STATUS_AR: Record<string, string> = {
-  open: 'نشط', partial: 'مسلّم جزئيًا', completed: 'مسلّم بالكامل', cancelled: 'ملغى', expired: 'منتهي',
+  open: 'نشط', partial: 'مسلّم جزئيًا', completed: 'مسلّم بالكامل', fulfilled: 'مسلّم بالكامل', cancelled: 'ملغى', expired: 'منتهي',
 };
 
 function activeReservation(row: Reservation) {
@@ -83,6 +85,12 @@ export default function ReservationsPage() {
     queryKey: ['reservations', 'all'],
     queryFn: () => api<Reservation[]>('/reservations'),
     enabled: allowed && hasToken(),
+  });
+  const approvedItems = useQuery({
+    queryKey: ['reservations-approved-items'],
+    queryFn: () => api<ApprovedReservationItem[]>('/reservations/approved-items'),
+    enabled: allowed && hasToken(),
+    staleTime: 10 * 60_000,
   });
 
   const filteredRows = useMemo(() => {
@@ -179,6 +187,21 @@ export default function ReservationsPage() {
         )}
       </DataState>
 
+      <Card className="overflow-hidden">
+        <details>
+          <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-pine-700 dark:text-pine-100">الأصناف المعتمدة ومعيار عدد الأسياخ في الطن</summary>
+          <div className="grid gap-2 border-t border-line p-4 sm:grid-cols-2 lg:grid-cols-5">
+            {(approvedItems.data ?? []).map((item) => (
+              <div key={item.itemCode} className="rounded-lg border border-line bg-surface-2 p-3">
+                <p className="font-semibold">{item.nameAr}</p>
+                <p className="tnum mt-1 text-xs text-ink-mid">{item.itemCode}</p>
+                <p className="tnum mt-2 text-sm font-bold text-brand">{item.rodsPerTon} سيخ / طن</p>
+              </div>
+            ))}
+          </div>
+        </details>
+      </Card>
+
       <Card className="p-3">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-64 flex-1">
@@ -186,7 +209,7 @@ export default function ReservationsPage() {
             <Input value={search} onChange={(event) => setSearch(event.target.value)} className="pr-9" placeholder="بحث بالعميل أو الكود أو الصنف أو المستند" />
           </div>
           <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="w-40">
-            <option value="all">كل الحالات</option><option value="open">نشط</option><option value="partial">مسلم جزئيًا</option><option value="completed">مكتمل</option><option value="cancelled">ملغي</option>
+            <option value="all">كل الحالات</option><option value="open">نشط</option><option value="partial">مسلم جزئيًا</option><option value="fulfilled">مكتمل</option><option value="cancelled">ملغي</option>
           </Select>
           <Select value={currencyFilter} onChange={(event) => setCurrencyFilter(event.target.value)} className="w-32">
             <option value="all">كل العملات</option>{currencies.map((code) => <option key={code} value={code}>{code}</option>)}
@@ -220,6 +243,7 @@ export default function ReservationsPage() {
                 const customer = rows[0].customer;
                 const active = rows.filter(activeReservation);
                 const tons = active.reduce((sum, row) => {
+                  if (row.remainingTons != null) return sum + Number(row.remainingTons);
                   const weight = row.measureUnit?.weightKg;
                   return weight == null ? sum : sum + Number(row.remainingQty ?? row.quantity ?? 0) * Number(weight) / 1000;
                 }, 0);
@@ -242,11 +266,16 @@ export default function ReservationsPage() {
                       <tr><td colSpan={7} className="bg-concrete-50 p-3 dark:bg-iron-800/60">
                         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                           {rows.map((row) => {
-                            const tonsForRow = row.measureUnit?.weightKg == null ? null : Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.measureUnit.weightKg) / 1000;
+                            const tonsForRow = row.remainingTons == null
+                              ? row.measureUnit?.weightKg == null ? null : Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.measureUnit.weightKg) / 1000
+                              : Number(row.remainingTons);
                             return <div key={row.id} className="rounded-lg border border-concrete-100 bg-white p-3 text-xs dark:border-white/10 dark:bg-iron-800">
-                              <div className="flex items-start justify-between gap-2"><span className="font-semibold">{row.itemName ?? 'صنف غير مسمى'}</span><Badge tone={row.status === 'cancelled' ? 'debt' : row.status === 'completed' ? 'pine' : 'neutral'}>{STATUS_AR[row.status] ?? row.status}</Badge></div>
-                              <p className="mt-2 text-concrete-500">{fmtMoney(Number(row.remainingQty ?? row.quantity ?? 0))} {row.measureUnit?.nameAr ?? 'بانتظار التصنيف'}{tonsForRow !== null ? ` • ${fmtMoney(tonsForRow)} طن` : ''}</p>
-                              <p className="mt-1"><Money value={Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.unitPrice ?? 0)} currency={row.currencyCode} /></p>
+                              <div className="flex items-start justify-between gap-2"><span className="font-semibold">حجز إجمالي بالطن</span><Badge tone={row.status === 'cancelled' ? 'debt' : ['completed', 'fulfilled'].includes(row.status) ? 'pine' : 'neutral'}>{STATUS_AR[row.status] ?? row.status}</Badge></div>
+                              <p className="mt-2 text-concrete-500">{tonsForRow !== null ? `${fmtMoney(tonsForRow)} طن متبقي` : 'بانتظار التصنيف'}</p>
+                              <div className="mt-2 grid grid-cols-2 gap-2 rounded-lg bg-concrete-50 p-2 dark:bg-white/5">
+                                <div><p className="text-[10px] text-concrete-500">سعر الطن</p><p className="tnum font-bold">{fmtMoney(Number(row.unitPrice ?? 0))} {row.currencyCode}</p></div>
+                                <div><p className="text-[10px] text-concrete-500">القيمة المتبقية</p><Money value={Number(row.remainingTons ?? row.remainingQty ?? row.quantity ?? 0) * Number(row.unitPrice ?? 0)} currency={row.currencyCode} /></div>
+                              </div>
                               <p className="mt-1 text-concrete-500">{row.warehouse ?? 'مخزن غير محدد'} • {row.documentNumber ?? 'بلا مستند'}</p>
                             </div>;
                           })}
@@ -259,12 +288,17 @@ export default function ReservationsPage() {
             </tbody>
           </Table> : <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
             {filteredRows.map((row) => {
-              const tons = row.measureUnit?.weightKg == null ? null : Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.measureUnit.weightKg) / 1000;
+              const tons = row.remainingTons == null
+                ? row.measureUnit?.weightKg == null ? null : Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.measureUnit.weightKg) / 1000
+                : Number(row.remainingTons);
               return <div key={row.id} className="rounded-xl border border-concrete-100 bg-white p-4 dark:border-white/10 dark:bg-iron-800">
-                <div className="flex items-start justify-between gap-2"><Link href={`/customers/${row.customer.id}`} className="font-semibold text-pine-700 hover:underline dark:text-pine-100">{row.customer.name}</Link><Badge tone={row.status === 'cancelled' ? 'debt' : row.status === 'completed' ? 'pine' : 'neutral'}>{STATUS_AR[row.status] ?? row.status}</Badge></div>
-                <p className="mt-2 text-sm font-semibold">{row.itemName ?? 'صنف غير مسمى'}</p>
-                <p className="mt-1 text-xs text-concrete-500">{fmtMoney(Number(row.remainingQty ?? row.quantity ?? 0))} {row.measureUnit?.nameAr ?? 'وحدة غير مصنفة'}{tons == null ? '' : ` • ${fmtMoney(tons)} طن`}</p>
-                <p className="mt-2"><Money value={Number(row.remainingQty ?? row.quantity ?? 0) * Number(row.unitPrice ?? 0)} currency={row.currencyCode} /></p>
+                <div className="flex items-start justify-between gap-2"><Link href={`/customers/${row.customer.id}`} className="font-semibold text-pine-700 hover:underline dark:text-pine-100">{row.customer.name}</Link><Badge tone={row.status === 'cancelled' ? 'debt' : ['completed', 'fulfilled'].includes(row.status) ? 'pine' : 'neutral'}>{STATUS_AR[row.status] ?? row.status}</Badge></div>
+                <p className="mt-2 text-sm font-semibold">حجز إجمالي بالطن</p>
+                <p className="mt-1 text-xs text-concrete-500">{tons == null ? 'بانتظار التصنيف' : `${fmtMoney(tons)} طن متبقي`}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg bg-concrete-50 p-2 dark:bg-white/5">
+                  <div><p className="text-[10px] text-concrete-500">سعر الطن</p><p className="tnum text-sm font-bold">{fmtMoney(Number(row.unitPrice ?? 0))} {row.currencyCode}</p></div>
+                  <div><p className="text-[10px] text-concrete-500">القيمة المتبقية</p><Money value={Number(row.remainingTons ?? row.remainingQty ?? row.quantity ?? 0) * Number(row.unitPrice ?? 0)} currency={row.currencyCode} /></div>
+                </div>
                 <p className="mt-2 text-xs text-concrete-500">{row.warehouse ?? 'مخزن غير محدد'} • {row.documentNumber ?? 'بلا مستند'} • {row.expiresAt ? fmtDate(row.expiresAt) : 'بلا انتهاء'}</p>
               </div>;
             })}
@@ -279,36 +313,24 @@ export default function ReservationsPage() {
 
 function CreateReservationDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const can = useCan();
   const [form, setForm] = useState(EMPTY_CREATE_FORM);
   const [customerSearch, setCustomerSearch] = useState('');
   const customers = useQuery({
     queryKey: ['reservation-customer-search', customerSearch],
-    queryFn: () => api<{ items: CustomerSearchItem[] }>(`/customers?search=${encodeURIComponent(customerSearch)}&limit=10`),
+    queryFn: () => api<{ items: CustomerSearchItem[] }>(`/reservations/customer-options?search=${encodeURIComponent(customerSearch)}`),
     enabled: open && !form.customerId && customerSearch.trim().length >= 2,
-  });
-  const units = useQuery({
-    queryKey: ['reservation-units'],
-    queryFn: () => api<UnitInfo[]>('/reservations/units'),
-    enabled: open,
-    staleTime: 5 * 60_000,
   });
   const create = useMutation({
     mutationFn: () => api('/reservations', {
       method: 'POST',
       body: JSON.stringify({
         customerId: form.customerId,
-        itemName: form.itemName.trim(),
-        itemType: form.itemType.trim() || undefined,
-        quantity: Number(form.quantity),
-        unitId: form.unitId,
+        totalTons: Number(form.totalTons),
         unitPrice: Number(form.unitPrice),
         currencyCode: form.currencyCode,
-        warehouse: form.warehouse.trim() || undefined,
         documentNumber: form.documentNumber.trim() || undefined,
         notes: form.notes.trim() || undefined,
         expiresAt: form.expiresAt || undefined,
-        overrideReason: form.overrideReason.trim() || undefined,
       }),
     }),
     onSuccess: async () => {
@@ -321,8 +343,7 @@ function CreateReservationDialog({ open, onClose }: { open: boolean; onClose: ()
       onClose();
     },
   });
-  const valid = !!form.customerId && !!form.itemName.trim() && Number(form.quantity) > 0
-    && !!form.unitId && Number(form.unitPrice) > 0 && !!form.currencyCode;
+  const valid = !!form.customerId && Number(form.totalTons) > 0 && Number(form.unitPrice) > 0 && ['YER', 'SAR'].includes(form.currencyCode);
   const close = () => {
     if (create.isPending) return;
     setForm(EMPTY_CREATE_FORM);
@@ -350,24 +371,16 @@ function CreateReservationDialog({ open, onClose }: { open: boolean; onClose: ()
             </>
           )}
         </Field>
-        <Field label="الصنف *"><Input value={form.itemName} onChange={(event) => setForm((value) => ({ ...value, itemName: event.target.value }))} placeholder="مثال: حديد تسليح 12 ملم" /></Field>
-        <Field label="نوع الصنف" hint="اختياري"><Input value={form.itemType} onChange={(event) => setForm((value) => ({ ...value, itemType: event.target.value }))} /></Field>
+        <Field label="إجمالي الحجز بالطن *" hint="لا يلزم تحديد الصنف الآن؛ يحدد الصنف عند الفوترة"><Input type="number" min="0.001" step="0.001" value={form.totalTons} onChange={(event) => setForm((value) => ({ ...value, totalTons: event.target.value }))} placeholder="مثال: 6" /></Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="الكمية *"><Input type="number" min="0" step="any" value={form.quantity} onChange={(event) => setForm((value) => ({ ...value, quantity: event.target.value }))} /></Field>
-          <Field label="الوحدة *"><Select value={form.unitId} onChange={(event) => setForm((value) => ({ ...value, unitId: event.target.value }))}><option value="">اختر الوحدة</option>{(units.data ?? []).map((unit) => <option key={unit.id} value={unit.id}>{unit.nameAr}{unit.weightKg == null ? '' : ` — ${unit.weightKg} كجم`}</option>)}</Select></Field>
+          <Field label="سعر الطن *"><Input type="number" min="0.01" step="0.01" value={form.unitPrice} onChange={(event) => setForm((value) => ({ ...value, unitPrice: event.target.value }))} placeholder="مثال: 385000" /></Field>
+          <Field label="العملة *"><Select value={form.currencyCode} onChange={(event) => setForm((value) => ({ ...value, currencyCode: event.target.value }))}><option value="YER">ريال يمني (YER)</option><option value="SAR">ريال سعودي (SAR)</option></Select></Field>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="سعر الوحدة *"><Input type="number" min="0" step="any" value={form.unitPrice} onChange={(event) => setForm((value) => ({ ...value, unitPrice: event.target.value }))} /></Field>
-          <Field label="العملة *"><Select value={form.currencyCode} onChange={(event) => setForm((value) => ({ ...value, currencyCode: event.target.value }))}><option value="YER">YER</option><option value="SAR">SAR</option><option value="USD">USD</option></Select></Field>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="المخزن" hint="اختياري"><Input value={form.warehouse} onChange={(event) => setForm((value) => ({ ...value, warehouse: event.target.value }))} /></Field>
-          <Field label="رقم المستند" hint="اختياري"><Input value={form.documentNumber} onChange={(event) => setForm((value) => ({ ...value, documentNumber: event.target.value }))} /></Field>
-        </div>
+        {Number(form.totalTons) > 0 && Number(form.unitPrice) > 0 && <div className="rounded-lg border border-brand/20 bg-brand/5 p-3"><p className="text-xs text-concrete-500">إجمالي قيمة الحجز</p><p className="tnum mt-1 text-lg font-extrabold text-pine-700 dark:text-pine-100">{fmtMoney(Number(form.totalTons) * Number(form.unitPrice))} {form.currencyCode}</p></div>}
+        <Field label="رقم المرجع" hint="اختياري"><Input value={form.documentNumber} onChange={(event) => setForm((value) => ({ ...value, documentNumber: event.target.value }))} /></Field>
         <Field label="تاريخ الانتهاء" hint="اختياري"><Input type="date" value={form.expiresAt} onChange={(event) => setForm((value) => ({ ...value, expiresAt: event.target.value }))} /></Field>
         <Field label="ملاحظات" hint="اختياري"><Textarea rows={2} value={form.notes} onChange={(event) => setForm((value) => ({ ...value, notes: event.target.value }))} /></Field>
-        {can('credit.override') && <Field label="سبب تجاوز سقف الائتمان" hint="يُستخدم فقط عند الحاجة"><Textarea rows={2} value={form.overrideReason} onChange={(event) => setForm((value) => ({ ...value, overrideReason: event.target.value }))} /></Field>}
-        {create.isError && <p role="alert" className="text-sm text-debt-600">تعذر إنشاء الحجز. تحقق من البيانات وسقف الائتمان ثم أعد المحاولة.</p>}
+        {create.isError && <p role="alert" className="text-sm text-debt-600">تعذر إنشاء الحجز. تحقق من العميل والكمية ثم أعد المحاولة.</p>}
         <div className="flex justify-end gap-2"><Button variant="secondary" onClick={close}>إلغاء</Button><Button disabled={!valid} loading={create.isPending} onClick={() => create.mutate()}>إنشاء الحجز</Button></div>
       </div>
     </Dialog>

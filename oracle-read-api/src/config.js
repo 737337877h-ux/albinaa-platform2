@@ -30,6 +30,11 @@ function loadConfig(env = process.env) {
     .split(',').map(schemaName));
   if (!allowedSchemas.has(defaultSchema)) throw new Error('ORACLE_SCHEMA must be included in ORACLE_ALLOWED_SCHEMAS');
 
+  const apiKey = required(env, 'ORACLE_READ_API_KEY');
+  const apiKeys = new Set([
+    apiKey,
+    ...(env.ORACLE_READ_API_KEYS || '').split(',').map((value) => value.trim()).filter(Boolean),
+  ]);
   return {
     host: env.HOST?.trim() || '127.0.0.1',
     port: positiveInteger(env, 'PORT', 3011),
@@ -48,7 +53,8 @@ function loadConfig(env = process.env) {
       queueTimeout: positiveInteger(env, 'ORACLE_QUEUE_TIMEOUT_MS', 5000),
       queryTimeout: positiveInteger(env, 'ORACLE_QUERY_TIMEOUT_MS', 10000),
     },
-    apiKey: required(env, 'ORACLE_READ_API_KEY'),
+    apiKey,
+    apiKeys,
   };
 }
 

@@ -9,6 +9,16 @@ import { CampaignDto } from './dto/campaign.dto';
 const BUCKET_DAYS: Record<CampaignDto['agingBucket'], number> = {
   bucket_31_60: 30, bucket_61_90: 60, bucket_91_120: 90, bucket_120_plus: 120,
 };
+const DEBT_DISPLAY_LIMITS: Record<string, number> = { YER: 3000, SAR: 30, USD: 5 };
+const CURRENCY_NAMES: Record<string, string> = {
+  YER: 'ريال يمني', SAR: 'ريال سعودي', USD: 'دولار أمريكي',
+};
+
+function formatBalances(items: { currency: string; balance: number }[]) {
+  return items
+    .map((item) => `${item.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${CURRENCY_NAMES[item.currency] ?? item.currency}`)
+    .join(' + ');
+}
 
 function cleanPhone(value: string | null | undefined) {
   if (!value) return null;
@@ -34,9 +44,10 @@ export class MessagingService {
 
   private async recipients(actor: AuthUser, dto: CampaignDto) {
     const report = await this.aging.report(actor, {
-      accountClass: 'customer', currency: dto.currency, bucket: dto.agingBucket,
+      accountClass: 'customer', currency: dto.currency || undefined, bucket: dto.agingBucket,
     });
-    const ids = report.customers.map((row) => String(row.customerId));
+    const rows = report.customers.filter((row) => Number(row.totalDue) > (DEBT_DISPLAY_LIMITS[row.currency] ?? 0.00005));
+    const ids = [...new Set(rows.map((row) => String(row.customerId)))];
     const customers = ids.length ? await this.prisma.customer.findMany({
       where: { id: { in: ids }, organizationId: actor.organizationId, status: 'active' },
       select: {
@@ -45,26 +56,42 @@ export class MessagingService {
       },
     }) : [];
     const byId = new Map(customers.map((customer) => [customer.id, customer]));
-    return report.customers.map((row) => {
-      const customer = byId.get(String(row.customerId));
+    const grouped = new Map<string, { customerId: string; customerName: string; customerCode: string | null; balances: { currency: string; balance: number }[] }>();
+    for (const row of rows) {
+      const customerId = String(row.customerId);
+      const current = grouped.get(customerId) ?? {
+        customerId,
+        customerName: String(row.customerName),
+        customerCode: row.customerCode == null ? null : String(row.customerCode),
+        balances: [],
+      };
+      const existing = current.balances.find((item) => item.currency === row.currency);
+      if (existing) existing.balance += Number(row.totalDue);
+      else current.balances.push({ currency: row.currency, balance: Number(row.totalDue) });
+      grouped.set(customerId, current);
+    }
+    return [...grouped.values()].map((group) => {
+      const customer = byId.get(group.customerId);
       const destination = cleanPhone(dto.channel === 'whatsapp'
         ? customer?.whatsapp ?? customer?.phonePrimary ?? customer?.phoneSecondary
         : customer?.phonePrimary ?? customer?.phoneSecondary ?? customer?.whatsapp);
+      const balanceText = formatBalances(group.balances);
       const message = render(dto.messageBody, {
-        customerName: customer?.name ?? String(row.customerName),
-        customerCode: customer?.externalCustomerCode ?? String(row.customerCode ?? '—'),
-        balance: Number(row.totalDue).toLocaleString('en-US', { maximumFractionDigits: 2 }),
-        currency: row.currency,
+        customerName: customer?.name ?? group.customerName,
+        customerCode: customer?.externalCustomerCode ?? group.customerCode ?? '—',
+        balance: balanceText,
+        currency: '',
         debtAgeDays: String(BUCKET_DAYS[dto.agingBucket]),
         companyName: 'البناء الراقي',
         collectorName: customer?.assignments[0]?.collector.user.fullName ?? 'فريق التحصيل',
       });
       return {
-        customerId: String(row.customerId), customerName: customer?.name ?? String(row.customerName),
-        customerCode: customer?.externalCustomerCode ?? row.customerCode, currency: row.currency,
-        balance: Number(row.totalDue), destination, message,
+        customerId: group.customerId, customerName: customer?.name ?? group.customerName,
+        customerCode: customer?.externalCustomerCode ?? group.customerCode,
+        currency: group.balances.length === 1 ? group.balances[0].currency : 'MULTI',
+        balance: group.balances[0]?.balance ?? 0, balances: group.balances, destination, message,
       };
-    }).sort((a, b) => b.balance - a.balance);
+    }).sort((a, b) => b.balances.length - a.balances.length || b.balance - a.balance);
   }
 
   async preview(actor: AuthUser, dto: CampaignDto) {
@@ -74,7 +101,8 @@ export class MessagingService {
       readyCount: recipients.filter((item) => item.destination).length,
       skippedCount: recipients.filter((item) => !item.destination).length,
       totalByCurrency: recipients.reduce<Record<string, number>>((totals, item) => {
-        totals[item.currency] = (totals[item.currency] ?? 0) + item.balance; return totals;
+        for (const balance of item.balances) totals[balance.currency] = (totals[balance.currency] ?? 0) + balance.balance;
+        return totals;
       }, {}),
       sample: recipients.slice(0, 10),
     };

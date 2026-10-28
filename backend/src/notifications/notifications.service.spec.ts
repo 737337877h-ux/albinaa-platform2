@@ -1,6 +1,15 @@
 import { NotificationsService } from './notifications.service';
 
 describe('NotificationsService finance alerts', () => {
+  it('scopes listing, counters and mark-all to the selected mobile application',async()=>{
+    const db={notification:{count:jest.fn().mockResolvedValue(1),findMany:jest.fn().mockResolvedValue([]),updateMany:jest.fn().mockResolvedValue({count:1})}};
+    const service=new NotificationsService(db as any);const user:any={id:'u'};
+    await service.listMine(user,false,1,25,'collector');
+    const where=db.notification.findMany.mock.calls[0][0].where;
+    expect(where.NOT).toBeDefined();expect(db.notification.count.mock.calls[0][0].where).toEqual(where);
+    await service.markAllRead(user,'collector');expect(db.notification.updateMany).toHaveBeenCalledWith({where:{...where,readAt:null},data:{readAt:expect.any(Date)}});
+    await service.listMine(user,false,1,25);expect(db.notification.findMany.mock.calls[1][0].where).toEqual({userId:'u'});
+  });
   it('sends critical finance alerts only to active users with the dedicated permission', async () => {
     const prisma = {
       user: {
@@ -10,6 +19,7 @@ describe('NotificationsService finance alerts', () => {
         create: jest.fn().mockResolvedValue({}),
       },
     };
+    Object.assign(prisma, {hrPushDelivery:{create:jest.fn().mockResolvedValue({})},$transaction:async(fn:any)=>fn(prisma)});
     const service = new NotificationsService(prisma as any);
 
     await service.notifyFinance('org-1', 'import_reversed', {
@@ -37,6 +47,7 @@ describe('NotificationsService finance alerts', () => {
       notification: { create: jest.fn().mockResolvedValue({}) },
       devicePushToken: { findMany: jest.fn() },
     };
+    Object.assign(prisma, {hrPushDelivery:{create:jest.fn().mockResolvedValue({})},$transaction:async(fn:any)=>fn(prisma)});
     const service = new NotificationsService(prisma as any);
 
     await service.notifyUser('user-1', 'promise_due', { customerName: 'عميل' });
@@ -45,35 +56,12 @@ describe('NotificationsService finance alerts', () => {
     expect(prisma.devicePushToken.findMany).not.toHaveBeenCalled();
   });
 
-  it('sends Expo push and removes a token rejected as DeviceNotRegistered', async () => {
-    const previous = process.env.PUSH_ENABLED;
-    process.env.PUSH_ENABLED = 'true';
-    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [{ status: 'error', details: { error: 'DeviceNotRegistered' } }] }),
-    } as Response);
-    const prisma = {
-      notification: { create: jest.fn().mockResolvedValue({}) },
-      devicePushToken: {
-        findMany: jest.fn().mockResolvedValue([{ token: 'ExpoPushToken[valid-token]' }]),
-        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
-    };
-    const service = new NotificationsService(prisma as any);
-
-    try {
-      await service.notifyUser('user-1', 'promise_due', { customerName: 'عميل' });
-      expect(fetchMock).toHaveBeenCalledWith(
-        'https://exp.host/--/api/v2/push/send',
-        expect.objectContaining({ method: 'POST' }),
-      );
-      expect(prisma.devicePushToken.deleteMany).toHaveBeenCalledWith({
-        where: { token: { in: ['ExpoPushToken[valid-token]'] } },
-      });
-    } finally {
-      fetchMock.mockRestore();
-      if (previous === undefined) delete process.env.PUSH_ENABLED;
-      else process.env.PUSH_ENABLED = previous;
-    }
+  it('atomically queues notification and remote delivery without making a network request in the business transaction', async () => {
+    const tx={notification:{create:jest.fn().mockResolvedValue({id:'n'})},hrPushDelivery:{create:jest.fn().mockResolvedValue({})}};
+    const prisma={$transaction:jest.fn(async(fn:any)=>fn(tx))};const network=jest.spyOn(global,'fetch');
+    try{await new NotificationsService(prisma as any).notifyUser('u','promise_due',{customerName:'عميل'});
+      expect(tx.hrPushDelivery.create).toHaveBeenCalledWith({data:expect.objectContaining({id:'n',userId:'u',kind:'promise_due',payload:expect.objectContaining({title:'وعد سداد مستحق'})})});
+      expect(network).not.toHaveBeenCalled();
+    }finally{network.mockRestore();}
   });
 });

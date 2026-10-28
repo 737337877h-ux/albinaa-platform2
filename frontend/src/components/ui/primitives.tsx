@@ -84,7 +84,7 @@ export function Card({ className, children }: { className?: string; children: Re
   return (
     <div
       className={cn(
-        'ui-card rounded-brand border border-line bg-surface-1 shadow-[var(--shadow-card)] dark:bg-[linear-gradient(135deg,var(--surface-2),var(--surface-1))]',
+          'ui-card min-w-0 rounded-brand border border-line bg-surface-1 shadow-[var(--shadow-card)] dark:bg-[linear-gradient(135deg,var(--surface-2),var(--surface-1))]',
         className,
       )}
     >

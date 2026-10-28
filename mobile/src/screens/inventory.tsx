@@ -3,9 +3,13 @@ import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TextInpu
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInventoryItems, fetchInventorySummary } from '../api/endpoints';
+import { useAuth } from '../store/auth-context';
+import { canUseMobileFeature } from '../utils/mobile-permissions';
 import { colors, radius, shadow } from '../theme';
 
 export default function InventoryScreen({ navigation }: any) {
+  const { user } = useAuth();
+  const canCreateCount = canUseMobileFeature(user?.permissions ?? [], 'mobile.inventory_count.create');
   const [search, setSearch] = React.useState('');
   const [submitted, setSubmitted] = React.useState('');
   const summary = useQuery({ queryKey: ['mobile-inventory-summary'], queryFn: async () => (await fetchInventorySummary()).data });
@@ -15,6 +19,10 @@ export default function InventoryScreen({ navigation }: any) {
 
   return (
     <View style={styles.screen}>
+      {canCreateCount ? <TouchableOpacity style={styles.createButton} onPress={() => navigation.navigate('NewInventoryCount')}>
+        <Ionicons name="clipboard-outline" size={20} color="#fff" />
+        <Text style={styles.createButtonText}>إنشاء جرد من الهاتف</Text>
+      </TouchableOpacity> : null}
       <View style={styles.searchRow}>
         <TouchableOpacity style={styles.searchButton} onPress={() => setSubmitted(search.trim())}><Ionicons name="search" size={20} color="#fff" /></TouchableOpacity>
         <TextInput value={search} onChangeText={setSearch} onSubmitEditing={() => setSubmitted(search.trim())}
@@ -48,6 +56,8 @@ function Summary({ label, value, compact }: { label: string; value: number | str
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
+  createButton: { flexDirection: 'row-reverse', gap: 8, alignSelf: 'flex-end', alignItems: 'center', minHeight: 46, marginHorizontal: 14, marginTop: 14, paddingHorizontal: 15, borderRadius: radius.md, backgroundColor: colors.primary },
+  createButtonText: { color: '#fff', fontWeight: '900' },
   searchRow: { flexDirection: 'row', gap: 8, padding: 14 },
   input: { flex: 1, minHeight: 48, backgroundColor: '#fff', borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, paddingHorizontal: 14, color: colors.ink },
   searchButton: { width: 48, height: 48, borderRadius: radius.md, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },

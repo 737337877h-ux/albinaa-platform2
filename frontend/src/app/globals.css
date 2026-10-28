@@ -31,6 +31,13 @@
   --shadow-card: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
   --radius: 14px;
 }
+
+@media print {
+  body:has(.barcode-print-page) * { visibility: hidden !important; }
+  body:has(.barcode-print-page) .print-label,
+  body:has(.barcode-print-page) .print-label * { visibility: visible !important; }
+  body:has(.barcode-print-page) .print-label { position: fixed; inset: 0 auto auto 0; border: 0 !important; }
+}
 .light {
   color-scheme: light;
   --surface-0: #F0F3F1; --surface-1: #FFFFFF; --surface-2: #E8EFEC; --surface-3: #D8E4DF;
@@ -92,3 +99,9 @@ body {
   .report-print th, .report-print td { border-color: #cbd5e1 !important; color: #0f1a1c !important; }
   * { box-shadow: none !important; text-shadow: none !important; }
 }
+html[data-mobile-embed] .app-shell { display: block; }
+html[data-mobile-embed] .app-shell > aside,
+html[data-mobile-embed] .app-shell > div > header,
+html[data-mobile-embed] .app-shell nav[aria-label="التنقل السريع"],
+html[data-mobile-embed] .desktop-print-options { display: none; }
+html[data-mobile-embed] .app-shell > div > main { padding-bottom: 1rem; }

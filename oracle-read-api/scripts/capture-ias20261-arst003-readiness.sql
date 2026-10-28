@@ -1,0 +1,49 @@
+-- DBA-run diagnostics only. Does not grant privileges or create a document.
+-- Do not grant dictionary access to the application to run this file.
+SET LINESIZE 240
+SET PAGESIZE 200
+SET LONG 30000
+SET LONGCHUNKSIZE 30000
+SET VERIFY OFF
+
+PROMPT Existing restricted integration privileges on customer-order objects:
+SELECT GRANTEE, TABLE_NAME, PRIVILEGE
+FROM DBA_TAB_PRIVS
+WHERE OWNER = 'IAS20261'
+  AND GRANTEE LIKE 'ALBINAA%'
+  AND TABLE_NAME IN ('SALES_ORDER', 'ORDER_DETAIL', 'S_APPRVD_MOV',
+                     'IAS_RESERVE_MST', 'IAS_RESERVE_DTL', 'IAS_DOC_SEQ_OTHR')
+ORDER BY GRANTEE, TABLE_NAME, PRIVILEGE;
+
+PROMPT Serial defaults and enabled triggers; metadata only:
+SELECT TABLE_NAME, COLUMN_NAME, DATA_DEFAULT
+FROM DBA_TAB_COLUMNS
+WHERE OWNER = 'IAS20261'
+  AND ((TABLE_NAME = 'SALES_ORDER' AND COLUMN_NAME IN ('ORDER_NO', 'ORDER_SER'))
+    OR (TABLE_NAME = 'IAS_RESERVE_MST' AND COLUMN_NAME = 'DOC_SER'));
+
+SELECT TABLE_NAME, TRIGGER_NAME, TRIGGERING_EVENT, STATUS
+FROM DBA_TRIGGERS
+WHERE TABLE_OWNER = 'IAS20261'
+  AND TABLE_NAME IN ('SALES_ORDER', 'ORDER_DETAIL', 'IAS_RESERVE_MST', 'IAS_RESERVE_DTL');
+
+PROMPT Recent ARS numbering SELECT statements already executed by YemenSoft:
+SELECT * FROM (
+  SELECT SQL_ID, CHILD_NUMBER, MODULE, ACTION,
+         TO_CHAR(LAST_ACTIVE_TIME, 'YYYY-MM-DD HH24:MI:SS') LAST_ACTIVE,
+         SQL_FULLTEXT
+  FROM V$SQL
+  WHERE PARSING_SCHEMA_NAME = 'IAS20261'
+    AND COMMAND_TYPE = 3
+    AND LAST_ACTIVE_TIME >= SYSDATE - 1
+    AND UPPER(NVL(MODULE, 'ARS')) LIKE 'ARS%'
+    AND (UPPER(SQL_TEXT) LIKE '%ORDER_SER%'
+      OR UPPER(SQL_TEXT) LIKE '%ORDER_NO%'
+      OR UPPER(SQL_TEXT) LIKE '%IAS_RESERVE_MST%'
+      OR UPPER(SQL_TEXT) LIKE '%S_SEQ_%')
+  ORDER BY LAST_ACTIVE_TIME DESC
+) WHERE ROWNUM <= 30;
+
+PROMPT End. Observed serial patterns are NOT proof of the allocation algorithm.
+PROMPT If no allocator is shown, obtain ARST003 FMB source or the vendor API contract.
+PROMPT Do not create a production sample or widen application privileges for this check.

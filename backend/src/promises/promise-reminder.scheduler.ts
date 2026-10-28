@@ -1,7 +1,10 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {createQueuedNotification} from '../notifications/push-outbox';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { REFRESHED_DAILY_TASK_TYPES } from '../tasks/tasks.service';
+import { PromiseSettlementService } from './promise-settlement.service';
 
-const OPEN_PROMISE_STATUSES = ['upcoming', 'due_today', 'partially_fulfilled'];
+const OPEN_PROMISE_STATUSES = ['upcoming', 'due_today', 'partially_fulfilled', 'unfulfilled'];
 const ADEN_TIME_ZONE = 'Asia/Aden';
 
 export function adenDateKey(now: Date): string {
@@ -30,7 +33,8 @@ export class PromiseReminderScheduler implements OnModuleInit, OnModuleDestroy {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService,
+    @Optional() private readonly settlement?: PromiseSettlementService) {}
 
   onModuleInit() {
     if (process.env.PROMISE_REMINDERS_ENABLED === 'false') return;
@@ -56,10 +60,12 @@ export class PromiseReminderScheduler implements OnModuleInit, OnModuleDestroy {
       const now = new Date();
       const organizations = await this.prisma.organization.findMany({ select: { id: true } });
       for (const organization of organizations) {
+        await this.settlement?.reconcileForOrganization(organization.id, { dryRun: false, automatic: true, now });
         const enabled = await this.setting(organization.id, 'notifications.reminderEnabled', true);
         const hour = Number(await this.setting(organization.id, 'notifications.reminderHour', 8));
-        if (enabled && adenHour(now) === Math.min(23, Math.max(0, hour))) {
+        if (enabled && adenHour(now) >= Math.min(23, Math.max(0, hour))) {
           await this.runForOrganization(organization.id, now);
+          await this.remindUnresolvedTasks(organization.id, now);
         }
       }
     } catch (error) {
@@ -107,9 +113,8 @@ export class PromiseReminderScheduler implements OnModuleInit, OnModuleDestroy {
 
       const dueDate = promise.dueDate.toISOString().slice(0, 10);
       const kind = dueDate < reminderDate ? 'promise_overdue' : 'promise_due';
-      await this.prisma.$transaction([
-        this.prisma.notification.create({
-          data: {
+      await this.prisma.$transaction(async tx => {
+        await createQueuedNotification(tx, {
             userId: promise.collector.userId,
             kind,
             payload: {
@@ -125,15 +130,55 @@ export class PromiseReminderScheduler implements OnModuleInit, OnModuleDestroy {
               automatic: true,
               href: `/customers/${promise.customer.id}?tab=promises`,
             },
-          },
-        }),
-        ...(promise.status === 'upcoming'
-          ? [this.prisma.paymentPromise.update({ where: { id: promise.id }, data: { status: 'due_today' } })]
-          : []),
-      ]);
+        });
+        if(promise.status === 'upcoming' && dueDate === reminderDate) await tx.paymentPromise.update({where:{id:promise.id},data:{status:'due_today'}});
+      });
       created += 1;
     }
 
     return { enabled: true, reminderDate, candidates: promises.length, created, skipped };
+  }
+
+  /** Re-escalate unresolved appointments daily while retaining their original due date. */
+  async remindUnresolvedTasks(organizationId: string, now = new Date()) {
+    if (!await this.setting(organizationId, 'notifications.reminderEnabled', true)) return { created: 0 };
+    const reminderDate = adenDateKey(now);
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        status: 'open', dueDate: { lt: dateOnlyUtc(reminderDate) },
+        sourcePromiseId: null,
+        taskType: { notIn: [...REFRESHED_DAILY_TASK_TYPES] },
+        customer: { organizationId, status: 'active' },
+        assignedTo: { not: null },
+      },
+      select: { id: true, customerId: true, assignedTo: true, dueDate: true,
+        customer: { select: { name: true } } },
+    });
+    const collectors = await this.prisma.collector.findMany({
+      where: { id: { in: [...new Set(tasks.map((task) => task.assignedTo!))] }, active: true },
+      select: { id: true, userId: true },
+    });
+    const recipients = new Map(collectors.map((collector) => [collector.id, collector.userId]));
+    let created = 0;
+    for (const task of tasks) {
+      const userId = recipients.get(task.assignedTo!);
+      if (!userId) continue;
+      const taskReminderKey = `${task.id}|${reminderDate}`;
+      const existing = await this.prisma.notification.findFirst({
+        where: { userId, kind: 'task_overdue', payload: { path: ['taskReminderKey'], equals: taskReminderKey } },
+        select: { id: true },
+      });
+      if (existing) continue;
+      await this.prisma.$transaction(tx=>createQueuedNotification(tx, {
+        userId, kind: 'task_overdue', payload: {
+          taskReminderKey, reminderDate, taskId: task.id, customerId: task.customerId,
+          customerName: task.customer?.name ?? '', dueDate: task.dueDate.toISOString(),
+          message: 'إعادة تصعيد: مهمة متأخرة لم تُسجل لها نتيجة',
+          href: '/tasks?tab=overdue', automatic: true,
+        },
+      }));
+      created += 1;
+    }
+    return { candidates: tasks.length, created };
   }
 }

@@ -27,6 +27,13 @@ export class ReservationsController {
     return this.reservations.listUnits();
   }
 
+  @Get('approved-items')
+  @RequirePermissions('reservations.read')
+  @ApiOperation({ summary: 'الأصناف المعتمدة للحجز ومعيار عدد الأسياخ في الطن' })
+  approvedItems() {
+    return this.reservations.approvedItems();
+  }
+
   @Get('units/all')
   @RequirePermissions('reservations.manage')
   @ApiOperation({ summary: 'List all reservation units for administration' })
@@ -58,6 +65,14 @@ export class ReservationsController {
   @ApiOperation({ summary: 'Aggregated active-reservations dashboard summary, separated by currency' })
   summary(@CurrentUser() user: AuthUser) {
     return this.reservations.summary(user);
+  }
+
+  @Get('customer-options')
+  @RequirePermissions('reservations.read')
+  @ApiQuery({ name: 'search', required: true, description: 'اسم العميل أو رقم حسابه' })
+  @ApiOperation({ summary: 'Search active customer accounts eligible for a goods reservation' })
+  customerOptions(@CurrentUser() user: AuthUser, @Query('search') search = '') {
+    return this.reservations.searchCustomerOptions(user, search);
   }
 
   @Get()

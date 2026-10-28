@@ -3,14 +3,16 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
-import { ArrowDownUp, CheckCircle2, Download, Eye, Pencil, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX, Link2, Unlink } from 'lucide-react';
+import { ArrowDownUp, CheckCircle2, Download, Eye, FileCheck2, Pencil, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX, Link2, Unlink } from 'lucide-react';
 import { api, apiFileBlob, ApiError, downloadApiFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
+import { archiveStatementPeriodError } from '@/lib/statement-period';
 import { contactLinks, uniqueContactNumbers } from '@/lib/contact';
 import { PageHeader } from '@/components/app-shell';
 import { MessageTemplateDialog } from '@/components/message-template-dialog';
+import { CustomerCallLink } from '@/components/customer-call-link';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Dialog } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
@@ -177,9 +179,11 @@ interface PaginatedResponse<T> {
 
 interface ReservationItem {
   id: string;
-  itemName: string;
+  itemName: string | null;
   itemType: string | null;
   quantity: string | number | null;
+  totalTons: string | number | null;
+  remainingTons: string | number | null;
   unit: string | null;
   unitPrice: string | number | null;
   totalAmount: string | number | null;
@@ -233,13 +237,6 @@ interface CreditLimit {
   used: number;
   available: number;
   usagePercent: number;
-}
-
-interface ReservationUnit {
-  id: string;
-  code: string;
-  nameAr: string;
-  weightKg: number | null;
 }
 
 interface RiskFactor {
@@ -392,7 +389,7 @@ export default function Customer360Page() {
   const canReservationsCreate = can('reservations.create');
   const canReservationsDeliver = can('reservations.deliver');
   const canReservationsCancel = can('reservations.cancel');
-  const canCreditOverride = can('credit.override');
+  const canRequestReceipt = can('oracle_test_requests.receipt.create');
   const qc = useQueryClient();
 
   const [tab, setTab] = useState(searchParams.get('tab') ?? 'overview');
@@ -413,27 +410,30 @@ export default function Customer360Page() {
 
   /* ──────── Statement queries (lazy per tab) ──────── */
   const [stmtCurrency, setStmtCurrency] = useState('YER');
+  const [stmtSource, setStmtSource] = useState('platform');
   const [stmtPage, setStmtPage] = useState(1);
   const [stmtFromDate, setStmtFromDate] = useState('');
   const [stmtToDate, setStmtToDate] = useState('');
+  const stmtPeriodError = archiveStatementPeriodError(stmtSource, stmtFromDate, stmtToDate);
   const [pdfDownloading, setPdfDownloading] = useState(false);
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [pdfTemplate, setPdfTemplate] = useState<'classic' | 'branded'>('branded');
   const statementParams = () => {
     const params = new URLSearchParams({ currency: stmtCurrency });
+    params.set('source', stmtSource);
     if (stmtFromDate) params.set('fromDate', stmtFromDate);
     if (stmtToDate) params.set('toDate', stmtToDate);
     return params;
   };
   const statement = useQuery<StatementResponse>({
-    queryKey: ['statement', id, stmtCurrency, stmtFromDate, stmtToDate, stmtPage],
+    queryKey: ['statement', id, stmtCurrency, stmtFromDate, stmtToDate, stmtPage, stmtSource],
     queryFn: () => {
       const params = statementParams();
       params.set('page', String(stmtPage)); params.set('limit', '50');
       return api<StatementResponse>(`/customers/${id}/statement?${params.toString()}`);
     },
-    enabled: canRead && canBalances && tab === 'statement',
+    enabled: canRead && canBalances && tab === 'statement' && !stmtPeriodError,
     retry: false,
   });
 
@@ -621,18 +621,16 @@ export default function Customer360Page() {
 
   const [createResOpen, setCreateResOpen] = useState(false);
   const [issueRes, setIssueRes] = useState<ReservationItem | null>(null);
-  const reservationUnits = useQuery<ReservationUnit[]>({
-    queryKey: ['reservation-units'],
-    queryFn: () => api<ReservationUnit[]>('/reservations/units'),
-    enabled: canReservationsCreate && createResOpen,
-    staleTime: 5 * 60_000,
-  });
 
   const createResMut = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
       api('/reservations', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => {
       toast('تم إنشاء الحجز بنجاح', 'ok');
+      setResForm({
+        totalTons: '', unitPrice: '', currencyCode: 'YER',
+        documentNumber: '', notes: '', expiresAt: '',
+      });
       setCreateResOpen(false);
       qc.invalidateQueries({ queryKey: ['reservations', id] });
       qc.invalidateQueries({ queryKey: ['reservations-summary'] });
@@ -663,12 +661,11 @@ export default function Customer360Page() {
   });
 
   const [resForm, setResForm] = useState({
-    itemName: '', itemType: '', quantity: '', unitId: '', unitPrice: '',
-    currencyCode: 'YER', warehouse: '', documentNumber: '', notes: '', expiresAt: '',
-    overrideReason: '',
+    totalTons: '', unitPrice: '', currencyCode: 'YER',
+    documentNumber: '', notes: '', expiresAt: '',
   });
-  const resFormValid = resForm.itemName.trim() !== '' && resForm.unitId !== ''
-    && Number(resForm.quantity) > 0 && Number(resForm.unitPrice) > 0;
+  const resFormValid = Number(resForm.totalTons) > 0 && Number(resForm.unitPrice) > 0
+    && ['YER', 'SAR'].includes(resForm.currencyCode);
 
   const [issueQty, setIssueQty] = useState('');
 
@@ -742,6 +739,7 @@ export default function Customer360Page() {
 
   /* ──────── CSV Export ──────── */
   const exportCsv = () => {
+    if (stmtPeriodError) { toast(stmtPeriodError, 'err'); return; }
     if (statement.data) {
       const headers = ['التاريخ', 'نوع المستند', 'رقم المستند', 'البيان', 'المرجع', 'مدين', 'دائن', 'الرصيد الجاري'];
       const openingDate = stmtFromDate || statement.data.items[0]?.date || '';
@@ -779,6 +777,7 @@ export default function Customer360Page() {
   };
 
   const exportStatementPdf = async () => {
+    if (stmtPeriodError) { toast(stmtPeriodError, 'err'); return; }
     setPdfDownloading(true);
     try {
       await downloadApiFile(
@@ -794,6 +793,7 @@ export default function Customer360Page() {
   };
 
   const previewStatementPdf = async () => {
+    if (stmtPeriodError) { toast(stmtPeriodError, 'err'); return; }
     setPdfPreviewLoading(true);
     try {
       const blob = await apiFileBlob(`/customers/${id}/statement.pdf?${statementParams().toString()}&template=${pdfTemplate}`);
@@ -845,6 +845,15 @@ export default function Customer360Page() {
         action={
           c ? (
             <div className="flex items-center gap-3">
+              {canRequestReceipt && c.customerType !== 'advance' && c.externalCustomerCode && (
+                <Link
+                  href={`/collections?new=1&customerId=${encodeURIComponent(c.id)}&customerCode=${encodeURIComponent(c.externalCustomerCode)}`}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-gradient-to-l from-brand to-brand-dim px-4 py-2 text-sm font-semibold text-surface-0 shadow-glow transition hover:brightness-110"
+                >
+                  <FileCheck2 className="h-4 w-4" />
+              تحصيل
+                </Link>
+              )}
               {canWrite && <Button variant="secondary" onClick={() => setEditCustomerOpen(true)}><Pencil className="h-4 w-4" />تعديل البيانات</Button>}
               <Link href={c.customerType === 'advance' ? '/advances' : '/customers'} className="text-sm text-pine-700 hover:underline dark:text-pine-100">
                 ← العودة إلى {c.customerType === 'advance' ? 'السلف' : 'العملاء'}
@@ -912,9 +921,9 @@ export default function Customer360Page() {
               {contactNumbers.map((number) => {
                 const numberLinks = contactLinks(number.value)!;
                 return (
-                  <a key={number.normalized} href={numberLinks.tel} className="inline-flex items-center gap-2 rounded-lg bg-pine-700 px-3 py-2 text-sm font-medium text-white hover:bg-pine-800">
+                  <CustomerCallLink key={number.normalized} customerId={c.id} href={numberLinks.tel} className="inline-flex items-center gap-2 rounded-lg bg-pine-700 px-3 py-2 text-sm font-medium text-white hover:bg-pine-800">
                     <Phone className="h-4 w-4" aria-hidden /> اتصال — {number.label}: <span dir="ltr">{number.value}</span>
-                  </a>
+                  </CustomerCallLink>
                 );
               })}
               <button type="button" onClick={() => setMessageChannel('sms')} className="inline-flex items-center gap-2 rounded-lg border border-concrete-200 bg-white px-4 py-2 text-sm font-medium text-iron-900 hover:bg-concrete-100 dark:border-white/10 dark:bg-iron-800 dark:text-concrete-100">
@@ -938,6 +947,7 @@ export default function Customer360Page() {
             balance={messageDebt?.balance ?? null}
             currency={messageDebt?.currency ?? null}
             collectorName={c.currentCollector?.name ?? null}
+            balances={c.balances.map((item) => ({ currency: item.currency, balance: Number(item.operationalBalance) }))}
             groupBalances={accountGroup.data?.aggregateBalances}
             childBalances={accountGroup.data?.childBalances}
           />
@@ -1297,6 +1307,11 @@ export default function Customer360Page() {
             <Card className="report-print">
               <div className="flex flex-wrap items-end gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
                 <label className="flex items-center gap-2 text-sm">
+                  <span className="text-concrete-500">المصدر</span>
+                  <Select value={stmtSource} onChange={e => { setStmtSource(e.target.value); setStmtPage(1); }}>
+                    <option value="platform">حركات المنصة</option>
+                    <option value="oracle_archive">أرشيف Oracle (2020-2026) - حدد الفترة</option>
+                  </Select>
                   <span className="text-concrete-500">العملة</span>
                   <Select
                     value={stmtCurrency}
@@ -1309,17 +1324,17 @@ export default function Customer360Page() {
                 </label>
                 <label className="text-sm">
                   <span className="mb-1 block text-xs text-concrete-500">من تاريخ</span>
-                  <Input type="date" value={stmtFromDate} max={stmtToDate || undefined} onChange={(event) => { setStmtFromDate(event.target.value); setStmtPage(1); }} />
+                  <Input type="date" value={stmtFromDate} min={stmtSource === 'oracle_archive' ? '2020-01-01' : undefined} max={stmtToDate || (stmtSource === 'oracle_archive' ? '2026-12-31' : undefined)} onChange={(event) => { setStmtFromDate(event.target.value); setStmtPage(1); }} />
                 </label>
                 <label className="text-sm">
                   <span className="mb-1 block text-xs text-concrete-500">إلى تاريخ</span>
-                  <Input type="date" value={stmtToDate} min={stmtFromDate || undefined} onChange={(event) => { setStmtToDate(event.target.value); setStmtPage(1); }} />
+                  <Input type="date" value={stmtToDate} min={stmtFromDate || (stmtSource === 'oracle_archive' ? '2020-01-01' : undefined)} max={stmtSource === 'oracle_archive' ? '2026-12-31' : undefined} onChange={(event) => { setStmtToDate(event.target.value); setStmtPage(1); }} />
                 </label>
                 <Button
                   variant="secondary"
                   onClick={exportCsv}
                   className="mr-auto"
-                  disabled={!statement.data && !c?.balances?.length}
+                  disabled={!!stmtPeriodError || (stmtSource === 'oracle_archive' ? !statement.data || statement.isError || statement.isFetching : !statement.data && !c?.balances?.length)}
                 >
                   <Download className="h-4 w-4" /> تصدير CSV
                 </Button>
@@ -1330,23 +1345,23 @@ export default function Customer360Page() {
                     <option value="classic">الكلاسيكي</option>
                   </Select>
                 </label>
-                <Button variant="secondary" onClick={previewStatementPdf} loading={pdfPreviewLoading} className="print:hidden">
+                <Button variant="secondary" onClick={previewStatementPdf} disabled={!!stmtPeriodError} loading={pdfPreviewLoading} className="print:hidden">
                   <Eye className="h-4 w-4" /> معاينة قبل الطباعة
                 </Button>
-                <Button variant="secondary" onClick={exportStatementPdf} loading={pdfDownloading} className="print:hidden">
+                <Button variant="secondary" onClick={exportStatementPdf} disabled={!!stmtPeriodError} loading={pdfDownloading} className="print:hidden">
                   <Download className="h-4 w-4" /> تنزيل PDF
                 </Button>
               </div>
 
               <DataState
-                isLoading={statement.isLoading}
-                isError={statement.isError}
+                isLoading={!stmtPeriodError && statement.isLoading}
+                isError={!stmtPeriodError && statement.isError}
                 error={statement.error}
                 onRetry={() => statement.refetch()}
                 isFetching={statement.isFetching}
-                isEmpty={!statement.data}
-                emptyTitle="لا توجد حركات"
-                emptyHint={`لا توجد حركات بهذه العملة${stmtCurrency ? ` (${CCY_AR[stmtCurrency] ?? stmtCurrency})` : ''}`}
+                isEmpty={!!stmtPeriodError || !statement.data}
+                emptyTitle={stmtPeriodError ? 'اختر فترة الكشف' : 'لا توجد حركات'}
+                emptyHint={stmtPeriodError ?? `لا توجد حركات بهذه العملة${stmtCurrency ? ` (${CCY_AR[stmtCurrency] ?? stmtCurrency})` : ''}`}
                 skeletonClassName="h-64"
               >
                 {statement.data && (
@@ -1362,7 +1377,7 @@ export default function Customer360Page() {
                       <span className="text-concrete-500">رصيد بداية الفترة: <Money value={statement.data.periodStartBalance} signed /></span>
                       <span className="text-concrete-500">رصيد نهاية الفترة: <Money value={statement.data.periodEndBalance} signed /></span>
                       <span className="font-semibold text-iron-900 dark:text-concrete-100">
-                        الرصيد الحالي: <Money value={statement.data.currentBalance} currency={stmtCurrency} signed />
+                        {stmtSource === 'oracle_archive' ? 'الرصيد بنهاية الفترة:' : 'الرصيد الحالي:'} <Money value={statement.data.currentBalance} currency={stmtCurrency} signed />
                       </span>
                       <span className="text-concrete-500 ml-auto">{statement.data.total} حركة</span>
                     </div>
@@ -1622,20 +1637,21 @@ export default function Customer360Page() {
               skeletonClassName="h-48"
             >
               <Table>
-                <THead cols={['الصنف', 'الكمية', 'الوحدة', 'سعر الوحدة', 'الإجمالي', 'المصروف', 'المتبقي', 'الحالة', 'تاريخ الحجز', '']} />
+                <THead cols={['الوصف', 'إجمالي الأطنان', 'سعر الطن', 'القيمة الأصلية', 'قيمة المصروف', 'القيمة المتبقية', 'المصروف بالطن', 'المتبقي بالطن', 'الحالة', 'تاريخ الحجز', '']} />
                 <tbody>
                   {(reservations.data ?? []).map(r => (
                     <TRow key={r.id}>
                       <TD>
-                        <div className="font-medium">{r.itemName}</div>
-                        {r.itemType && <p className="text-xs text-concrete-500">{r.itemType}</p>}
+                        <div className="font-medium">{r.itemName || 'حجز إجمالي بالطن'}</div>
+                        {r.documentNumber && <p className="text-xs text-concrete-500">مرجع: {r.documentNumber}</p>}
                       </TD>
-                      <TD className="tnum">{r.quantity ?? '—'}</TD>
-                      <TD>{r.unit ?? '—'}</TD>
+                      <TD className="tnum">{r.totalTons ?? r.quantity ?? '—'}</TD>
                       <TD><Money value={r.unitPrice ?? 0} currency={r.currencyCode} /></TD>
                       <TD><Money value={r.totalAmount ?? 0} currency={r.currencyCode} /></TD>
+                      <TD><Money value={Number(r.issuedQty ?? 0) * Number(r.unitPrice ?? 0)} currency={r.currencyCode} /></TD>
+                      <TD><Money value={Number(r.remainingTons ?? r.remainingQty ?? r.quantity ?? 0) * Number(r.unitPrice ?? 0)} currency={r.currencyCode} /></TD>
                       <TD className="tnum">{r.issuedQty}</TD>
-                      <TD className="tnum">{r.remainingQty ?? '—'}</TD>
+                      <TD className="tnum">{r.remainingTons ?? r.remainingQty ?? '—'}</TD>
                       <TD>
                         <Badge tone={reservationStatusBadge(r.status) as any}>
                           {{ open: 'مفتوح', partial: 'مصروف جزئيًا', completed: 'مكتمل', cancelled: 'ملغي' }[r.status] ?? r.status}
@@ -1666,47 +1682,24 @@ export default function Customer360Page() {
         title="حجز بضاعة جديد"
       >
         <div className="space-y-4">
-          <Field label="الصنف *">
-            <Input
-              value={resForm.itemName}
-              onChange={(e) => setResForm(f => ({ ...f, itemName: e.target.value }))}
-              placeholder="مثال: حديد تسليح 12 ملم"
-            />
-          </Field>
-          <Field label="نوع الصنف" hint="اختياري">
-            <Input
-              value={resForm.itemType}
-              onChange={(e) => setResForm(f => ({ ...f, itemType: e.target.value }))}
-            />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="الكمية *">
-              <Input
-                type="number" min="0" step="any"
-                value={resForm.quantity}
-                onChange={(e) => setResForm(f => ({ ...f, quantity: e.target.value }))}
-              />
-            </Field>
-            <Field label="الوحدة *">
-              <Select
-                value={resForm.unitId}
-                onChange={(e) => setResForm(f => ({ ...f, unitId: e.target.value }))}
-              >
-                <option value="">اختر الوحدة</option>
-                {(reservationUnits.data ?? []).map((unit) => (
-                  <option key={unit.id} value={unit.id}>
-                    {unit.nameAr}{unit.weightKg === null ? ' — بلا وزن' : ` — ${unit.weightKg} كجم`}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+          <div className="rounded-lg border border-brand/20 bg-brand/5 p-3 text-sm">
+            العميل محدد من صفحة بياناته. أدخل إجمالي الحجز وسعر الطن؛ ويُحدد الصنف عند الفوترة.
           </div>
+          <Field label="إجمالي الحجز بالطن *" hint="لا يلزم تحديد الصنف الآن">
+            <Input
+              type="number" min="0.001" step="0.001"
+              value={resForm.totalTons}
+              onChange={(e) => setResForm(f => ({ ...f, totalTons: e.target.value }))}
+              placeholder="مثال: 6"
+            />
+          </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="سعر الوحدة *">
+            <Field label="سعر الطن *">
               <Input
-                type="number" min="0" step="any"
+                type="number" min="0.01" step="0.01"
                 value={resForm.unitPrice}
                 onChange={(e) => setResForm(f => ({ ...f, unitPrice: e.target.value }))}
+                placeholder="مثال: 385000"
               />
             </Field>
             <Field label="العملة *">
@@ -1714,19 +1707,20 @@ export default function Customer360Page() {
                 value={resForm.currencyCode}
                 onChange={(e) => setResForm(f => ({ ...f, currencyCode: e.target.value }))}
               >
-                {Object.entries(CCY_AR).map(([code]) => (
-                  <option key={code} value={code}>{code}</option>
-                ))}
+                <option value="YER">ريال يمني (YER)</option>
+                <option value="SAR">ريال سعودي (SAR)</option>
               </Select>
             </Field>
           </div>
-          <Field label="المخزن" hint="اختياري">
-            <Input
-              value={resForm.warehouse}
-              onChange={(e) => setResForm(f => ({ ...f, warehouse: e.target.value }))}
-            />
-          </Field>
-          <Field label="رقم المستند" hint="اختياري">
+          {Number(resForm.totalTons) > 0 && Number(resForm.unitPrice) > 0 && (
+            <div className="rounded-lg border border-brand/20 bg-brand/5 p-3">
+              <p className="text-xs text-concrete-500">إجمالي قيمة الحجز</p>
+              <p className="tnum mt-1 text-lg font-extrabold text-pine-700 dark:text-pine-100">
+                {fmtMoney(Number(resForm.totalTons) * Number(resForm.unitPrice))} {resForm.currencyCode}
+              </p>
+            </div>
+          )}
+          <Field label="رقم المرجع" hint="اختياري">
             <Input
               value={resForm.documentNumber}
               onChange={(e) => setResForm(f => ({ ...f, documentNumber: e.target.value }))}
@@ -1746,9 +1740,6 @@ export default function Customer360Page() {
               onChange={(e) => setResForm(f => ({ ...f, expiresAt: e.target.value }))}
             />
           </Field>
-          {canCreditOverride && <Field label="سبب تجاوز سقف الائتمان" hint="يُستخدم فقط إذا كان الحجز يتجاوز السقف أو الحساب مقيّدًا">
-            <Textarea value={resForm.overrideReason} onChange={(e) => setResForm(f => ({ ...f, overrideReason: e.target.value }))} rows={2} />
-          </Field>}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setCreateResOpen(false)}>إلغاء</Button>
             <Button
@@ -1756,17 +1747,12 @@ export default function Customer360Page() {
               loading={createResMut.isPending}
               onClick={() => createResMut.mutate({
                 customerId: id,
-                itemName: resForm.itemName,
-                itemType: resForm.itemType || undefined,
-                quantity: Number(resForm.quantity),
-                unitId: resForm.unitId,
+                totalTons: Number(resForm.totalTons),
                 unitPrice: Number(resForm.unitPrice),
                 currencyCode: resForm.currencyCode,
-                warehouse: resForm.warehouse || undefined,
                 documentNumber: resForm.documentNumber || undefined,
                 notes: resForm.notes || undefined,
                 expiresAt: resForm.expiresAt || undefined,
-                overrideReason: resForm.overrideReason.trim() || undefined,
               })}
             >
               إنشاء الحجز
@@ -1783,9 +1769,9 @@ export default function Customer360Page() {
         {issueRes && (
           <div className="space-y-4">
             <p className="text-sm text-concrete-600 dark:text-concrete-400">
-              {issueRes.itemName} — المتبقي: <span className="tnum font-medium">{issueRes.remainingQty}</span> {issueRes.unit}
+              {issueRes.itemName || 'حجز إجمالي بالطن'} — المتبقي: <span className="tnum font-medium">{issueRes.remainingTons ?? issueRes.remainingQty}</span> طن
             </p>
-            <Field label="الكمية المراد صرفها *">
+            <Field label="الأطنان المراد صرفها *">
               <Input
                 type="number" min="0" step="any"
                 value={issueQty}
@@ -1795,7 +1781,7 @@ export default function Customer360Page() {
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="secondary" onClick={() => setIssueRes(null)}>إلغاء</Button>
               <Button
-                disabled={!(Number(issueQty) > 0 && Number(issueQty) <= Number(issueRes.remainingQty ?? 0))}
+                disabled={!(Number(issueQty) > 0 && Number(issueQty) <= Number(issueRes.remainingTons ?? issueRes.remainingQty ?? 0))}
                 loading={issueResMut.isPending}
                 onClick={() => issueResMut.mutate({ resId: issueRes.id, qty: Number(issueQty) })}
               >

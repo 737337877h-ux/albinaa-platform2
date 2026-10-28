@@ -65,11 +65,30 @@ export interface TemplateVariables {
   dueDate?: string | null;
 }
 
+const DEBT_DISPLAY_LIMITS: Record<string, number> = { YER: 3000, SAR: 30, USD: 5 };
+const CURRENCY_NAMES: Record<string, string> = {
+  YER: 'ريال يمني', SAR: 'ريال سعودي', USD: 'دولار أمريكي',
+};
+
+export function significantDebtBalances(items: { currency: string; balance: number }[]) {
+  return items.filter((item) => item.balance > (DEBT_DISPLAY_LIMITS[item.currency] ?? 0.00005));
+}
+
+export function formatDebtBalances(items: { currency: string; balance: number }[]) {
+  return significantDebtBalances(items)
+    .map((item) => `${item.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${CURRENCY_NAMES[item.currency] ?? item.currency}`)
+    .join(' + ');
+}
+
 export function renderMessageTemplate(body: string, variables: TemplateVariables): string {
   const values: Record<string, string> = {
     customerName: variables.customerName || 'العميل',
     customerCode: variables.customerCode || '—',
-    balance: variables.balance == null ? '—' : Number(variables.balance).toLocaleString('en-US', { maximumFractionDigits: 2 }),
+    balance: variables.balance == null
+      ? '—'
+      : typeof variables.balance === 'number'
+        ? variables.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })
+        : variables.balance,
     currency: variables.currency || '',
     debtAgeDays: variables.debtAgeDays == null ? '—' : String(variables.debtAgeDays),
     companyName: variables.companyName || 'البناء الراقي',

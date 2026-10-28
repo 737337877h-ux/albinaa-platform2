@@ -179,7 +179,7 @@ export class FollowupsService {
     const page = q.page ?? 1;
     const limit = q.limit ?? 25;
     const where = await this.scope(user);
-    if (q.customerId) (where.customer as any) = { ...(where.customer as any), id: q.customerId };
+    if (q.customerId) where.customerId = q.customerId;
     if (q.collectorUserId) where.userId = q.collectorUserId;
     if (q.fromDate || q.toDate) {
       where.followupAt = {};

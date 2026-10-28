@@ -20,7 +20,21 @@ export interface OracleInventorySummary {
     totalPrimaryQuantity: number;
     valuedRows: number;
     missingCostRows: number;
+    currencyCode: 'SAR';
     basis: string;
+  };
+  reservationStock: {
+    grossTons: number;
+    reservedTons: number;
+    netAvailableTons: number;
+    basis: string;
+    approvedItems: Array<{
+      itemCode: string;
+      itemName: string;
+      rodsPerTon: number;
+      stockRods: number;
+      stockTons: number;
+    }>;
   };
   movementAnalysis: {
     source: string;
@@ -46,6 +60,7 @@ export interface OracleInventorySummary {
     confidence: 'high' | 'medium' | 'preliminary';
     itemCode: string;
     itemName: string;
+    hasStockBalance: boolean;
     currentQuantity: number;
     stockValue: number;
     outbound30: number;
@@ -93,6 +108,7 @@ export interface OracleInventoryItem {
   isInactive: boolean;
   isService: boolean;
   sourceUpdatedAt: string | null;
+  totalAvailablePrimaryQuantity: string;
   group: { nameAr: string; nameEn: string | null };
   _count: { units: number };
 }
@@ -175,6 +191,7 @@ export interface OracleItemDetail extends Omit<OracleInventoryItem, '_count'> {
     usesSerialNumber: boolean;
     isInactive: boolean;
     inactiveReason: string | null;
+    salePrice: string | null;
   }>;
   stockRows: Array<{
     unitName: string;
@@ -191,6 +208,8 @@ export interface OracleItemDetail extends Omit<OracleInventoryItem, '_count'> {
     sourceFingerprint: string;
     movementDate: string;
     documentType: string;
+    billDocumentType: string | null;
+    documentTypeLabelAr: string;
     documentNumber: string;
     documentSequence: string;
     unitName: string;
@@ -203,9 +222,36 @@ export interface OracleItemDetail extends Omit<OracleInventoryItem, '_count'> {
     externalWarehouseCode: string;
     description: string | null;
     referenceNumber: string | null;
+    externalCustomerCode: string | null;
     publishedAt: string;
     customer: { id: string; name: string; externalCustomerCode: string } | null;
+    itemCost: string | null;
+    stockCost: string | null;
+    currencyCode: string | null;
   }>;
+  activity: {
+    status: 'demanded' | 'moving' | 'stagnant';
+    labelAr: string;
+    inboundPrimaryQuantity: number;
+    outboundPrimaryQuantity: number;
+    lastMovementAt: string | null;
+    lastInboundAt: string | null;
+    lastOutboundAt: string | null;
+    basis: string;
+  };
+  pricing: {
+    baseUnitName: string | null;
+    lastSupplyCost: string | null;
+    lastSupplyPrices: Array<{ currencyCode: string; price: string; movementDate: string; unitName: string }>;
+    weightedAverageCost: string | null;
+    salePrice: string | null;
+    salePriceUnit: string | null;
+    averageSalePrice: string | null;
+    lastSalePrice: string | null;
+    lastSalePrices: Array<{ currencyCode: string; price: string; movementDate: string; unitName: string }>;
+    averageSalePrices: Array<{ currencyCode: string; price: string; movementCount: number; unitName: string }>;
+    noteAr: string;
+  };
 }
 
 export function inventoryNumber(value: string | number | null | undefined, maximumFractionDigits = 4) {

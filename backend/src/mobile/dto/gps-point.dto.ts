@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsNumber, IsOptional, IsString } from 'class-validator';
 
 export class GpsPointDto {
   @ApiProperty({ example: 15.3694 })
@@ -21,4 +21,8 @@ export class GpsPointDto {
   @ApiPropertyOptional()
   @IsOptional() @IsString()
   entityId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional() @IsDateString()
+  recordedAt?: string;
 }

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BadgeDollarSign, CheckCircle2, CircleX, UserRound } from 'lucide-react';
+import { BadgeDollarSign, CheckCircle2, CircleX, FileText, UserRound } from 'lucide-react';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Dialog } from '@/components/ui/dialog';
@@ -32,6 +32,8 @@ interface FinancialAdjustmentRequest {
   customer: { id: string; name: string; externalCustomerCode: string };
   requester: { id: string; fullName: string };
   reviewer: { id: string; fullName: string } | null;
+  journalDraft: Record<string, unknown> | null;
+  journalStatus: string | null;
 }
 
 const STATUS_TABS: Array<{ value: RequestStatus; label: string }> = [
@@ -43,6 +45,7 @@ const STATUS_TABS: Array<{ value: RequestStatus; label: string }> = [
 export default function FinancialAdjustmentsPage() {
   const can = useCan();
   const allowed = can('customers.write');
+  const canCreateJournal = can('oracle_test_requests.journal.create');
   const params = useSearchParams();
   const focusedRequestId = params.get('requestId');
   const requestedStatus = params.get('status');
@@ -70,7 +73,7 @@ export default function FinancialAdjustmentsPage() {
       body: JSON.stringify({ decision, reviewNotes: reviewNotes.trim() || undefined }),
     }),
     onSuccess: async () => {
-      toast(decision === 'approved' ? 'تم اعتماد الطلب وتوثيق القرار' : 'تم رفض الطلب وتوثيق القرار', 'ok');
+      toast(decision === 'approved' ? 'تم الاعتماد وفحص وإنشاء مسودة القيد في Oracle دون ترحيلها' : 'تم رفض الطلب وتوثيق القرار', 'ok');
       setReviewing(null);
       setReviewNotes('');
       await queryClient.invalidateQueries({ queryKey: ['financial-adjustment-requests'] });
@@ -94,6 +97,10 @@ export default function FinancialAdjustmentsPage() {
   return (
     <div className="space-y-5">
       <PageHeader title="طلبات الخصم والتصفية" />
+
+      <Card className="border-r-4 border-r-pine-600 p-4 text-sm">
+        عند الاعتماد يُفحص الحساب والعملة ثم تُنشأ مسودة قيد متوازنة في Oracle: الحساب 312401001 مدين، وحساب العميل دائن. تبقى المسودة غير مرحلة وخاضعة لاعتماد Oracle.
+      </Card>
 
       <Card className="p-4">
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="حالة الطلبات">
@@ -172,13 +179,18 @@ export default function FinancialAdjustmentsPage() {
 
                   {pending && (
                     <div className="flex shrink-0 flex-wrap gap-2">
-                      <Button variant="success" onClick={() => openReview(item, 'approved')}>
+                      <Button variant="success" disabled={!canCreateJournal} title={!canCreateJournal ? 'يلزم منح صلاحية إنشاء مسودة قيد يومي' : undefined} onClick={() => openReview(item, 'approved')}>
                         <CheckCircle2 className="h-4 w-4" />اعتماد
                       </Button>
                       <Button variant="danger" onClick={() => openReview(item, 'rejected')}>
                         <CircleX className="h-4 w-4" />رفض
                       </Button>
                     </div>
+                  )}
+                  {!pending && item.status === 'approved' && item.journalDraft && canCreateJournal && (
+                    <Link href="/admin/oracle-test-requests" className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-lg bg-pine-700 px-4 py-2 text-sm font-bold text-white hover:bg-pine-800">
+                      <FileText className="h-4 w-4" />عرض القيد المنشأ في عمليات ONYX
+                    </Link>
                   )}
                 </div>
               </Card>
@@ -197,6 +209,7 @@ export default function FinancialAdjustmentsPage() {
             <p className="font-bold">{reviewing?.customer.name}</p>
             <p className="tnum mt-1" dir="ltr">{reviewing ? `${fmtMoney(Number(reviewing.requestedAmount))} ${reviewing.currencyCode}` : ''}</p>
           </div>
+          {decision === 'approved' && <div className="rounded-lg border border-pine-600/25 bg-pine-50 p-3 text-sm text-pine-800 dark:bg-pine-900/20 dark:text-pine-100">سيُفحص ويُنشأ فورًا كمسودة غير مرحلة: 312401001 مدين ← حساب العميل دائن، بنفس العملة والمبلغ، وبيان «{reviewing?.requestType === 'settlement' ? 'تصفية الحساب' : 'خصم'} - السبب».</div>}
           <Field label={decision === 'rejected' ? 'سبب الرفض (مطلوب)' : 'ملاحظات الاعتماد'}>
             <Textarea rows={4} value={reviewNotes} onChange={(event) => setReviewNotes(event.target.value)} placeholder="اكتب سبب القرار بوضوح" />
           </Field>

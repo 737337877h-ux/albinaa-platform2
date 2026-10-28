@@ -1,7 +1,9 @@
+import {createQueuedNotification} from '../notifications/push-outbox';
 import { createHash } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RESERVATION_ITEM_BY_CODE } from '../reservations/reservation-catalog';
 
 const SETTING_KEY = 'oracleMovementAutoPublish';
 const LOCK_KEY = 3_941_620_026;
@@ -47,6 +49,7 @@ type InventoryCandidate = {
   source_hash: string;
   movement_date: Date;
   document_type: string;
+  bill_document_type: string | null;
   document_number: string;
   document_sequence: string;
   serial_number: string;
@@ -116,11 +119,11 @@ export class OracleMovementAutoPublicationService {
 
   private async latestRun(organizationId: string, sourceSchema: string) {
     const run = await this.prisma.oracleMovementSyncRun.findFirst({
-      where: { organizationId, sourceSchema, status: 'validating' },
+      where: { organizationId, sourceSchema, status: { in: ['validated', 'published', 'validating'] } },
       orderBy: { startedAt: 'desc' },
       select: { id: true, sourceSchema: true, startedAt: true, sourceCounts: true },
     });
-    if (!run) throw new Error('No validating Oracle movement mirror run is available.');
+    if (!run) throw new Error('No validated Oracle movement mirror run is available.');
     return run;
   }
 
@@ -136,7 +139,7 @@ export class OracleMovementAutoPublicationService {
 
   private async ensureNewCustomersFromLatestMirror(tx: Prisma.TransactionClient, organizationId: string) {
     const latest = await tx.oracleCustomerSyncRun.findFirst({
-      where: { organizationId, status: 'validating' },
+      where: { organizationId, status: { in: ['validated', 'published', 'validating'] } },
       orderBy: [{ extractedAt: 'desc' }, { startedAt: 'desc' }],
       select: { id: true },
     });
@@ -178,50 +181,66 @@ export class OracleMovementAutoPublicationService {
     organizationId: string,
     publishedBy: string,
   ) {
-    const differences = await tx.$queryRaw<Array<{
+    const reconciliations = await tx.$queryRaw<Array<{
       customer_id: string;
       external_customer_code: string;
       currency_code: string;
       oracle_amount: Prisma.Decimal;
       platform_amount: Prisma.Decimal;
+      snapshot_at: Date;
     }>>(Prisma.sql`
       WITH latest AS (
-        SELECT id FROM oracle_customer_sync_runs
-        WHERE organization_id=${organizationId}::uuid AND status='validating'
+        SELECT id,COALESCE(extracted_at,started_at) AS snapshot_at FROM oracle_customer_sync_runs
+        WHERE organization_id=${organizationId}::uuid AND status IN ('validated','published','validating')
         ORDER BY extracted_at DESC NULLS LAST,started_at DESC LIMIT 1
       ), oracle AS (
         SELECT external_customer_code,
                CASE currency_code WHEN 'YR' THEN 'YER' WHEN 'YER' THEN 'YER'
                  WHEN 'SR' THEN 'SAR' WHEN 'SAR' THEN 'SAR'
                  WHEN '$' THEN 'USD' WHEN 'USD' THEN 'USD' END AS currency_code,
-               CASE WHEN currency_code IN ('YR','YER','$','USD') THEN balance_foreign ELSE balance_local END AS oracle_amount
+               CASE WHEN currency_code IN ('YR','YER','$','USD') THEN balance_foreign ELSE balance_local END AS oracle_amount,
+               (SELECT snapshot_at FROM latest) AS snapshot_at
         FROM oracle_customer_balances_mirror WHERE sync_run_id=(SELECT id FROM latest)
       )
       SELECT c.id AS customer_id,c.external_customer_code,o.currency_code,o.oracle_amount,
-             COALESCE(cb.accounting_balance,0) AS platform_amount
+             COALESCE(cb.accounting_balance,0) AS platform_amount,o.snapshot_at
       FROM oracle o
       JOIN customers c ON c.organization_id=${organizationId}::uuid AND c.external_customer_code=o.external_customer_code
       LEFT JOIN customer_balances cb ON cb.customer_id=c.id AND cb.currency_code=o.currency_code
-      WHERE o.currency_code IS NOT NULL AND ABS(COALESCE(cb.accounting_balance,0)-o.oracle_amount)>0.0001
+      LEFT JOIN import_jobs ij ON ij.id=cb.last_import_job_id
+      WHERE o.currency_code IS NOT NULL AND (
+        cb.id IS NULL
+        OR ABS(COALESCE(cb.accounting_balance,0)-o.oracle_amount)>0.0001
+        OR ij.imported_at IS NULL
+        OR ij.imported_at<o.snapshot_at
+      )
     `);
-    if (!differences.length) return { changed: 0, importJobId: null as string | null };
+    if (!reconciliations.length) return { changed: 0, cutoffsUpdated: 0, importJobId: null as string | null };
+    const snapshotAt = reconciliations.reduce(
+      (latest, row) => row.snapshot_at > latest ? row.snapshot_at : latest,
+      reconciliations[0].snapshot_at,
+    );
+    const changed = reconciliations.filter(
+      (row) => !row.oracle_amount.equals(row.platform_amount),
+    );
     const job = await tx.importJob.create({
       data: {
         organizationId,
         fileName: `oracle-balance-reconciliation-${Date.now()}.json`,
         fileHash: sha256(`oracle-balance-reconciliation:${organizationId}:${Date.now()}`),
         uploadedBy: publishedBy,
+        importedAt: snapshotAt,
         status: 'completed',
-        rowsTotal: differences.length,
+        rowsTotal: reconciliations.length,
         txnsInFile: 0,
         customersNew: 0,
-        customersUpdated: new Set(differences.map((row) => row.customer_id)).size,
+        customersUpdated: new Set(reconciliations.map((row) => row.customer_id)).size,
         txnsInserted: 0,
         txnsSkippedDuplicate: 0,
         errorsCount: 0,
       },
     });
-    for (const row of differences) {
+    for (const row of reconciliations) {
       await tx.customerBalance.upsert({
         where: { customerId_currencyCode: { customerId: row.customer_id, currencyCode: row.currency_code } },
         create: {
@@ -242,8 +261,10 @@ export class OracleMovementAutoPublicationService {
         entityTable: 'customer_balances',
         entityId: job.id,
         newValue: {
-          changed: differences.length,
-          samples: differences.slice(0, 20).map((row) => ({
+          changed: changed.length,
+          cutoffsUpdated: reconciliations.length,
+          snapshotAt: snapshotAt.toISOString(),
+          samples: changed.slice(0, 20).map((row) => ({
             customerCode: row.external_customer_code,
             currency: row.currency_code,
             from: row.platform_amount.toString(),
@@ -253,7 +274,31 @@ export class OracleMovementAutoPublicationService {
         reason: 'Oracle current balance is the approved source of truth; Oracle remained read-only.',
       },
     });
-    return { changed: differences.length, importJobId: job.id };
+    return { changed: changed.length, cutoffsUpdated: reconciliations.length, importJobId: job.id };
+  }
+
+  private async finalizePublishedRuns(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    sourceSchema: string,
+    movementRunId: string,
+  ) {
+    const publishedAt = new Date();
+    await tx.oracleMovementSyncRun.updateMany({
+      where: { id: movementRunId, organizationId, status: { not: 'published' } },
+      data: { status: 'published', publishedAt },
+    });
+    const customerRun = await tx.oracleCustomerSyncRun.findFirst({
+      where: { organizationId, sourceSchema, status: { in: ['validated', 'validating'] } },
+      orderBy: [{ extractedAt: 'desc' }, { startedAt: 'desc' }],
+      select: { id: true },
+    });
+    if (customerRun) {
+      await tx.oracleCustomerSyncRun.update({
+        where: { id: customerRun.id },
+        data: { status: 'published', publishedAt },
+      });
+    }
   }
 
   async initializeBaseline(options: {
@@ -539,6 +584,7 @@ export class OracleMovementAutoPublicationService {
   private async inventoryCandidates(db: QueryClient, organizationId: string, sourceSchema: string, runId: string) {
     return db.$queryRaw<InventoryCandidate[]>(Prisma.sql`
       SELECT m.id,m.source_fingerprint,m.source_hash,m.movement_date,m.document_type,m.document_number,
+             m.bill_document_type,
              m.document_sequence,m.serial_number,m.external_item_code,m.unit_name,m.package_size,
              m.item_quantity,m.free_quantity,m.primary_quantity,m.primary_free_quantity,m.in_out,
              m.external_warehouse_code,m.external_warehouse_group_code,m.description,m.reference_number,m.barcode,
@@ -632,6 +678,167 @@ export class OracleMovementAutoPublicationService {
     });
   }
 
+  /**
+   * Applies approved rebar sales and sales-return movements to the customer's
+   * aggregate ton reservation. Oracle remains the read-only source: this only
+   * updates the platform reservation ledger after a movement is published.
+   */
+  private async applyReservationMovement(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    row: InventoryCandidate,
+    sourceMovementId: string,
+  ) {
+    const standard = RESERVATION_ITEM_BY_CODE.get(row.external_item_code);
+    if (!standard || !row.external_customer_code) return;
+
+    const isSale = row.document_type === '1' && row.in_out === -1;
+    const isSalesReturn = row.document_type === '3' && row.in_out === 1;
+    if (!isSale && !isSalesReturn) return;
+
+    const rods = row.primary_quantity.plus(row.primary_free_quantity).abs();
+    if (!rods.isPositive()) return;
+    const movementTons = rods.div(standard.rodsPerTon).toDecimalPlaces(6);
+    const customer = await tx.customer.findFirst({
+      where: {
+        organizationId,
+        externalCustomerCode: row.external_customer_code,
+        status: { not: 'merged' },
+      },
+      select: { id: true },
+    });
+    if (!customer) return;
+
+    if (isSale) {
+      let unapplied = movementTons;
+      const reservations = await tx.reservation.findMany({
+        where: {
+          customerId: customer.id,
+          status: { in: ['open', 'partial'] },
+          OR: [{ expiresAt: null }, { expiresAt: { gte: new Date() } }],
+          remainingTons: { gt: 0 },
+        },
+        orderBy: [{ reservedAt: 'asc' }, { createdAt: 'asc' }],
+      });
+      for (const reservation of reservations) {
+        if (!unapplied.isPositive()) break;
+        const alreadyApplied = await tx.reservationAdjustment.findUnique({
+          where: {
+            reservationId_sourceFingerprint: {
+              reservationId: reservation.id,
+              sourceFingerprint: row.source_fingerprint,
+            },
+          },
+          select: { id: true },
+        });
+        if (alreadyApplied) continue;
+        const available = reservation.remainingTons ?? new Prisma.Decimal(0);
+        const applied = Prisma.Decimal.min(available, unapplied).toDecimalPlaces(6);
+        if (!applied.isPositive()) continue;
+        const remaining = available.minus(applied).toDecimalPlaces(6);
+        await tx.reservation.update({
+          where: { id: reservation.id },
+          data: {
+            remainingTons: remaining,
+            remainingQty: remaining,
+            issuedQty: { increment: applied },
+            status: remaining.isZero() ? 'completed' : 'partial',
+          },
+        });
+        await tx.reservationAdjustment.create({
+          data: {
+            reservationId: reservation.id,
+            sourceMovementId,
+            sourceFingerprint: row.source_fingerprint,
+            adjustmentType: 'sales_invoice',
+            externalItemCode: row.external_item_code,
+            rodsQuantity: applied.mul(standard.rodsPerTon).toDecimalPlaces(4),
+            rodsPerTon: standard.rodsPerTon,
+            tonsDelta: applied.negated(),
+            documentType: row.document_type,
+            documentNumber: row.document_number,
+            movementDate: row.movement_date,
+          },
+        });
+        unapplied = unapplied.minus(applied);
+      }
+      return;
+    }
+
+    const reservation = await tx.reservation.findFirst({
+      where: { customerId: customer.id, status: { not: 'cancelled' }, totalTons: { not: null } },
+      orderBy: [{ reservedAt: 'desc' }, { createdAt: 'desc' }],
+    });
+    if (!reservation) return;
+    const alreadyApplied = await tx.reservationAdjustment.findUnique({
+      where: {
+        reservationId_sourceFingerprint: {
+          reservationId: reservation.id,
+          sourceFingerprint: row.source_fingerprint,
+        },
+      },
+      select: { id: true },
+    });
+    if (alreadyApplied) return;
+    const current = reservation.remainingTons ?? new Prisma.Decimal(0);
+    const restored = current.plus(movementTons).toDecimalPlaces(6);
+    await tx.reservation.update({
+      where: { id: reservation.id },
+      data: {
+        remainingTons: restored,
+        remainingQty: restored,
+        issuedQty: { decrement: Prisma.Decimal.min(reservation.issuedQty, movementTons) },
+        status: 'partial',
+      },
+    });
+    await tx.reservationAdjustment.create({
+      data: {
+        reservationId: reservation.id,
+        sourceMovementId,
+        sourceFingerprint: row.source_fingerprint,
+        adjustmentType: 'sales_return',
+        externalItemCode: row.external_item_code,
+        rodsQuantity: rods.toDecimalPlaces(4),
+        rodsPerTon: standard.rodsPerTon,
+        tonsDelta: movementTons,
+        documentType: row.document_type,
+        documentNumber: row.document_number,
+        movementDate: row.movement_date,
+      },
+    });
+  }
+
+  private async reverseReservationMovements(
+    tx: Prisma.TransactionClient,
+    sourceMovementIds: string[],
+  ) {
+    if (!sourceMovementIds.length) return;
+    const adjustments = await tx.reservationAdjustment.findMany({
+      where: { sourceMovementId: { in: sourceMovementIds }, reversedAt: null },
+    });
+    for (const adjustment of adjustments) {
+      const reservation = await tx.reservation.findUnique({ where: { id: adjustment.reservationId } });
+      if (!reservation) continue;
+      const current = reservation.remainingTons ?? new Prisma.Decimal(0);
+      const restored = current.minus(adjustment.tonsDelta).toDecimalPlaces(6);
+      const issuedDelta = adjustment.tonsDelta.negated();
+      const nextIssued = Prisma.Decimal.max(new Prisma.Decimal(0), reservation.issuedQty.plus(issuedDelta));
+      await tx.reservation.update({
+        where: { id: reservation.id },
+        data: {
+          remainingTons: restored,
+          remainingQty: restored,
+          issuedQty: nextIssued,
+          status: nextIssued.isZero() ? 'open' : restored.isZero() ? 'completed' : 'partial',
+        },
+      });
+      await tx.reservationAdjustment.update({
+        where: { id: adjustment.id },
+        data: { reversedAt: new Date() },
+      });
+    }
+  }
+
   private async saveLedger(
     tx: Prisma.TransactionClient,
     options: { organizationId: string; sourceSchema: string; runId: string; batchId: string },
@@ -719,6 +926,7 @@ export class OracleMovementAutoPublicationService {
       const counts = { ...this.counts(classified), customersCreated };
       if (counts.totalCandidates === 0) {
         const balanceReconciliation = await this.reconcileCurrentCustomerBalances(tx, options.organizationId, options.publishedBy);
+        await this.finalizePublishedRuns(tx, options.organizationId, options.sourceSchema, run.id);
         return { applied: true, status: 'no_new_movements', runId: run.id, counts: { ...counts, balanceReconciliation } };
       }
 
@@ -824,6 +1032,23 @@ export class OracleMovementAutoPublicationService {
         if (item.action === 'publish') {
           const row = item.row;
           if (item.reasonCode === 'oracle_inventory_revision_published') {
+            const previousMovements = await tx.publishedInventoryMovement.findMany({
+              where: {
+                organizationId: options.organizationId,
+                sourceSchema: options.sourceSchema,
+                movementDate: row.movement_date,
+                documentType: row.document_type,
+                documentNumber: row.document_number,
+                documentSequence: row.document_sequence,
+                serialNumber: row.serial_number,
+                externalItemCode: row.external_item_code,
+                unitName: row.unit_name,
+                externalWarehouseCode: row.external_warehouse_code,
+                reversedAt: null,
+              },
+              select: { id: true },
+            });
+            await this.reverseReservationMovements(tx, previousMovements.map((movement) => movement.id));
             await tx.publishedInventoryMovement.updateMany({
               where: {
                 organizationId: options.organizationId,
@@ -851,6 +1076,7 @@ export class OracleMovementAutoPublicationService {
               externalItemCode: row.external_item_code,
               movementDate: row.movement_date,
               documentType: row.document_type,
+              billDocumentType: row.bill_document_type,
               documentNumber: row.document_number,
               documentSequence: row.document_sequence,
               serialNumber: row.serial_number,
@@ -866,10 +1092,12 @@ export class OracleMovementAutoPublicationService {
               description: row.description,
               referenceNumber: row.reference_number,
               barcode: row.barcode,
+              externalCustomerCode: row.external_customer_code,
               publishedBy: options.publishedBy,
             },
           });
           platformEntityId = movement.id;
+          await this.applyReservationMovement(tx, options.organizationId, row, movement.id);
         }
         await this.saveLedger(tx, { organizationId: options.organizationId, sourceSchema: options.sourceSchema, runId: run.id, batchId: batch.id }, item, 'inventory', platformEntityId);
       }
@@ -884,8 +1112,7 @@ export class OracleMovementAutoPublicationService {
         return result;
       }, {});
       if (Object.keys(alertCounts).length) {
-        await tx.notification.create({
-          data: {
+        await createQueuedNotification(tx, {
             userId: options.publishedBy,
             kind: 'oracle_exception_movement_published',
             payload: {
@@ -895,7 +1122,6 @@ export class OracleMovementAutoPublicationService {
               batchId: batch.id,
               counts: alertCounts,
             },
-          },
         });
       }
       await tx.auditLog.create({ data: {
@@ -906,6 +1132,7 @@ export class OracleMovementAutoPublicationService {
         newValue: finalCounts as unknown as Prisma.InputJsonValue,
         reason: 'New, historical, returned, and revised Oracle movements were published append-only with alerts. Invalid references remain quarantined; Oracle was read-only.',
       } });
+      await this.finalizePublishedRuns(tx, options.organizationId, options.sourceSchema, run.id);
       return { applied: true, status: 'completed', batchId: batch.id, importJobId, runId: run.id, counts: finalCounts, exceptions: this.exceptions(classified) };
     }, { maxWait: 20_000, timeout: 120_000 });
   }

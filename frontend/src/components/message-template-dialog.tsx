@@ -3,24 +3,27 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageCircle, MessageSquare, Send } from 'lucide-react';
 import { api } from '@/lib/api';
+import { registerContactAttempt } from '@/lib/contact-attempt';
 import { contactLinks, uniqueContactNumbers } from '@/lib/contact';
-import { DEFAULT_MESSAGE_TEMPLATES, MessageChannel, parseMessageTemplates, renderMessageTemplate } from '@/lib/messaging';
+import { DEFAULT_MESSAGE_TEMPLATES, formatDebtBalances, MessageChannel, parseMessageTemplates, renderMessageTemplate, significantDebtBalances } from '@/lib/messaging';
 import { Dialog } from '@/components/ui/dialog';
 import { Button, Field, Select, Textarea } from '@/components/ui/primitives';
 import { toast } from '@/components/ui/toast';
+import { StatementReminderAttachment } from '@/components/statement-reminder-attachment';
 
 interface SettingItem { key: string; value: unknown }
 
 export function MessageTemplateDialog({
   open, onClose, initialChannel, customerId, customerName, customerCode, phone, phoneSecondary, whatsapp, balance, currency,
   debtAgeDays, collectorName, reservationNumber, dueDate,
-  groupBalances, childBalances,
+  balances, groupBalances, childBalances,
 }: {
   open: boolean; onClose: () => void; initialChannel: Exclude<MessageChannel, 'both'>;
   customerId: string;
   customerName: string; customerCode?: string | null; phone?: string | null; phoneSecondary?: string | null; whatsapp?: string | null;
   balance?: number | null; currency?: string | null; debtAgeDays?: number | null;
   collectorName?: string | null; reservationNumber?: string | null; dueDate?: string | null;
+  balances?: { currency: string; balance: number }[];
   groupBalances?: { currency: string; balance: number }[];
   childBalances?: { currency: string; balance: number }[];
 }) {
@@ -68,19 +71,19 @@ export function MessageTemplateDialog({
     const selected = available.find((t) => t.id === templateId) ?? available[0];
     if (!selected) return;
     if (selected.id !== templateId) setTemplateId(selected.id);
+    const positiveGroup = significantDebtBalances(groupBalances ?? []);
+    const positiveDirect = significantDebtBalances(balances ?? []);
+    const positiveChildren = significantDebtBalances(childBalances ?? []);
+    const accountBalances = positiveGroup.length > 0 ? positiveGroup : positiveDirect;
+    const allCurrencies = formatDebtBalances(accountBalances);
     const rendered = renderMessageTemplate(selected.body, {
-      customerName, customerCode, balance, currency, debtAgeDays, companyName: 'البناء الراقي',
+      customerName, customerCode, balance: allCurrencies || balance, currency: allCurrencies ? '' : currency, debtAgeDays, companyName: 'البناء الراقي',
       collectorName, reservationNumber, dueDate,
     });
-    const positiveGroup = (groupBalances ?? []).filter((item) => item.balance > 0.00005);
-    const positiveChildren = (childBalances ?? []).filter((item) => item.balance > 0.00005);
-    const formatTotals = (items: { currency: string; balance: number }[]) => items
-      .map((item) => `${item.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${item.currency}`)
-      .join('، ');
     setMessage(positiveChildren.length > 0
-      ? `${rendered}\n\nإجمالي الحساب الرئيسي والفرعي: ${formatTotals(positiveGroup)}.\nإجمالي الحسابات الفرعية: ${formatTotals(positiveChildren)}.`
+      ? `${rendered}\n\nمنها أرصدة الحسابات الفرعية: ${formatDebtBalances(positiveChildren)}.`
       : rendered);
-  }, [templateId, channel, open, settings.data, groupBalances, childBalances]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [templateId, channel, open, settings.data, balances, groupBalances, childBalances]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async () => {
     const links = contactLinks(selectedPhone, message);
@@ -95,17 +98,13 @@ export function MessageTemplateDialog({
       }
       // Start the request, then launch while this call is still inside the
       // user's click gesture. Waiting first makes browsers block app protocols.
-      const recordContact = api('/followups/contact-event', {
-        method: 'POST',
-        body: JSON.stringify({ customerId, channel, message, templateId }),
-        headers: { 'Idempotency-Key': crypto.randomUUID() },
-      });
+      const recordContact = registerContactAttempt(customerId, channel);
       window.location.assign(url);
       await recordContact;
       await qc.invalidateQueries({ queryKey: ['followups', customerId] });
       toast(channel === 'sms' && useWindowsPhoneLink
         ? 'تم نسخ الرسالة دون تشويه؛ الصقها في Phone Link ثم أرسلها'
-        : 'تم تسجيل التواصل وفتح تطبيق الإرسال', 'ok');
+        : 'تم فتح تطبيق الإرسال؛ سجّل النتيجة خلال 10 دقائق لتجنب المتابعة التلقائية', 'ok');
       onClose();
     } catch (err) {
       toast(err instanceof Error ? err.message : 'تعذر تسجيل التواصل', 'err');
@@ -141,6 +140,7 @@ export function MessageTemplateDialog({
         <Field label="نص الرسالة" hint="يمكن تعديل النص قبل فتح تطبيق الإرسال.">
           <Textarea rows={7} value={message} onChange={(e) => setMessage(e.target.value)} />
         </Field>
+        {templateId === 'account-statement' && <StatementReminderAttachment key={customerId} customerId={customerId} message={message} phone={selectedPhone} windowsWhatsApp={useWindowsWhatsApp} />}
         {channel === 'whatsapp' && (
           <p className="text-xs text-concrete-500">
             {useWindowsWhatsApp

@@ -37,7 +37,7 @@ export function orgDateTimeLocalToIso(value: string): string {
   return parsed.toISOString();
 }
 
-export const CCY_AR: Record<string, string> = { YER: 'ريال يمني', SAR: 'ريال سعودي', USD: 'دولار' };
+export const CCY_AR: Record<string, string> = { YER: 'ريال يمني', SAR: 'ريال سعودي', USD: 'دولار أمريكي' };
 
 export const PROMISE_STATUS_AR: Record<string, string> = {
   upcoming: 'قادم', due_today: 'مستحق اليوم', fulfilled: 'منفذ',

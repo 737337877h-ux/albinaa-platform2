@@ -9,6 +9,14 @@ export class PushTokenDto {
   platform!: 'android' | 'ios';
 
   @IsOptional()
+  @IsIn(['com.albinaa.collector', 'com.alraqi.operations'])
+  applicationId?: string;
+
+  @IsOptional()
+  @IsIn(['albinaa-reminders', 'alraqi-operations-sms-v1', 'albinaa-collection-created-v1'])
+  notificationChannelId?: string;
+
+  @IsOptional()
   @IsString()
   @MaxLength(120)
   deviceName?: string;

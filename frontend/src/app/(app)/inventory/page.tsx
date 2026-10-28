@@ -33,7 +33,7 @@ type InventoryView = 'items' | 'warehouses' | 'stock';
 
 const DECISION_LABELS: Record<string, string> = {
   negative_stock: 'رصيد سالب يحتاج تحقيقًا',
-  stockout_risk: 'نفاد مع طلب قائم',
+  stockout_risk: 'مخاطر النفاد مع صرف حديث',
   reorder: 'يجب إعادة التوريد',
   dead_stock: 'صنف راكد',
   slow_moving: 'بطيء الحركة',
@@ -56,7 +56,7 @@ function useDebounced<T>(value: T, delay: number): T {
 
 export default function InventoryPage() {
   const can = useCan();
-  const allowed = can('reports.read');
+  const allowed = can('inventory.read');
   const [view, setView] = useState<InventoryView>('items');
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search, 350);
@@ -112,10 +112,12 @@ export default function InventoryPage() {
   });
 
   if (!allowed) {
-    return <Card><PermissionNotice message="لا تملك صلاحية عرض مخزون Oracle (reports.read)" /></Card>;
+    return <Card><PermissionNotice message="لا تملك صلاحية عرض الأصناف والمخزون." /></Card>;
   }
 
   const activeQuery = view === 'items' ? items : view === 'warehouses' ? warehouses : stock;
+  const decisionClassifications = (summary.data?.classificationSummary ?? [])
+    .filter((item) => !['normal', 'no_stock_no_demand'].includes(item.type));
   const publishedAt = summary.data?.snapshot.publishedAt
     ? new Date(summary.data.snapshot.publishedAt).toLocaleString('ar-YE')
     : '—';
@@ -155,10 +157,38 @@ export default function InventoryPage() {
             <StatCard label="وحدات الأصناف" value={summary.data.counts.itemUnits} icon={<Layers3 className="h-4 w-4 text-info" />} hint="تشمل وحدات البيع والشراء والمخزون" />
             <StatCard label="المستودعات" value={summary.data.counts.warehouses} icon={<Warehouse className="h-4 w-4 text-gold" />} hint={`${summary.data.branchMappings.length} ربط فرع موثق`} />
             <StatCard label="أسطر الرصيد" value={summary.data.counts.stockBalances} icon={<Boxes className="h-4 w-4 text-brand" />} hint="حسب الصنف والوحدة والمستودع" />
-            <StatCard label="إجمالي تكلفة المخزون" value={inventoryNumber(summary.data.valuation.totalInventoryCost, 2)} icon={<CircleDollarSign className="h-4 w-4 text-credit-700" />} hint={`${summary.data.valuation.missingCostRows} صفوف بلا تكلفة — العملة الأساسية`} />
+            <StatCard label="إجمالي تكلفة المخزون" value={`${inventoryNumber(summary.data.valuation.totalInventoryCost, 2)} ${summary.data.valuation.currencyCode}`} icon={<CircleDollarSign className="h-4 w-4 text-credit-700" />} hint={`${summary.data.valuation.missingCostRows} صفوف بلا تكلفة — محسوب بالوحدة الأساسية`} />
           </div>
         )}
       </DataState>
+
+      {summary.data?.reservationStock && (
+        <Card className="overflow-hidden">
+          <div className="border-b border-line px-4 py-3">
+            <h2 className="font-semibold text-ink-hi">المخزون والحجوزات بالطن</h2>
+            <p className="mt-1 text-xs text-ink-mid">الحساب يقتصر على أصناف الحديد العشرة المعتمدة للحجز.</p>
+          </div>
+          <div className="grid gap-3 p-4 sm:grid-cols-3">
+            <StatCard label="إجمالي المخزون" value={`${inventoryNumber(summary.data.reservationStock.grossTons, 3)} طن`} icon={<Boxes className="h-4 w-4 text-brand" />} hint="قبل طرح الحجوزات" />
+            <StatCard label="إجمالي المحجوز" value={`${inventoryNumber(summary.data.reservationStock.reservedTons, 3)} طن`} icon={<Layers3 className="h-4 w-4 text-gold" />} hint="الحجوزات النشطة المتبقية" />
+            <StatCard label="صافي المتاح" value={`${inventoryNumber(summary.data.reservationStock.netAvailableTons, 3)} طن`} icon={<Warehouse className="h-4 w-4 text-credit-700" />} hint="المخزون ناقص المحجوز" />
+          </div>
+          <details className="border-t border-line px-4 py-3">
+            <summary className="cursor-pointer text-sm font-bold text-brand">تفاصيل الأصناف ومعيار التحويل</summary>
+            <div className="mt-3 overflow-x-auto">
+              <Table>
+                <THead cols={['الصنف', 'الكود', 'سيخ/طن', 'الرصيد بالسيخ', 'الرصيد بالطن']} />
+                <tbody>{summary.data.reservationStock.approvedItems.map((item) => (
+                  <TRow key={item.itemCode}>
+                    <TD>{item.itemName}</TD><TD className="tnum">{item.itemCode}</TD><TD className="tnum">{item.rodsPerTon}</TD>
+                    <TD className="tnum">{inventoryNumber(item.stockRods)}</TD><TD className="tnum font-bold">{inventoryNumber(item.stockTons, 3)}</TD>
+                  </TRow>
+                ))}</tbody>
+              </Table>
+            </div>
+          </details>
+        </Card>
+      )}
 
       {summary.data && (
         <Card className="overflow-hidden">
@@ -167,7 +197,10 @@ export default function InventoryPage() {
               <h2 className="flex items-center gap-2 font-semibold text-ink-hi"><BrainCircuit className="h-5 w-5 text-brand" />محرك قرارات المخزون</h2>
               <p className="mt-1 text-xs text-ink-mid">تصنيف المخاطر والتوريد والركود والبطء والموسمية من مرآة حركة Oracle للقراءة فقط.</p>
             </div>
-            <Badge tone="hazard">{summary.data.decisions.length} قرار</Badge>
+            <div className="flex flex-wrap gap-2">
+              <Badge tone="hazard">{inventoryNumber(summary.data.decisionPagination.total)} توصية حالية</Badge>
+              <Badge>{decisionClassifications.filter((item) => item.count > 0).length} تصنيفات نشطة من {decisionClassifications.length}</Badge>
+            </div>
           </div>
           <div className="border-b border-line bg-canvas-soft px-4 py-3 text-xs text-ink-mid">
             <div className="flex flex-wrap gap-x-5 gap-y-1">
@@ -178,15 +211,13 @@ export default function InventoryPage() {
             <p className="mt-1 font-medium text-hazard-700">{summary.data.movementAnalysis.note}</p>
           </div>
           <div className="grid gap-2 border-b border-line p-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-            {summary.data.classificationSummary
-              .filter((item) => !['normal', 'no_stock_no_demand'].includes(item.type))
-              .map((item) => (
+            {decisionClassifications.map((item) => (
                 <Link key={item.type} href={`/inventory/decisions/${encodeURIComponent(item.type)}`} className="rounded-xl border border-line bg-surface-2 p-3 text-right transition hover:border-brand hover:shadow-sm">
                   <p className="text-xs text-ink-mid">{DECISION_LABELS[item.type] ?? item.type}</p>
                   <p className="tnum mt-1 text-xl font-extrabold text-ink-hi">{inventoryNumber(item.count)}</p>
                   <p className="tnum mt-1 text-[11px] text-ink-low">قيمة: {inventoryNumber(item.stockValue, 2)}</p>
                   {item.recommendedSupplyQuantity > 0 && <p className="tnum mt-1 text-[11px] font-bold text-brand">توريد مقترح: {inventoryNumber(item.recommendedSupplyQuantity)}</p>}
-                  <p className="mt-2 text-[11px] font-bold text-brand">اضغط لعرض الأصناف</p>
+                  <p className="mt-2 text-[11px] font-bold text-brand">{item.count === 0 ? 'لا توجد حالات حاليًا' : 'اضغط لعرض الأصناف'}</p>
                 </Link>
               ))}
           </div>

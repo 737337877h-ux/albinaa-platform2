@@ -1,4 +1,5 @@
-import { findComparablePreviousImport, findLatestComparableImportPair, summarizeDebtChange } from './dashboard.service';
+import { buildCustomerAlerts, DashboardService, findComparablePreviousImport, findLatestComparableImportPair, summarizeDebtChange } from './dashboard.service';
+import { REFRESHED_DAILY_TASK_TYPES } from '../tasks/tasks.service';
 
 const importedAt = new Date('2026-08-10T00:00:00Z');
 const snap = (customerId: string, currencyCode: string, balance: number) =>
@@ -10,6 +11,42 @@ const snap = (customerId: string, currencyCode: string, balance: number) =>
   });
 
 describe('dashboard debt change comparison', () => {
+  it('keeps generated daily recommendations out of the navigation task badge', async () => {
+    const prisma = {
+      task: { count: jest.fn().mockResolvedValue(3) },
+      followup: { count: jest.fn().mockResolvedValue(0) },
+      paymentPromise: { count: jest.fn().mockResolvedValue(0) },
+      collector: { findUnique: jest.fn() },
+    };
+    const service = new DashboardService(prisma as any, {} as any);
+
+    await service.navCounts({
+      id: 'admin', organizationId: 'org-1', permissions: ['customers.read_all'],
+    } as any);
+
+    expect(prisma.task.count).toHaveBeenCalledWith({
+      where: {
+        status: 'open',
+        taskType: { notIn: [...REFRESHED_DAILY_TASK_TYPES] },
+        customer: { organizationId: 'org-1' },
+      },
+    });
+  });
+
+  it('separates actionable unassigned customers from customers created in the last seven days', () => {
+    const since = new Date('2026-08-24T00:00:00Z');
+    const alerts = buildCustomerAlerts([
+      { id: 'old-unassigned', name: 'قديم', externalCustomerCode: '10', createdAt: new Date('2026-08-01T00:00:00Z'), assigned: false },
+      { id: 'new-assigned', name: 'جديد مسند', externalCustomerCode: '20', createdAt: new Date('2026-08-30T00:00:00Z'), assigned: true },
+      { id: 'new-unassigned', name: 'جديد غير مسند', externalCustomerCode: '30', createdAt: new Date('2026-08-31T00:00:00Z'), assigned: false },
+    ], since);
+
+    expect(alerts.unassigned.count).toBe(2);
+    expect(alerts.unassigned.items.map((item) => item.id)).toEqual(['new-unassigned', 'old-unassigned']);
+    expect(alerts.newCustomers.count).toBe(2);
+    expect(alerts.newCustomers.items.map((item) => item.id)).toEqual(['new-unassigned', 'new-assigned']);
+  });
+
   it('skips an unrelated advances-sized import and selects the comparable customer portfolio', () => {
     const latest = {
       id: 'latest', importedAt, fileName: 'customers-new.xlsx',
@@ -88,4 +125,10 @@ describe('dashboard debt change comparison', () => {
     expect(pair.latest?.id).toBe('full-new');
     expect(pair.previous?.id).toBe('full-old');
   });
+});
+
+it('keeps debt-change sync fail-closed for an account without a collector',async()=>{
+ const prisma:any={collector:{findUnique:jest.fn().mockResolvedValue(null)},customerBalance:{findMany:jest.fn().mockResolvedValue([])}};
+ await new DashboardService(prisma,{} as any).debtChangeLast24Hours({id:'user',organizationId:'org',permissions:[]} as any);
+ expect(prisma.customerBalance.findMany).toHaveBeenCalledWith(expect.objectContaining({where:{customer:expect.objectContaining({organizationId:'org',assignments:{some:{collectorId:{in:[]},effectiveTo:null}}})}}));
 });

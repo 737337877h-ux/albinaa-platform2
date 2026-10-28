@@ -18,6 +18,7 @@ const AT = 'albinaa.at';
 const RT = 'albinaa.rt';
 function activeStorage(): Storage | null {
   if (typeof window === 'undefined') return null;
+  if (sessionStorage.getItem('albinaa.mobile')==='1' && sessionStorage.getItem(AT)) return sessionStorage;
   if (sessionStorage.getItem(RT)) return sessionStorage;
   if (localStorage.getItem(RT)) return localStorage;
   return null;

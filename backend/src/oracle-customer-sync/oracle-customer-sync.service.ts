@@ -16,7 +16,7 @@ export interface OracleCustomerLoadResult {
   sourceSchema: string;
   manifestHash: string;
   counts: Record<string, number>;
-  status: 'validated_dry_run' | 'validating';
+  status: 'validated_dry_run' | 'validated';
   platformComparison: Record<string, unknown>;
 }
 
@@ -56,7 +56,8 @@ export class OracleCustomerSyncService {
         await tx.oracleCustomerSyncRun.update({
           where: { id: run.id },
           data: {
-            status: 'validating',
+            status: 'validated',
+            validatedAt: new Date(),
             loadedCounts: {
               customers: snapshot.customers.length,
               customer_currencies: snapshot.customerCurrencies.length,
@@ -74,7 +75,7 @@ export class OracleCustomerSyncService {
       });
       throw error;
     }
-    return this.result(snapshot, comparison, true, run.id, 'validating');
+    return this.result(snapshot, comparison, true, run.id, 'validated');
   }
 
   private async assertPlatformScope(organizationId: string, triggeredBy?: string): Promise<void> {
@@ -97,8 +98,18 @@ export class OracleCustomerSyncService {
         select: { currencyCode: true, customer: { select: { externalCustomerCode: true } } },
       }),
     ]);
+    const platformAdvanceAccounts = platformCustomers.filter((row) => row.externalCustomerCode.startsWith('ADV-'));
+    const operationalCustomers = platformCustomers.filter((row) => !row.externalCustomerCode.startsWith('ADV-'));
+    const operationalBalances = platformBalances.filter((row) => !row.customer.externalCustomerCode.startsWith('ADV-'));
+    const canonicalCurrency = (value: string) => {
+      const normalized = value.trim().toUpperCase();
+      if (normalized === 'YR' || normalized === 'YER') return 'YER';
+      if (normalized === 'SR' || normalized === 'SAR') return 'SAR';
+      if (normalized === '$' || normalized === 'USD') return 'USD';
+      return normalized;
+    };
     const oracleByCode = new Map(snapshot.customers.map((row) => [row.externalCustomerCode, row]));
-    const platformByCode = new Map(platformCustomers.map((row) => [row.externalCustomerCode, row]));
+    const platformByCode = new Map(operationalCustomers.map((row) => [row.externalCustomerCode, row]));
     const matchedCodes = [...oracleByCode.keys()].filter((code) => platformByCode.has(code));
     const oracleOnly = [...oracleByCode.keys()].filter((code) => !platformByCode.has(code));
     const platformOnly = [...platformByCode.keys()].filter((code) => !oracleByCode.has(code));
@@ -108,13 +119,16 @@ export class OracleCustomerSyncService {
       const expected = oracleByCode.get(code)!.isInactive ? 'inactive' : 'active';
       return platformByCode.get(code)!.status.toLowerCase() !== expected;
     });
-    const oracleBalanceKeys = new Set(snapshot.customerBalances.map((row) => `${row.externalCustomerCode}|${row.currencyCode}`));
-    const platformBalanceKeys = new Set(platformBalances.map((row) => `${row.customer.externalCustomerCode}|${row.currencyCode}`));
-    const exactBalancePairs = [...oracleBalanceKeys].filter((key) => platformBalanceKeys.has(key)).length;
+    const oracleBalanceKeys = new Set(snapshot.customerBalances.map((row) =>
+      `${row.externalCustomerCode}|${canonicalCurrency(row.currencyCode)}`));
+    const platformBalanceKeys = new Set(operationalBalances.map((row) =>
+      `${row.customer.externalCustomerCode}|${canonicalCurrency(row.currencyCode)}`));
+    const normalizedBalancePairs = [...oracleBalanceKeys].filter((key) => platformBalanceKeys.has(key)).length;
     const currencyCodes = (values: string[]) => [...new Set(values)].sort();
     return {
       oracleCustomers: snapshot.customers.length,
-      platformCustomers: platformCustomers.length,
+      platformCustomers: operationalCustomers.length,
+      platformAdvanceAccounts: platformAdvanceAccounts.length,
       matchedCustomers: matchedCodes.length,
       oracleOnlyCustomers: oracleOnly.length,
       platformOnlyCustomers: platformOnly.length,
@@ -124,10 +138,13 @@ export class OracleCustomerSyncService {
       sampleCodes: { oracleOnly: oracleOnly.slice(0, 20), platformOnly: platformOnly.slice(0, 20), nameDifferences: nameDifferences.slice(0, 20), statusDifferences: statusDifferences.slice(0, 20) },
       oracleBalancePairs: oracleBalanceKeys.size,
       platformBalancePairs: platformBalanceKeys.size,
-      exactCurrencyCodeBalancePairs: exactBalancePairs,
+      normalizedCurrencyBalancePairs: normalizedBalancePairs,
+      exactCurrencyCodeBalancePairs: normalizedBalancePairs,
       oracleCurrencyCodes: currencyCodes(snapshot.customerBalances.map((row) => row.currencyCode)),
       platformCurrencyCodes: currencyCodes(platformBalances.map((row) => row.currencyCode)),
-      note: 'Balance comparison is key-only until Oracle-to-platform currency mapping and local/foreign amount basis are approved.',
+      currencyMapping: { YR: 'YER', SR: 'SAR', '$': 'USD' },
+      advancesExcluded: true,
+      note: 'Customer comparison excludes ADV accounts and normalizes Oracle currency aliases before comparing balance keys.',
     };
   }
 

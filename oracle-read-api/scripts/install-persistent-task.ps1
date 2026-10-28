@@ -5,10 +5,15 @@ $startScript = Join-Path $PSScriptRoot 'start-persistent.ps1'
 $userId = "$env:USERDOMAIN\$env:USERNAME"
 $actionArguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $startScript + '"'
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $actionArguments
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+$watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+  -RepetitionInterval (New-TimeSpan -Minutes 1)
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+$settings = New-ScheduledTaskSettingsSet -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) `
+  -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable `
+  -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($logonTrigger, $watchdogTrigger) `
+  -Principal $principal -Settings $settings -Force | Out-Null
 
 $listeners = Get-NetTCPConnection -LocalPort 3011 -State Listen -ErrorAction SilentlyContinue
 foreach ($listener in $listeners) {
@@ -19,8 +24,11 @@ foreach ($listener in $listeners) {
   Stop-Process -Id $listener.OwningProcess -Force
 }
 
-Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $startScript)
-$deadline = (Get-Date).AddSeconds(20)
+Start-ScheduledTask -TaskName $taskName
+# Task Scheduler may queue the first launch briefly while replacing the old
+# instance. The watchdog trigger is one minute, so allow enough time for that
+# guaranteed recovery path before reporting failure.
+$deadline = (Get-Date).AddSeconds(90)
 $healthy = $false
 do {
   try {

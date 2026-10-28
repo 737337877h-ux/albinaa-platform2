@@ -1,3 +1,5 @@
+import {oracleReceiptActivity} from '../common/oracle-receipt-activity';
+import {performanceRange,collectorPerformance} from './collector-performance';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
@@ -21,6 +23,13 @@ export class ReportsService {
     private readonly audit: AuditService,
     private readonly aging: AgingService,
   ) {}
+
+  async collectorPerformance(actor:AuthUser,from:string,to:string){
+    const collectedAt=performanceRange(from,to);
+    const rows=await this.prisma.collection.findMany({where:{customer:{organizationId:actor.organizationId},collector:{user:{organizationId:actor.organizationId},...(actor.permissions.includes('customers.read_all')?{}:{userId:actor.id})},status:{not:'reversed'},collectedAt},select:{collectorId:true,customerId:true,currencyCode:true,amount:true,status:true,collector:{select:{user:{select:{fullName:true}}}}}});
+    const oracleRows=(await oracleReceiptActivity(this.prisma,actor)).filter(row=>{const date=new Date(row.collectedAt);return date>=collectedAt.gte&&date<collectedAt.lt;}).map(row=>({...row,collectorId:row.collector.id}));
+    return {from,to,timeZone:'Asia/Aden',generatedAt:new Date(),sources:{platform:rows.length,oracleMirror:oracleRows.length},...collectorPerformance([...rows,...oracleRows])};
+  }
 
   async summary(actor: AuthUser, accountClass: 'customer' | 'advance' = 'customer') {
     const accountFilter = accountClass === 'advance'

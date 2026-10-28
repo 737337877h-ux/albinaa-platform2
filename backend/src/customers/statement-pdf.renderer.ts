@@ -32,6 +32,8 @@ export interface StatementPdfOptions {
   toDate?: string;
   template?: StatementPdfTemplate;
   printedBy?: string;
+  sourceNote?: string;
+  accountGroupLabel?: string;
 }
 
 
@@ -74,8 +76,8 @@ function pdfText(value: string): string {
 
 function registerFonts(document: PDFKit.PDFDocument) {
   const fontDir = path.resolve(__dirname, '../../assets/fonts');
-  document.registerFont('Arabic', path.join(fontDir, 'NotoSansArabic-Regular.ttf'));
-  document.registerFont('ArabicBold', path.join(fontDir, 'NotoSansArabic-Bold.ttf'));
+  document.registerFont('Arabic', path.join(fontDir, 'AlbinaaStatement-Regular.ttf'));
+  document.registerFont('ArabicBold', path.join(fontDir, 'AlbinaaStatement-Bold.ttf'));
   document.registerFont('Latin', path.join(fontDir, 'NotoSans-Regular.ttf'));
   document.registerFont('LatinBold', path.join(fontDir, 'NotoSans-Bold.ttf'));
 }
@@ -96,7 +98,14 @@ function arabic(
   y: number,
   options: PDFKit.Mixins.TextOptions & { width: number },
 ) {
-  document.text(pdfText(value), x, y, { ...options, features: ['rtla'] });
+  // FontKit chooses run direction from the first strong character. Only an
+  // Arabic-leading run reverses embedded Latin/digits; Latin-leading YR must stay LTR.
+  const clean = pdfText(value);
+  const firstStrong = clean.match(/[A-Za-z\u0600-\u06ff]/u)?.[0];
+  const shaped = firstStrong && /[\u0600-\u06ff]/u.test(firstStrong)
+    ? clean.replace(/[A-Za-z0-9]+(?:[.,:/-][A-Za-z0-9]+)*/g, token => [...token].reverse().join(''))
+    : clean;
+  document.text(shaped, x, y, { ...options, features: ['rtla'] });
 }
 
 function tableText(
@@ -145,10 +154,16 @@ function drawConfiguredLogo(
   }
 }
 
-function drawPageNumber(document: PDFKit.PDFDocument, printedBy = 'مدير النظام') {
+function drawPageNumber(document: PDFKit.PDFDocument, printedBy = 'مدير النظام', sourceNote?: string) {
   const pages = document.bufferedPageRange();
   for (let index = pages.start; index < pages.start + pages.count; index += 1) {
     document.switchToPage(index);
+    if (sourceNote) {
+      document.font('Arabic').fontSize(6);
+      arabic(document, 'صادر من المنصة - وقت قراءة البيانات', 310, 820, { width: 267, height: 10, align: 'center', lineBreak: false });
+      const timestamp = sourceNote.match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/)?.[0] ?? '';
+      document.font('Latin').text(`Oracle | ${timestamp} (UTC)`, 18, 820, { width: 290, height: 10, align: 'center', lineBreak: false });
+    }
     document.moveTo(18, 798).lineTo(577, 798).lineWidth(0.45).stroke('#111111');
     document.font('Arabic').fontSize(6.5).fillColor('#111111');
     document.font('Latin').text(`${index + 1} / ${pages.count}`, 250, 806, {
@@ -451,7 +466,7 @@ function drawBrandedHeader(
 
   drawLegacyStatementLogo(document, customer, 270, 7, 58, 58);
   document.font('ArabicBold').fontSize(8.7);
-  arabic(document, 'كشف حساب تحليلي قبل الترحيل - رصيد نهاية التقرير', 178, 67, {
+  arabic(document, options.sourceNote ? 'كشف حساب - صادر من المنصة' : 'كشف حساب تحليلي قبل الترحيل - رصيد نهاية التقرير', 178, 67, {
     width: 239, height: 15, align: 'center', lineBreak: false,
   });
 
@@ -468,7 +483,7 @@ function drawBrandedHeader(
   document.rect(32, 115, 555, 45).lineWidth(0.5).stroke('#222222');
   document.font('ArabicBold').fontSize(7.4).fillColor('#111111');
   arabic(document, 'رقم الحساب', 507, 119, { width: 64, height: 11, align: 'right', lineBreak: false });
-  document.font('LatinBold').fontSize(8.2).fillColor('#a00000').text('112101001', 433, 119, {
+  document.font('LatinBold').fontSize(8.2).fillColor('#a00000').text(options.sourceNote ? '-' : '112101001', 433, 119, {
     width: 69, height: 11, align: 'center', lineBreak: false,
   });
   document.font('ArabicBold').fontSize(7.4).fillColor('#111111');
@@ -477,7 +492,7 @@ function drawBrandedHeader(
     width: 69, height: 11, align: 'center', lineBreak: false,
   });
   document.font('ArabicBold').fontSize(7.2).fillColor('#111111');
-  arabic(document, 'عملاء الادارة العامة', 305, 119, { width: 110, height: 11, align: 'right', lineBreak: false });
+  arabic(document, options.accountGroupLabel ?? 'عملاء الادارة العامة', 305, 119, { width: 110, height: 11, align: 'right', lineBreak: false });
   arabic(document, customer.name, 270, 134, {
     width: 145, height: 12, align: 'right', ellipsis: '...', lineBreak: false,
   });
@@ -601,7 +616,9 @@ async function renderBranded(
       features: ['rtla'],
       lineGap: 0,
     });
-    const height = Math.min(28, Math.max(15, descriptionHeight + 4, typeHeight + 4));
+    const measuredHeight = Math.max(15, descriptionHeight + 6, typeHeight + 6);
+    if (options.sourceNote && measuredHeight > 540) throw new Error('بيان الحركة يتجاوز مساحة صفحة الكشف؛ يلزم مراجعته قبل إصدار PDF');
+    const height = options.sourceNote ? measuredHeight : Math.min(28, measuredHeight);
     // Leave enough space for PDFKit's line layout so it never auto-creates a
     // continuation page without the branded header and column headings.
     if (y + height > 755) {
@@ -675,7 +692,7 @@ async function renderBranded(
     arabic(document, label, x, sigY, { width: 110, align: 'center' });
     document.moveTo(x + 8, sigY + 23).lineTo(x + 102, sigY + 23).lineWidth(0.4).stroke('#111111');
   });
-  drawPageNumber(document, options.printedBy);
+  drawPageNumber(document, options.printedBy, options.sourceNote);
   document.end();
   return completed;
 }

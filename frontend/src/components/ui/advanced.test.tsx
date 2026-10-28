@@ -21,11 +21,14 @@ describe('financial design system', () => {
     fireEvent.click(button); expect(confirm).toHaveBeenCalledOnce();
   });
 
-  it('provides sortable desktop rows and mobile cards', () => {
+  it('keeps sortable rows in one keyboard-accessible horizontal scroll region', () => {
     render(<DataTable rows={[{ id: '2', name: 'ب' }, { id: '1', name: 'أ' }]} rowKey={(row) => row.id} columns={[{ key: 'name', header: 'الاسم', render: (row) => row.name, sortValue: (row) => row.name }]} />);
-    expect(screen.getAllByText('الاسم').length).toBeGreaterThan(1);
+    expect(screen.getByRole('region')).toHaveAttribute('tabindex', '0');
+    expect(screen.getAllByRole('table')).toHaveLength(1);
     fireEvent.click(screen.getAllByRole('button', { name: 'الاسم' })[0]);
-    expect(screen.getAllByText('أ').length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('row')[1]).toHaveTextContent('أ');
+    fireEvent.click(screen.getByRole('button', { name: /الاسم/ }));
+    expect(screen.getAllByRole('row')[1]).toHaveTextContent('ب');
   });
 
   it('renders an accessible RTL sparkline', () => {

@@ -40,7 +40,7 @@ export default function CampaignsPage() {
   const [channel, setChannel] = useState<'whatsapp' | 'sms'>('whatsapp');
   const [templateId, setTemplateId] = useState('firm-reminder');
   const [bucket, setBucket] = useState('bucket_120_plus');
-  const [currency, setCurrency] = useState('YER');
+  const [currency, setCurrency] = useState('');
   const [preview, setPreview] = useState<Preview | null>(null);
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null);
 
@@ -50,7 +50,7 @@ export default function CampaignsPage() {
     return parseMessageTemplates(configured).filter((item) => item.active && (item.channel === channel || item.channel === 'both'));
   }, [settings.data, channel]);
   const selectedTemplate = templates.find((item) => item.id === templateId) ?? templates[0] ?? DEFAULT_MESSAGE_TEMPLATES[0];
-  const payload = () => ({ name, channel, templateId: selectedTemplate.id, messageBody: selectedTemplate.body, agingBucket: bucket, currency });
+  const payload = () => ({ name, channel, templateId: selectedTemplate.id, messageBody: selectedTemplate.body, agingBucket: bucket, ...(currency ? { currency } : {}) });
 
   const campaigns = useQuery<Campaign[]>({ queryKey: ['message-campaigns'], queryFn: () => api('/messaging/campaigns'), enabled: allowed });
   const detail = useQuery<CampaignDetail>({
@@ -85,7 +85,7 @@ export default function CampaignsPage() {
         <Field label="اسم الحملة"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
         <Field label="القناة"><Select value={channel} onChange={(e) => { setChannel(e.target.value as 'whatsapp' | 'sms'); setPreview(null); }}><option value="whatsapp">واتساب</option><option value="sms">رسالة نصية</option></Select></Field>
         <Field label="شريحة عمر الدين"><Select value={bucket} onChange={(e) => { setBucket(e.target.value); setPreview(null); }}>{BUCKETS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
-        <Field label="العملة"><Select value={currency} onChange={(e) => { setCurrency(e.target.value); setPreview(null); }}><option>YER</option><option>SAR</option><option>USD</option></Select></Field>
+        <Field label="العملة"><Select value={currency} onChange={(e) => { setCurrency(e.target.value); setPreview(null); }}><option value="">جميع العملات في رسالة واحدة</option><option>YER</option><option>SAR</option><option>USD</option></Select></Field>
         <Field label="قالب الرسالة"><Select value={selectedTemplate.id} onChange={(e) => { setTemplateId(e.target.value); setPreview(null); }}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</Select></Field>
       </div>
       <div className="mt-3 rounded-lg bg-concrete-50 p-3 text-sm dark:bg-white/5">{selectedTemplate.body}</div>

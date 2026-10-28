@@ -56,6 +56,29 @@ export interface OracleTransferLookup {
   itemCodes: string[];
 }
 
+export interface OracleTransferDocumentReference {
+  transferSerial: string;
+  transferDocumentNumber: string | null;
+  warehouseCode: string;
+  destinationWarehouseCode: string;
+}
+
+export interface OracleDirectItemLabel { externalItemCode: string; nameAr: string }
+
+export interface OracleDirectWarehousesResponse {
+  snapshotRunId: string;
+  items: Array<Record<string, unknown> & { externalWarehouseCode: string; nameAr: string }>;
+}
+
+export interface OracleDirectItemsResponse {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  snapshotRunId: string;
+  items: Array<Record<string, unknown> & { externalItemCode: string; nameAr: string }>;
+}
+
 export function transferStatusFromEvidence(evidence: OracleTransferEvidence, requestedItemCodes: string[]): OracleTransferStatus | null {
   const source = evidence.source;
   if (!source) return null;
@@ -92,8 +115,14 @@ export function transferStatusFromEvidence(evidence: OracleTransferEvidence, req
 }
 
 export abstract class OracleInventoryReader {
+  abstract directLookupsEnabled(): boolean;
+  abstract directWarehouses(): Promise<OracleDirectWarehousesResponse>;
+  abstract directItems(search: string | undefined, limit: number): Promise<OracleDirectItemsResponse>;
+  abstract directItem(itemCode: string): Promise<Record<string, unknown>>;
+  abstract directItemLabels(itemCodes: string[]): Promise<OracleDirectItemLabel[]>;
   abstract warehouseExists(code: string): Promise<boolean>;
   abstract stock(warehouseCode: string, itemCode: string, unitCode: string): Promise<OracleStockSnapshot>;
+  abstract transferDocumentsByOutRequest(outReqSer: string): Promise<OracleTransferDocumentReference[]>;
   abstract transferStatus(lookup: OracleTransferLookup): Promise<OracleTransferStatus | null>;
 }
 
@@ -106,11 +135,19 @@ export class ReadOnlyOracleHttpReader implements OracleInventoryReader {
   private readonly baseUrl?: string;
   private readonly apiKey?: string;
   private readonly schema: string;
+  private readonly testDirectLookups: boolean;
 
   constructor(config: ConfigService) {
     this.baseUrl = config.get<string>('ORACLE_READ_API_URL')?.replace(/\/$/, '');
     this.apiKey = config.get<string>('ORACLE_READ_API_KEY');
     this.schema = config.get<string>('ORACLE_READ_SCHEMA')?.trim() || 'IAS20261';
+    this.testDirectLookups = config.get<string>('ORACLE_TEST_DIRECT_LOOKUPS_ENABLED') === 'true';
+  }
+
+  directLookupsEnabled() { return this.testDirectLookups; }
+
+  private assertTestDirectLookups() {
+    if (!this.testDirectLookups) throw new ServiceUnavailableException('قوائم Oracle المباشرة غير مفعلة');
   }
 
   private async get<T>(path: string): Promise<T> {
@@ -134,9 +171,42 @@ export class ReadOnlyOracleHttpReader implements OracleInventoryReader {
     return result.exists;
   }
 
+  async directWarehouses() {
+    this.assertTestDirectLookups();
+    return this.get<OracleDirectWarehousesResponse>('/inventory/warehouses');
+  }
+
+  async directItems(search: string | undefined, limit: number) {
+    this.assertTestDirectLookups();
+    const query = new URLSearchParams({ limit: String(Math.min(Math.max(limit, 1), 20)) });
+    if (search?.trim()) query.set('search', search.trim());
+    return this.get<OracleDirectItemsResponse>(`/inventory/items?${query.toString()}`);
+  }
+
+  async directItem(itemCode: string) {
+    this.assertTestDirectLookups();
+    return this.get<Record<string, unknown>>(`/inventory/items/${encodeURIComponent(itemCode)}`);
+  }
+
+  async directItemLabels(itemCodes: string[]) {
+    this.assertTestDirectLookups();
+    const unique = [...new Set(itemCodes.map((code) => code.trim()).filter(Boolean))];
+    if (unique.length === 0) return [];
+    const query = new URLSearchParams({ itemCodes: unique.join(',') });
+    return this.get<OracleDirectItemLabel[]>(`/inventory/items/labels?${query.toString()}`);
+  }
+
   stock(warehouseCode: string, itemCode: string, unitCode: string) {
     const query = new URLSearchParams({ warehouseCode, itemCode, unitCode });
     return this.get<OracleStockSnapshot>(`/inventory/stock?${query.toString()}`);
+  }
+
+  async transferDocumentsByOutRequest(outReqSer: string) {
+    const query = new URLSearchParams({ outReqSer });
+    const result = await this.get<{ documents: OracleTransferDocumentReference[] }>(
+      `/inventory/transfers/by-out-request?${query.toString()}`,
+    );
+    return result.documents;
   }
 
   async transferStatus(lookup: OracleTransferLookup) {

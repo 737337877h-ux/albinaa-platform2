@@ -3,6 +3,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -170,7 +171,7 @@ export default function LoginPage() {
           <Button type="submit" loading={busy} className="w-full" aria-live="polite">
             {busy ? 'جارٍ تسجيل الدخول…' : 'تسجيل الدخول'}
           </Button>
-        </form>
+        </form><Link href="/attendance-display" className="mt-5 block rounded border p-3 text-center">شاشة رمز الحضور والانصراف</Link>
       </div>
     </main>
   );

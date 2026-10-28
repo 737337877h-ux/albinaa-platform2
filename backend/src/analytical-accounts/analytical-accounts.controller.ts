@@ -9,6 +9,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { AnalyticalAccountsService } from './analytical-accounts.service';
+import { OracleAdvanceSyncService } from './oracle-advance-sync.service';
 import { CreateAnalyticalAccountDto } from './dto/create-analytical-account.dto';
 import { EMPLOYEE_IMPORT_CATEGORIES, ImportAnalyticalAccountsDto } from './dto/import-analytical-accounts.dto';
 import { QueryAnalyticalAccountsDto } from './dto/query-analytical-accounts.dto';
@@ -21,7 +22,10 @@ import { AnalyticalStatementQueryDto } from './dto/statement-query.dto';
 @ApiBearerAuth('access-token')
 @Controller('analytical-accounts')
 export class AnalyticalAccountsController {
-  constructor(private readonly accounts: AnalyticalAccountsService) {}
+  constructor(
+    private readonly accounts: AnalyticalAccountsService,
+    private readonly oracleAdvances: OracleAdvanceSyncService,
+  ) {}
 
   @Get()
   @RequirePermissions('analytical_accounts.read')
@@ -83,6 +87,18 @@ export class AnalyticalAccountsController {
     @Req() req: Request,
   ) {
     return this.accounts.importAdvanceStatementExcel(user, file, dryRun !== 'false', req);
+  }
+
+  @Post('sync-advances')
+  @RequirePermissions('customers.write')
+  @ApiQuery({ name: 'dryRun', required: false, type: Boolean })
+  @ApiOperation({ summary: 'فحص أو مزامنة حسابات السلف وأرصدتها من IAS20261 بالقراءة فقط' })
+  syncAdvances(
+    @CurrentUser() user: AuthUser,
+    @Query('dryRun') dryRun: string | undefined,
+    @Req() req: Request,
+  ) {
+    return this.oracleAdvances.sync(user, dryRun !== 'false', req);
   }
 
   @Post('import')

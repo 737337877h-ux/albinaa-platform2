@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { Plus, Pencil, Trash2, PhoneCall } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/auth';
@@ -49,6 +50,7 @@ interface NameId {
 }
 
 interface CustomerSearchItem {
+  customerType?: string | null;
   id: string;
   name: string;
   externalCustomerCode: string | null;
@@ -97,6 +99,7 @@ type EditForm = z.infer<typeof editSchema>;
 /* ────────────────────────────── Main Page ────────────────────────────── */
 
 export default function FollowupsPage() {
+  const customerId = useSearchParams().get('customerId') ?? '';
   const can = useCan();
   const canRead = can('customers.read');
   const canCreate = can('followups.create');
@@ -118,9 +121,10 @@ export default function FollowupsPage() {
 
   /* ──── Queries ──── */
   const query = useQuery<FollowupsResponse>({
-    queryKey: ['followups', debouncedSearch, fromDate, toDate, typeFilter, resultFilter, page],
+    queryKey: ['followups', 'list', customerId, debouncedSearch, fromDate, toDate, typeFilter, resultFilter, page],
     queryFn: () => {
       const p = new URLSearchParams();
+      if (customerId) p.set('customerId', customerId);
       p.set('page', String(page));
       p.set('limit', '25');
       if (fromDate) p.set('fromDate', fromDate);
@@ -445,8 +449,10 @@ function CreateDialog({
     }
     let cancelled = false;
     setCustSearching(true);
-    api<{ items: CustomerSearchItem[] }>(`/customers?search=${encodeURIComponent(debouncedCust)}&limit=10`)
-      .then((res) => { if (!cancelled) setCustResults(res.items); })
+    Promise.all(['customer', 'advance'].map((accountClass) =>
+      api<{ items: CustomerSearchItem[] }>(`/customers?accountClass=${accountClass}&search=${encodeURIComponent(debouncedCust)}&limit=10`)
+    ))
+      .then((responses) => { if (!cancelled) setCustResults(responses.flatMap((res) => res.items)); })
       .catch(() => { if (!cancelled) setCustResults([]); })
       .finally(() => { if (!cancelled) setCustSearching(false); });
     return () => { cancelled = true; };
@@ -473,11 +479,12 @@ function CreateDialog({
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* اختيار العميل */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-concrete-700 dark:text-concrete-200">العميل *</label>
+          <label className="text-sm font-medium text-concrete-700 dark:text-concrete-200">العميل أو حساب السلف *</label>
           {selectedCust ? (
             <div className="flex items-center justify-between rounded-lg border border-concrete-200 bg-concrete-50 px-3 py-2 dark:border-white/10 dark:bg-iron-700">
               <div>
                 <span className="text-sm font-medium">{selectedCust.name}</span>
+                <span className="mr-2 text-xs">{selectedCust.customerType === 'advance' ? 'سلف' : 'عميل'}</span>
                 {selectedCust.externalCustomerCode && (
                   <span className="mr-2 text-xs text-concrete-500" dir="ltr">{selectedCust.externalCustomerCode}</span>
                 )}
@@ -495,7 +502,7 @@ function CreateDialog({
               <Input
                 value={custSearch}
                 onChange={(e) => setCustSearch(e.target.value)}
-                placeholder="ابحث عن العميل بالاسم أو الكود…"
+                placeholder="ابحث عن العميل أو السلف بالاسم أو الكود…"
               />
               {custSearching && <p className="text-xs text-concrete-400">جارٍ البحث…</p>}
               {custResults.length > 0 && (
@@ -508,6 +515,7 @@ function CreateDialog({
                       className="w-full px-3 py-2 text-right text-sm hover:bg-pine-50 dark:hover:bg-white/5"
                     >
                       <span className="font-medium">{c.name}</span>
+                      <span className="mr-2 text-xs">{c.customerType === 'advance' ? 'سلف' : 'عميل'}</span>
                       {c.externalCustomerCode && (
                         <span className="mr-2 text-xs text-concrete-500" dir="ltr">{c.externalCustomerCode}</span>
                       )}
