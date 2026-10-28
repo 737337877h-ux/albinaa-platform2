@@ -1,6 +1,10 @@
 import React from 'react';
+import { isOperationsApp } from '../config/product';
+import { isOperationsNotification } from '../utils/operations-access';
+import {canOpenAppRoute} from '../utils/app-access';
+import {useAuth} from '../store/auth-context';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchNotifications, markNotificationRead, markAllNotificationsRead } from '../api/endpoints';
 import Loading from '../components/loading';
@@ -33,6 +37,7 @@ const KIND_LABELS: Record<string, string> = {
   finance_alert: 'تنبيه مالي مهم',
   cash_receive: 'تحصيل نقدي',
   task_new: 'مهمة جديدة',
+  task_overdue: 'إعادة تصعيد مهمة متأخرة',
   receipt_uploaded: 'رفع سند',
   sync_failed: 'فشل مزامنة',
 };
@@ -60,6 +65,8 @@ function extractNotifications(payload: NotificationsResponse | NotificationItem[
 }
 
 function formatTitle(item: NotificationItem): string {
+  if (item.payload?.diagnostic === true) return String(item.payload.title ?? 'إشعار اختبار');
+  if((item.kind.startsWith('hr_request_')||item.kind.startsWith('hr_task_')))return String(item.payload?.title??'طلب موظف');
   const kind = kindLabel(item);
   const p = item.payload || {};
   if (p.amount != null && p.currency) {
@@ -73,6 +80,8 @@ function formatTitle(item: NotificationItem): string {
 
 function formatBody(item: NotificationItem): string {
   const p = item.payload || {};
+  if (p.diagnostic === true) return String(p.message ?? 'إشعار اختبار فقط');
+  if((item.kind.startsWith('hr_request_')||item.kind.startsWith('hr_task_')))return String(p.message??'راجع الطلب');
   const parts: string[] = [];
   if (p.customerName) parts.push(`العميل: ${p.customerName}`);
   if (p.amount != null && p.currency) parts.push(`المبلغ: ${p.amount} ${p.currency}`);
@@ -95,17 +104,19 @@ function getNavigationTarget(item: NotificationItem): { route: string; params: R
 }
 
 export default function NotificationsScreen() {
+  const permissions = useAuth().user?.permissions ?? [];
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery<NotificationItem[]>({
+  const { data, isLoading, refetch } = useQuery<NotificationItem[]>({
     queryKey: ['notifications'],
     queryFn: async () => {
       const res = await fetchNotifications();
-      return extractNotifications(res.data);
+      return extractNotifications(res.data).filter(n => !isOperationsApp || isOperationsNotification(n.kind));
     },
     staleTime: 60_000,
     gcTime: 10 * 60_000,
   });
+  useFocusEffect(React.useCallback(() => { void refetch(); }, [refetch]));
 
   const readMutation = useMutation({
     mutationFn: markNotificationRead,
@@ -122,10 +133,10 @@ export default function NotificationsScreen() {
   function handlePress(item: NotificationItem) {
     if (!item.readAt) readMutation.mutate(item.id);
     const target = getNavigationTarget(item);
-    if (target) {
+    if (target && canOpenAppRoute(target.route,permissions)) {
       navigation.navigate(target.route, target.params);
     } else {
-      navigation.navigate('Dashboard');
+      navigation.navigate('Main');
     }
   }
 
@@ -172,15 +183,15 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   header: { flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center', padding: 14, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.line },
-  headerText: { fontSize: 14, color: colors.muted, textAlign: 'right' },
-  readAllText: { color: colors.primary, fontSize: 14, fontWeight: '800' },
+  headerText: { fontFamily: 'TajawalRegular', fontSize: 15, color: colors.muted, textAlign: 'right' },
+  readAllText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 15, fontWeight: '800' },
   item: { backgroundColor: colors.surface, marginHorizontal: 12, marginBottom: 8, padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, ...shadow },
   unread: { borderRightWidth: 4, borderRightColor: colors.gold },
   itemHeader: { flexDirection: 'row-reverse', justifyContent: 'space-between', marginBottom: 4 },
-  kind: { fontSize: 11, color: colors.primary, backgroundColor: colors.goldSoft, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 3, fontWeight: '800' },
-  readState: { fontSize: 11, color: colors.muted },
-  title: { fontSize: 15, fontWeight: '800', color: colors.primary, textAlign: 'right' },
-  body: { fontSize: 13, color: colors.ink, marginTop: 6, lineHeight: 20, textAlign: 'right' },
-  date: { fontSize: 11, color: colors.muted, marginTop: 6, textAlign: 'right' },
+  kind: { fontFamily: 'TajawalBold', fontSize: 13, color: colors.primary, backgroundColor: colors.goldSoft, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 3, fontWeight: '800' },
+  readState: { fontFamily: 'TajawalRegular', fontSize: 13, color: colors.muted },
+  title: { fontFamily: 'TajawalBold', fontSize: 16, fontWeight: '800', color: colors.primary, textAlign: 'right' },
+  body: { fontFamily: 'TajawalRegular', fontSize: 14, color: colors.ink, marginTop: 6, lineHeight: 20, textAlign: 'right' },
+  date: { fontFamily: 'TajawalRegular', fontSize: 13, color: colors.muted, marginTop: 6, textAlign: 'right' },
   empty: { textAlign: 'center', color: colors.muted, padding: 40 },
 });

@@ -22,8 +22,8 @@ export default function Loading({ message = 'جارٍ التحميل...' }: Load
 const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
   logo: { width: 230, height: 205 },
-  brand: { fontSize: 22, fontWeight: '900', color: colors.primary, marginTop: 4 },
-  tagline: { fontSize: 15, fontWeight: '500', color: colors.muted, marginTop: 5 },
+  brand: { fontFamily: 'TajawalBold', fontSize: 23, fontWeight: '900', color: colors.primary, marginTop: 4 },
+  tagline: { fontFamily: 'TajawalMedium', fontSize: 16, fontWeight: '500', color: colors.muted, marginTop: 5 },
   spinner: { marginTop: 28 },
-  text: { marginTop: 10, fontSize: 13, color: colors.muted },
+  text: { fontFamily: 'TajawalRegular', marginTop: 10, fontSize: 14, color: colors.muted },
 });

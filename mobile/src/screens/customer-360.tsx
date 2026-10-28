@@ -1,8 +1,10 @@
+import {parseGeoPoint} from '../utils/geo-point';
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, Platform, Modal, FlatList, TextInput, KeyboardAvoidingView, Keyboard, Image } from 'react-native';
-import { enqueueMutation, getCustomerOffline360, updateCustomerContactOffline } from '../db/database';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, Platform, Modal, FlatList, TextInput, KeyboardAvoidingView, Keyboard } from 'react-native';
+import { enqueueMutation, cancelContactAttemptLocal, getCustomerOffline360, updateCustomerContactOffline } from '../db/database';
 import { useFocusEffect } from '@react-navigation/native';
 import Loading from '../components/loading';
+import AccountStatementDownload from '../components/account-statement-download';
 import { parseJsonField } from '../utils/errors';
 import { contactLinks, uniqueContactNumbers } from '../utils/contact';
 import { useSync } from '../store/sync-context';
@@ -13,17 +15,17 @@ import { generateIdempotencyKey } from '../utils/constants';
 import { Ionicons } from '@expo/vector-icons';
 import { loadMessageTemplates, MessageChannel, MessageTemplate, renderMessageTemplate } from '../utils/message-templates';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getBaseUrl } from '../config/api';
-import { getAccessToken } from '../utils/secure-storage';
+import ReceiptPreview, { ReceiptReference } from '../components/receipt-preview';
 import { useAuth } from '../store/auth-context';
 import { canUseMobileFeature } from '../utils/mobile-permissions';
 
 async function openLink(url: string, fallbackMsg: string) {
   try {
     const supported = await Linking.canOpenURL(url);
-    if (supported) { await Linking.openURL(url); }
+    if (supported) { await Linking.openURL(url); return true; }
     else { Alert.alert('تنبيه', fallbackMsg); }
   } catch { Alert.alert('خطأ', 'تعذر فتح التطبيق'); }
+  return false;
 }
 
 export default function Customer360Screen({ route, navigation }: any) {
@@ -41,6 +43,7 @@ export default function Customer360Screen({ route, navigation }: any) {
   const canCreateFollowup = canUseMobileFeature(permissions, 'mobile.followups.create', 'followups.create');
   const canCreatePromise = canUseMobileFeature(permissions, 'mobile.promises.create', 'promises.create');
   const canCreateCollection = canUseMobileFeature(permissions, 'mobile.collections.create', 'collections.create');
+  const canCreateTask = canUseMobileFeature(permissions, 'mobile.tasks.create', 'tasks.manage');
   const canRequestAssignment = canUseMobileFeature(permissions, 'mobile.assignment_change.request', 'tasks.manage');
   const canRequestAdjustment = canUseMobileFeature(permissions, 'mobile.financial_adjustments.request', 'collections.create');
   const canViewCollectionMedia = canUseMobileFeature(permissions, 'mobile.receipts.view', 'collections.create')
@@ -62,7 +65,10 @@ export default function Customer360Screen({ route, navigation }: any) {
   const [financialRequestType, setFinancialRequestType] = React.useState<'discount' | 'settlement'>('discount');
   const [financialAmount, setFinancialAmount] = React.useState('');
   const [financialReason, setFinancialReason] = React.useState('');
-  const [receiptPreview, setReceiptPreview] = React.useState<{ uri: string; token: string; name: string } | null>(null);
+  const [statementRequest, setStatementRequest] = React.useState(0);
+  const [statementReminder, setStatementReminder] = React.useState('');
+  const [statementCustomerId, setStatementCustomerId] = React.useState('');
+  const [receiptPreview, setReceiptPreview] = React.useState<ReceiptReference | null>(null);
   const [modalKeyboardHeight, setModalKeyboardHeight] = React.useState(0);
   React.useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', (event) => {
@@ -120,21 +126,42 @@ export default function Customer360Screen({ route, navigation }: any) {
   const whatsapp = customer.whatsapp || '';
   const availablePhones = uniqueContactNumbers([phone, phoneSecondary, whatsapp]);
   const address = customer.address || '';
-  const accountCode = customer.accountNumber || customer.externalCustomerCode || '';
-  const hasCoordinates = Number.isFinite(Number(customer.geoLat)) && Number.isFinite(Number(customer.geoLng));
+  const accountCode = customer.externalCustomerCode || customer.accountNumber || '';
+  const hasCoordinates = !!parseGeoPoint(customer.geoLat, customer.geoLng);
   const recentCollections = Array.isArray(customer.recentCollections) ? customer.recentCollections : [];
 
   const saveToContacts = async () => {
     try {
       const permission = await Contacts.requestPermissionsAsync();
       if (permission.status !== 'granted') { Alert.alert('الصلاحية مطلوبة', 'اسمح للتطبيق بالوصول إلى جهات الاتصال.'); return; }
-      await Contacts.addContactAsync({
-        contactType: Contacts.ContactTypes.Person,
-        [Contacts.Fields.Name]: fullName,
-        [Contacts.Fields.PhoneNumbers]: Array.from(new Set([phone, phoneSecondary, whatsapp].filter(Boolean)))
-          .map((number, index) => ({ label: index === 0 ? 'الراقي - أساسي' : 'الراقي', number })),
+      const contactName = String(fullName || accountCode || 'عميل البناء الراقي').trim();
+      const phoneNumbers = availablePhones.map((number, index) => ({
+        label: index === 0 ? 'الراقي - أساسي' : 'الراقي',
+        number: String(number).trim(),
+      }));
+      const sameDigits = (left: unknown, right: unknown) => {
+        const normalize = (value: unknown) => String(value || '').replace(/\D/g, '').replace(/^00/, '');
+        const a = normalize(left); const b = normalize(right);
+        return Boolean(a && b && (a === b || a.endsWith(b) || b.endsWith(a)));
+      };
+      const existing = await Contacts.getContactsAsync({
+        name: contactName,
+        fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
       });
-      Alert.alert('تم الحفظ', 'أضيف العميل إلى جهات اتصال الهاتف.');
+      const matched = existing.data.find((contact) =>
+        contact.name === contactName
+        || (contact.phoneNumbers || []).some((stored) => phoneNumbers.some((next) => sameDigits(stored.number, next.number))));
+      const contact = {
+        contactType: Contacts.ContactTypes.Person,
+        name: contactName,
+        firstName: contactName,
+        phoneNumbers,
+      };
+      const contactId = matched?.id
+        ? await Contacts.updateContactAsync({ id: matched.id, ...contact })
+        : await Contacts.addContactAsync(contact);
+      if (!contactId) throw new Error('لم يُرجع الهاتف رقم جهة الاتصال');
+      Alert.alert('تم الحفظ', matched ? 'تم تحديث اسم العميل وأرقامه في جهات الاتصال.' : 'أضيف اسم العميل وجميع أرقامه إلى جهات الاتصال.');
     } catch (error: any) {
       Alert.alert('تعذر الحفظ', error?.message || 'تحقق من صلاحية جهات الاتصال.');
     }
@@ -203,9 +230,19 @@ export default function Customer360Screen({ route, navigation }: any) {
     Alert.alert('تم الحفظ محلياً', 'حُفظت أرقام العميل وستُزامن مع النظام لاحقًا.');
   };
 
+  const openContact = async (url:string, fallback:string, channel:'call'|'sms'|'whatsapp') => {
+    const occurredAt=new Date().toISOString();
+    const operationId=generateIdempotencyKey();
+    try {
+      if(!await Linking.canOpenURL(url)){Alert.alert('تنبيه',fallback);return;}
+      await enqueueMutation(operationId,'POST','/followups/contact-attempts',{operationId,customerId:id,channel,occurredAt});
+      try{await Linking.openURL(url);}catch{await cancelContactAttemptLocal(operationId);Alert.alert('خطأ','تعذر فتح التطبيق');return;}
+      void triggerSync();
+    } catch { Alert.alert('تنبيه','تعذر حفظ محاولة التواصل؛ أعد المحاولة أو سجّل المتابعة يدويًا.'); }
+  };
   const openPhoneAction = (kind: 'call' | 'sms') => {
     const valid = availablePhones.map((number) => ({ number, links: contactLinks(number) })).filter((item) => item.links);
-    const run = (item: typeof valid[number]) => openLink(kind === 'call' ? item.links!.tel : item.links!.sms, kind === 'call' ? 'لا يوجد تطبيق اتصال' : 'لا يوجد تطبيق رسائل');
+    const run = (item: typeof valid[number]) => openContact(kind === 'call' ? item.links!.tel : item.links!.sms, kind === 'call' ? 'لا يوجد تطبيق اتصال' : 'لا يوجد تطبيق رسائل',kind);
     if (valid.length <= 1) { if (valid[0]) run(valid[0]); return; }
     Alert.alert(kind === 'call' ? 'اختر رقم الاتصال' : 'اختر رقم الرسالة', fullName, [
       ...valid.map((item) => ({ text: item.number, onPress: () => run(item) })),
@@ -236,13 +273,23 @@ export default function Customer360Screen({ route, navigation }: any) {
       ? `${rendered}\n\nإجمالي الحساب الرئيسي والفرعي: ${formatTotals(groupBalances)}.\nإجمالي الحسابات الفرعية: ${formatTotals(childBalances)}.`
       : rendered;
     setMessageChannel(null);
+    if (template.id === 'account-statement') {
+      if (!permissions.includes('customers.read') || !permissions.includes('balances.read')) {
+        Alert.alert('صلاحية مطلوبة', 'تنزيل كشف الحساب يحتاج صلاحية قراءة العملاء والأرصدة.');
+        return;
+      }
+      setStatementReminder(body);
+      setStatementCustomerId(id);
+      setStatementRequest(value => value + 1);
+      return;
+    }
     if (channel === 'whatsapp') {
       const whatsappTargets = uniqueContactNumbers([whatsapp, phone, phoneSecondary])
         .map((number) => ({ number, links: contactLinks(number) }))
         .filter((item) => item.links);
-      const sendWhatsapp = (target: typeof whatsappTargets[number]) => openLink(
+      const sendWhatsapp = (target: typeof whatsappTargets[number]) => openContact(
         `${target.links!.whatsapp}?text=${encodeURIComponent(body)}`,
-        'لا يوجد واتساب',
+        'لا يوجد واتساب','whatsapp',
       );
       if (whatsappTargets.length <= 1) {
         if (whatsappTargets[0]) sendWhatsapp(whatsappTargets[0]);
@@ -257,9 +304,9 @@ export default function Customer360Screen({ route, navigation }: any) {
     const smsTargets = availablePhones
       .map((number) => ({ number, links: contactLinks(number) }))
       .filter((item) => item.links);
-    const sendSms = (target: typeof smsTargets[number]) => openLink(
+    const sendSms = (target: typeof smsTargets[number]) => openContact(
       `${target.links!.sms}${Platform.OS === 'ios' ? '&' : '?'}body=${encodeURIComponent(body)}`,
-      'لا يوجد تطبيق رسائل',
+      'لا يوجد تطبيق رسائل','sms',
     );
     if (smsTargets.length <= 1) {
       if (smsTargets[0]) sendSms(smsTargets[0]);
@@ -335,14 +382,8 @@ export default function Customer360Screen({ route, navigation }: any) {
   const previewCollectionReceipt = async (collection: any) => {
     const attachment = parseJsonField<any>(collection.receiptAttachment, collection.receiptAttachment || null);
     if (!attachment?.id) return;
-    const [baseUrl, token] = await Promise.all([getBaseUrl(), getAccessToken()]);
-    if (!token) {
-      Alert.alert('انتهت الجلسة', 'سجّل الدخول مرة أخرى لمعاينة الإيصال.');
-      return;
-    }
     setReceiptPreview({
-      uri: `${baseUrl.replace(/\/$/, '')}/mobile/receipts/${attachment.id}`,
-      token,
+      id: String(attachment.id),
       name: attachment.fileName || 'إيصال التحصيل',
     });
   };
@@ -365,6 +406,7 @@ export default function Customer360Screen({ route, navigation }: any) {
           <ContactBtn label="واتساب" icon="logo-whatsapp" color="#16875B" onPress={() => setMessageChannel('whatsapp')} />
         </View>
       )}
+      {availablePhones.length > 0 && <Text style={{color:colors.muted,textAlign:'right',paddingHorizontal:16,fontSize:12}}>بعد فتح الاتصال أو الرسالة لديك 10 دقائق لتسجيل المتابعة أو المهمة أو الوعد؛ وإلا تُسجَّل محاولة تواصل ومهمة بعد 7 أيام تلقائيًا.</Text>}
       <TouchableOpacity style={styles.saveContact} onPress={openPhoneEditor}><Text style={styles.saveContactText}>إضافة أو تعديل أرقام العميل</Text></TouchableOpacity>
       {availablePhones.length > 0 && <TouchableOpacity style={styles.saveContact} onPress={saveToContacts}><Text style={styles.saveContactText}>حفظ جميع الأرقام في جهات الاتصال</Text></TouchableOpacity>}
       <TouchableOpacity style={styles.importContact} onPress={openContactPicker}><Text style={styles.importContactText}>اختيار رقم العميل من دفتر الهاتف</Text></TouchableOpacity>
@@ -375,10 +417,9 @@ export default function Customer360Screen({ route, navigation }: any) {
           style={styles.locationBtn}
           onPress={() => {
             if (hasCoordinates || address) {
+              const query = hasCoordinates ? `${customer.geoLat},${customer.geoLng}` : address;
               openLink(
-                Platform.OS === 'ios'
-                  ? `maps:0,0?q=${hasCoordinates ? `${customer.geoLat},${customer.geoLng}` : encodeURIComponent(address)}`
-                  : `geo:0,0?q=${hasCoordinates ? `${customer.geoLat},${customer.geoLng}` : encodeURIComponent(address)}`,
+                `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`,
                 'لا يوجد تطبيق خرائط',
               );
             } else {
@@ -399,6 +440,7 @@ export default function Customer360Screen({ route, navigation }: any) {
       </TouchableOpacity>}
 
       {!customer.balanceHidden && <>
+      {permissions.includes('customers.read') && permissions.includes('balances.read') && <AccountStatementDownload key={id} customerId={id} customerName={fullName} customerCode={accountCode} phones={[whatsapp, phone, phoneSecondary]} reminder={statementCustomerId === id ? statementReminder : ''} openRequest={statementCustomerId === id ? statementRequest : 0} />}
       <Text style={styles.sectionTitle}>الأرصدة</Text>
       {balances.length === 0 ? (
         <Text style={styles.emptyText}>لا توجد أرصدة</Text>
@@ -413,7 +455,7 @@ export default function Customer360Screen({ route, navigation }: any) {
             <View key={`${currency}-${i}`} style={styles.balanceCard}>
               <View style={styles.balanceHeader}>
                 <Text style={styles.balanceCurrency}>{currency}</Text>
-                <Text style={[styles.balanceValue, operational < 0 && styles.creditBalance]}>{Number.isFinite(operational) ? Math.abs(operational).toLocaleString('en-US') : '0'}</Text>
+                <View style={styles.balanceDirection}><Text style={[styles.balanceValue, operational < 0 && styles.creditBalance]}>{Number.isFinite(operational) ? Math.abs(operational).toLocaleString('en-US') : '0'}</Text><Text style={[styles.balanceDirectionLabel, operational < 0 && styles.creditBalance]}>{operational < 0 ? 'دائن · له' : 'مدين · عليه'}</Text></View>
               </View>
               {showAccounting && (
                 <View style={styles.balanceSubRow}>
@@ -430,7 +472,8 @@ export default function Customer360Screen({ route, navigation }: any) {
       <View style={styles.actions}>
         {canCreateFollowup && <ActionBtn title="متابعة" color={colors.gold} textColor={colors.primary} onPress={() => navigation.navigate('NewFollowup', { customerId: id, customerName: fullName })} />}
         {canCreatePromise && <ActionBtn title="وعد سداد" color={colors.primary} onPress={() => navigation.navigate('NewPromise', { customerId: id, customerName: fullName })} />}
-        {canCreateCollection && <ActionBtn title="تحصيل" color={colors.danger} onPress={() => navigation.navigate('NewCollection', { customerId: id, customerName: fullName })} />}
+        {canCreateCollection && <ActionBtn title="تحصيل" color={colors.danger} onPress={() => navigation.navigate('NewCollection', { kind: 'receipt', customerId: id, customerName: fullName, customerCode: customer.externalCustomerCode, customerBalances: balances })} />}
+        {canCreateTask && <ActionBtn title="مهمة" color={colors.secondary} onPress={() => navigation.navigate('NewTask', { customerId: id, customerName: fullName })} />}
       </View>
       <View style={styles.requestActionsRow}>
         {canRequestAssignment && <TouchableOpacity style={[styles.assignmentRequestBtn, styles.requestActionHalf]} onPress={() => setAssignmentRequestOpen(true)}>
@@ -574,15 +617,7 @@ export default function Customer360Screen({ route, navigation }: any) {
           </View></View>
         </KeyboardAvoidingView>
       </Modal>
-      <Modal visible={!!receiptPreview} animationType="slide" onRequestClose={() => setReceiptPreview(null)}>
-        <View style={styles.receiptPreviewScreen}>
-          <View style={styles.modalHead}>
-            <TouchableOpacity onPress={() => setReceiptPreview(null)}><Text style={styles.modalClose}>إغلاق</Text></TouchableOpacity>
-            <Text style={styles.modalTitle}>{receiptPreview?.name || 'الإيصال'}</Text>
-          </View>
-          {receiptPreview && <Image resizeMode="contain" style={styles.receiptPreviewImage} source={{ uri: receiptPreview.uri, headers: { Authorization: `Bearer ${receiptPreview.token}` } }} />}
-        </View>
-      </Modal>
+      <ReceiptPreview receipt={receiptPreview} onClose={() => setReceiptPreview(null)} />
     </ScrollView>
   );
 }
@@ -619,83 +654,84 @@ function ActionBtn({ title, color, textColor = '#fff', onPress }: { title: strin
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  error: { color: colors.danger, fontSize: 16, textAlign: 'center' },
+  error: { fontFamily: 'TajawalRegular', color: colors.danger, fontSize: 16, textAlign: 'center' },
   backBtn: { marginTop: 16, padding: 12 },
-  backText: { color: colors.primary, fontSize: 16, fontWeight: '700' },
+  backText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 16, fontWeight: '700' },
   header: { backgroundColor: colors.primary, padding: 20 },
-  name: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
-  phone: { fontSize: 16, color: '#fff', marginTop: 4, opacity: 0.9 },
-  accountCode: { fontSize: 12, color: colors.gold, marginTop: 5, fontWeight: '800' },
-  address: { fontSize: 14, color: '#fff', marginTop: 4, opacity: 0.7 },
-  sectionTitle: { fontSize: 18, fontWeight: '800', color: colors.primary, padding: 16, paddingBottom: 8, textAlign: 'right' },
+  name: { fontFamily: 'TajawalBold', fontSize: 23, fontWeight: 'bold', color: '#fff' },
+  phone: { fontFamily: 'TajawalRegular', fontSize: 16, color: '#fff', marginTop: 4, opacity: 0.9 },
+  accountCode: { fontFamily: 'TajawalBold', fontSize: 13, color: colors.gold, marginTop: 5, fontWeight: '800' },
+  address: { fontFamily: 'TajawalRegular', fontSize: 15, color: '#fff', marginTop: 4, opacity: 0.7 },
+  sectionTitle: { fontFamily: 'TajawalBold', fontSize: 18, fontWeight: '800', color: colors.primary, padding: 16, paddingBottom: 8, textAlign: 'right' },
   emptyText: { textAlign: 'center', color: '#999', padding: 16 },
   balanceCard: { backgroundColor: '#fff', marginHorizontal: 16, marginBottom: 8, padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line },
   balanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   balanceSubRow: { flexDirection: 'row-reverse', justifyContent: 'space-between', marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: colors.line },
-  balanceSubLabel: { fontSize: 12, color: '#999' },
-  balanceSubValue: { fontSize: 12, color: '#666' },
-  balanceCurrency: { fontSize: 16, color: '#333', fontWeight: '500' },
-  balanceValue: { fontSize: 18, color: colors.danger, fontWeight: 'bold' },
+  balanceSubLabel: { fontFamily: 'TajawalRegular', fontSize: 13, color: '#999' },
+  balanceSubValue: { fontFamily: 'TajawalRegular', fontSize: 13, color: '#666' },
+  balanceCurrency: { fontFamily: 'TajawalMedium', fontSize: 16, color: '#333', fontWeight: '500' },
+  balanceValue: { fontFamily: 'TajawalBold', fontSize: 18, color: colors.danger, fontWeight: 'bold' },
+  balanceDirection:{alignItems:'flex-start'},balanceDirectionLabel:{ fontFamily: 'TajawalBold',color:colors.danger,fontSize:13,fontWeight:'800',marginTop:1},
   creditBalance: { color: colors.success },
   contactRow: { flexDirection: 'row', padding: 12, gap: 8 },
   contactBtn: { flex: 1, padding: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexDirection: 'row-reverse', gap: 5 },
-  contactBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  contactBtnText: { fontFamily: 'TajawalMedium', color: '#fff', fontSize: 14, fontWeight: '600' },
   saveContact: { marginHorizontal: 16, marginBottom: 6, padding: 11, borderRadius: radius.sm, backgroundColor: colors.primarySoft, alignItems: 'center' },
-  saveContactText: { color: colors.primary, fontSize: 12, fontWeight: '800' },
+  saveContactText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 13, fontWeight: '800' },
   importContact: { marginHorizontal: 16, marginBottom: 8, padding: 11, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.primary, alignItems: 'center' },
-  importContactText: { color: colors.primary, fontSize: 12, fontWeight: '800' },
+  importContactText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 13, fontWeight: '800' },
   locationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10 },
-  locationLabel: { fontSize: 14, fontWeight: '600', color: '#333' },
+  locationLabel: { fontFamily: 'TajawalMedium', fontSize: 15, fontWeight: '600', color: '#333' },
   locationBtn: { backgroundColor: colors.primarySoft, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: colors.line },
-  locationBtnText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
+  locationBtnText: { fontFamily: 'TajawalMedium', fontSize: 15, color: colors.primary, fontWeight: '600' },
   setLocationBtn: { marginHorizontal: 16, marginBottom: 10, padding: 12, borderRadius: radius.sm, backgroundColor: colors.goldSoft, alignItems: 'center' },
-  setLocationText: { color: colors.primary, fontSize: 13, fontWeight: '900' },
+  setLocationText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 14, fontWeight: '900' },
   actions: { flexDirection: 'row', padding: 16, gap: 8 },
   assignmentRequestBtn: { marginHorizontal: 16, marginBottom: 10, padding: 13, borderRadius: radius.md, borderWidth: 1, borderColor: colors.gold, backgroundColor: colors.goldSoft, flexDirection: 'row-reverse', justifyContent: 'center', alignItems: 'center', gap: 7 },
   requestActionsRow: { flexDirection: 'row-reverse', marginHorizontal: 10, gap: 8 },
   requestActionHalf: { flex: 1, marginHorizontal: 0 },
-  assignmentRequestText: { color: colors.primary, fontSize: 14, fontWeight: '900' },
+  assignmentRequestText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 15, fontWeight: '900' },
   actionBtn: { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center' },
-  actionText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  actionText: { fontFamily: 'TajawalMedium', color: '#fff', fontSize: 15, fontWeight: '600' },
   timelineItem: { backgroundColor: '#fff', marginHorizontal: 16, marginBottom: 4, padding: 12, borderRadius: 8 },
-  timelineTitle: { fontSize: 14, color: '#333' },
-  timelineDate: { fontSize: 12, color: '#999', marginTop: 2 },
+  timelineTitle: { fontFamily: 'TajawalRegular', fontSize: 15, color: '#333' },
+  timelineDate: { fontFamily: 'TajawalRegular', fontSize: 13, color: '#999', marginTop: 2 },
   contactModal: { flex: 1, backgroundColor: colors.background, paddingTop: 45 },
   modalHead: { backgroundColor: colors.primary, padding: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  modalTitle: { color: '#fff', fontSize: 17, fontWeight: '900' }, modalClose: { color: colors.gold, fontWeight: '800' },
+  modalTitle: { fontFamily: 'TajawalBold', color: '#fff', fontSize: 18, fontWeight: '900' }, modalClose: { fontFamily: 'TajawalBold', fontSize: 15, color: colors.gold, fontWeight: '800' },
   contactSearch: { margin: 14, backgroundColor: '#fff', borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, padding: 13, color: colors.ink },
   deviceContact: { marginHorizontal: 14, padding: 14, borderBottomWidth: 1, borderBottomColor: colors.line, backgroundColor: '#fff' },
-  deviceContactName: { color: colors.ink, fontSize: 15, fontWeight: '800', textAlign: 'right' }, deviceContactPhone: { color: colors.muted, marginTop: 3, textAlign: 'right' },
+  deviceContactName: { fontFamily: 'TajawalBold', color: colors.ink, fontSize: 16, fontWeight: '800', textAlign: 'right' }, deviceContactPhone: { color: colors.muted, marginTop: 3, textAlign: 'right' },
   templateShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(5,28,25,.55)' },
   templateSheet: { maxHeight: '70%', backgroundColor: colors.background, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' },
   phoneEditorSheet: { maxHeight: '88%', backgroundColor: colors.background, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' },
   phoneEditorContent: { paddingVertical: 14 },
-  phoneInputLabel: { color: colors.ink, fontSize: 13, fontWeight: '800', textAlign: 'right', marginHorizontal: 18, marginTop: 8, marginBottom: 5 },
+  phoneInputLabel: { fontFamily: 'TajawalBold', color: colors.ink, fontSize: 14, fontWeight: '800', textAlign: 'right', marginHorizontal: 18, marginTop: 8, marginBottom: 5 },
   phoneInput: { backgroundColor: '#fff', borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, marginHorizontal: 18, padding: 12, color: colors.ink },
   assignmentKeyboard: { flex: 1 },
   assignmentSheet: { maxHeight: '92%', backgroundColor: colors.background, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' },
   assignmentContent: { paddingBottom: 4 },
   assignmentSheetHead: { backgroundColor: colors.primary, padding: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  assignmentSheetTitle: { color: '#fff', fontSize: 18, fontWeight: '900' },
-  assignmentHelp: { color: colors.muted, fontSize: 12, lineHeight: 19, textAlign: 'right', marginHorizontal: 18, marginTop: 16 },
+  assignmentSheetTitle: { fontFamily: 'TajawalBold', color: '#fff', fontSize: 18, fontWeight: '900' },
+  assignmentHelp: { fontFamily: 'TajawalRegular', color: colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'right', marginHorizontal: 18, marginTop: 16 },
   assignmentReason: { minHeight: 110, maxHeight: 170, margin: 18, marginBottom: 10, padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: '#fff', color: colors.ink, textAlignVertical: 'top' },
   assignmentSubmit: { marginHorizontal: 18, padding: 14, borderRadius: radius.md, backgroundColor: colors.gold, alignItems: 'center' },
-  assignmentSubmitText: { color: colors.primary, fontWeight: '900', fontSize: 15 },
+  assignmentSubmitText: { fontFamily: 'TajawalBold', color: colors.primary, fontWeight: '900', fontSize: 16 },
   requestTypeRow: { flexDirection: 'row-reverse', gap: 10, marginHorizontal: 18, marginTop: 16 },
   requestTypeBtn: { flex: 1, padding: 12, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, alignItems: 'center', backgroundColor: '#fff' },
   requestTypeBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  requestTypeText: { color: colors.ink, fontWeight: '800' },
+  requestTypeText: { fontFamily: 'TajawalBold', fontSize: 15, color: colors.ink, fontWeight: '800' },
   requestTypeTextActive: { color: '#fff' },
-  financialAmountInput: { marginHorizontal: 18, marginTop: 14, padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: '#fff', color: colors.ink, fontSize: 18, fontWeight: '800' },
+  financialAmountInput: { fontFamily: 'TajawalBold', marginHorizontal: 18, marginTop: 14, padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: '#fff', color: colors.ink, fontSize: 18, fontWeight: '800' },
   collectionMediaCard: { marginHorizontal: 16, marginBottom: 12, padding: 12, borderRadius: radius.md, backgroundColor: '#fff', borderWidth: 1, borderColor: colors.line },
   collectionMediaRow: { paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.line, gap: 8 },
-  collectionMediaLabel: { color: colors.ink, fontWeight: '800', textAlign: 'right' },
+  collectionMediaLabel: { fontFamily: 'TajawalBold', fontSize: 15, color: colors.ink, fontWeight: '800', textAlign: 'right' },
   collectionMediaActions: { flexDirection: 'row-reverse', gap: 8 },
   mediaMiniBtn: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: radius.sm, backgroundColor: colors.primarySoft },
-  mediaMiniText: { color: colors.primary, fontSize: 12, fontWeight: '900' },
+  mediaMiniText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 13, fontWeight: '900' },
   receiptPreviewScreen: { flex: 1, backgroundColor: '#0b1715' },
   receiptPreviewImage: { flex: 1, width: '100%' },
   templateItem: { marginHorizontal: 14, marginTop: 10, padding: 14, backgroundColor: '#fff', borderWidth: 1, borderColor: colors.line, borderRadius: radius.md },
-  templateName: { color: colors.ink, fontSize: 14, fontWeight: '900', textAlign: 'right' }, templateBody: { color: colors.muted, fontSize: 11, lineHeight: 17, marginTop: 5, textAlign: 'right' },
-  editTemplates: { margin: 14, backgroundColor: colors.goldSoft, padding: 13, borderRadius: radius.md, alignItems: 'center' }, editTemplatesText: { color: colors.primary, fontWeight: '900' },
+  templateName: { fontFamily: 'TajawalBold', color: colors.ink, fontSize: 15, fontWeight: '900', textAlign: 'right' }, templateBody: { fontFamily: 'TajawalRegular', color: colors.muted, fontSize: 13, lineHeight: 17, marginTop: 5, textAlign: 'right' },
+  editTemplates: { margin: 14, backgroundColor: colors.goldSoft, padding: 13, borderRadius: radius.md, alignItems: 'center' }, editTemplatesText: { fontFamily: 'TajawalBold', fontSize: 15, color: colors.primary, fontWeight: '900' },
 });

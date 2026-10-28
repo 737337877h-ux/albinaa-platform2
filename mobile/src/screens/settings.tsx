@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { isOperationsApp, product } from '../config/product';
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
@@ -22,6 +23,11 @@ import {
   rescheduleOfflineReminders, setNotificationSoundPreference,
 } from '../utils/local-notifications';
 import { colors, radius, shadow } from '../theme';
+import { BlockedMutationDiagnostic, discardBlockedMutations, getBlockedMutationDiagnostics } from '../db/database';
+import {
+  currentBuildNumber, downloadAndInstallMobileUpdate, fetchAvailableMobileUpdate,
+  MobileAppRelease, showUpdateError,
+} from '../utils/mobile-update';
 
 const PHASE_LABELS = {
   idle: 'جاهز', syncing: 'جارٍ المزامنة', synced: 'تمت المزامنة', offline: 'دون اتصال', error: 'تحتاج مراجعة',
@@ -29,7 +35,7 @@ const PHASE_LABELS = {
 
 export default function SettingsScreen() {
   const { user, login, logout } = useAuth();
-  const { status, triggerSync, retryBlocked, refreshStatus } = useSync();
+  const { status, triggerSync, retryPending, retryBlocked, refreshStatus } = useSync();
   const [gpsEnabled, setGpsEnabled] = useState(false);
   const [lanOnly, setLanOnly] = useState(true);
   const [baseUrl, setBaseUrl] = useState('');
@@ -42,6 +48,50 @@ export default function SettingsScreen() {
   const [serverDraft, setServerDraft] = useState('');
   const [usernameDraft, setUsernameDraft] = useState('');
   const [passwordDraft, setPasswordDraft] = useState('');
+  const [blockedDiagnostics, setBlockedDiagnostics] = useState<BlockedMutationDiagnostic[]>([]);
+  const [availableUpdate, setAvailableUpdate] = useState<MobileAppRelease | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState({ written: 0, total: 0, fraction: 0 });
+
+  const checkForUpdate = async () => {
+    setCheckingUpdate(true);
+    try {
+      const release = await fetchAvailableMobileUpdate();
+      setAvailableUpdate(release);
+      if (!release) Alert.alert('التطبيق محدّث', 'لا يوجد إصدار أحدث منشور حاليًا.');
+    } catch (error: any) {
+      Alert.alert('تعذر فحص التحديث', error?.message || 'اتصل بالشبكة المحلية ثم حاول مرة أخرى.');
+    } finally { setCheckingUpdate(false); }
+  };
+
+  const installUpdate = async () => {
+    if (!availableUpdate) return;
+    setInstallingUpdate(true);
+    setUpdateProgress({ written: 0, total: availableUpdate.size, fraction: 0 });
+    try { await downloadAndInstallMobileUpdate(availableUpdate, setUpdateProgress); }
+    catch (error) { showUpdateError(error); }
+    finally { setInstallingUpdate(false); }
+  };
+
+  const discardBlocked = () => {
+    Alert.alert(
+      'حذف العمليات المرفوضة',
+      `سيتم حذف ${status.blocked} عملية مرفوضة من هذا الهاتف فقط.`,
+      [
+        { text: 'إلغاء', style: 'cancel' },
+        {
+          text: 'حذف', style: 'destructive', onPress: async () => {
+            const removed = await discardBlockedMutations();
+            setBlockedDiagnostics([]);
+            await refreshStatus();
+            await triggerSync();
+            Alert.alert('تم التنظيف', `حُذفت ${removed} عملية مرفوضة وأُعيدت المزامنة.`);
+          },
+        },
+      ],
+    );
+  };
 
   useEffect(() => {
     Promise.all([getLanOnlySync(), getBaseUrl(), areLocalNotificationsEnabled(), isBiometricEnabled(), restoreGpsTracking(), getWorkplace(), getNotificationSoundPreference()]).then(([localOnly, url, alertsEnabled, biometric, gps, workplace, sound]) => {
@@ -57,6 +107,12 @@ export default function SettingsScreen() {
     setUsernameDraft(user?.username || '');
     refreshStatus().catch(() => undefined);
   }, [refreshStatus, user?.username]);
+
+  useEffect(() => {
+    getBlockedMutationDiagnostics()
+      .then(setBlockedDiagnostics)
+      .catch(() => setBlockedDiagnostics([]));
+  }, [status.blocked, status.lastSyncAt]);
 
   const switchAccountOrServer = async () => {
     const nextServer = serverDraft.trim().replace(/\/+$/, '');
@@ -113,8 +169,10 @@ export default function SettingsScreen() {
       Alert.alert('التنبيهات غير مفعلة', 'اسمح للتطبيق بعرض الإشعارات من إعدادات الهاتف.');
       return;
     }
-    const count = await rescheduleOfflineReminders();
-    Alert.alert('تم تفعيل التنبيهات', `تم إعداد ${count} تنبيه من البيانات المحفوظة على الهاتف.`);
+    try {
+      const count = await rescheduleOfflineReminders();
+      Alert.alert('تم تفعيل التنبيهات', `تم إعداد ${count} تنبيه من البيانات المحفوظة على الهاتف.`);
+    } catch { Alert.alert('التذكيرات', 'تعذر تحديث التذكيرات المحلية. مزامنة البيانات مستقلة وتستمر بشكل طبيعي.'); }
   };
 
   const toggleNotifications = async (value: boolean) => {
@@ -128,7 +186,7 @@ export default function SettingsScreen() {
   const chooseNotificationSound = async (value: NotificationSoundPreference) => {
     await setNotificationSoundPreference(value);
     setNotificationSound(value);
-    if (notificationsEnabled) await rescheduleOfflineReminders();
+    if (notificationsEnabled) await rescheduleOfflineReminders().catch(() => Alert.alert('التذكيرات', 'تعذر تحديث التذكيرات المحلية حاليًا'));
   };
 
   const toggleBiometric = async (value: boolean) => {
@@ -136,7 +194,7 @@ export default function SettingsScreen() {
       const available = await LocalAuthentication.hasHardwareAsync();
       const enrolled = await LocalAuthentication.isEnrolledAsync();
       if (!available || !enrolled) { Alert.alert('البصمة غير جاهزة', 'أضف بصمة أو قفل شاشة من إعدادات الهاتف أولاً.'); return; }
-      const result = await LocalAuthentication.authenticateAsync({ promptMessage: 'تفعيل دخول الراقي بالبصمة' });
+      const result = await LocalAuthentication.authenticateAsync({ promptMessage: 'تفعيل دخول الراقي بالبصمة', disableDeviceFallback: true, biometricsSecurityLevel: 'strong' });
       if (!result.success) return;
     }
     await setBiometricEnabled(value);
@@ -166,6 +224,8 @@ export default function SettingsScreen() {
         </View>
         <InfoRow label="الخادم" value={baseUrl || '—'} />
         <InfoRow label="نوع الاتصال" value={isLocalNetworkUrl(baseUrl) ? 'شبكة محلية' : 'خارجي'} />
+        {status.reminderWarning ? <InfoRow label="التذكيرات" value={status.reminderWarning} /> : null}
+        {status.phase === 'syncing' && status.stage ? <InfoRow label="المرحلة الحالية" value={status.stage} /> : null}
         <InfoRow
           label="آخر مزامنة"
           value={status.lastSyncAt ? new Date(status.lastSyncAt).toLocaleString('ar-YE') : 'لم تتم بعد'}
@@ -175,7 +235,7 @@ export default function SettingsScreen() {
         {!!status.lastError && <Text style={styles.errorText}>{status.lastError}</Text>}
         <TouchableOpacity
           style={[styles.primaryBtn, status.phase === 'syncing' && styles.disabledBtn]}
-          onPress={triggerSync}
+          onPress={retryPending}
           disabled={status.phase === 'syncing'}
         >
           {status.phase === 'syncing'
@@ -183,9 +243,24 @@ export default function SettingsScreen() {
             : <Text style={styles.primaryBtnText}>مزامنة الآن</Text>}
         </TouchableOpacity>
         {status.blocked > 0 && (
-          <TouchableOpacity style={styles.outlineBtn} onPress={retryBlocked}>
-            <Text style={styles.outlineBtnText}>إعادة محاولة العمليات المراجعة</Text>
-          </TouchableOpacity>
+          <>
+            <TouchableOpacity style={styles.outlineBtn} onPress={retryBlocked}>
+              <Text style={styles.outlineBtnText}>إعادة محاولة العمليات المراجعة</Text>
+            </TouchableOpacity>
+            <View style={styles.diagnosticsBox}>
+              <Text style={styles.diagnosticsTitle}>تفاصيل العمليات المرفوضة</Text>
+              {blockedDiagnostics.map((item, index) => (
+                <View key={item.operationId} style={styles.diagnosticItem}>
+                  <Text style={styles.diagnosticHeading}>عملية {index + 1}: {item.type.toUpperCase()} {item.endpoint}</Text>
+                  <Text style={styles.diagnosticError}>{item.lastError || 'لم يسجل الخادم سببًا'}</Text>
+                  <Text style={styles.diagnosticPayload}>{item.payloadSummary}</Text>
+                </View>
+              ))}
+            </View>
+            <TouchableOpacity style={styles.discardBtn} onPress={discardBlocked}>
+              <Text style={styles.discardBtnText}>حذف العمليات المرفوضة من الهاتف</Text>
+            </TouchableOpacity>
+          </>
         )}
       </View>
 
@@ -203,6 +278,7 @@ export default function SettingsScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>التنبيهات</Text>
+        {isOperationsApp ? <Text style={styles.hint}>{product.pushConfigured ? 'تصلك إشعارات الطلبات ومهام الموظفين عند السماح بالإشعارات في إعدادات الهاتف، وتجد سجلها في شاشة الإشعارات داخل التطبيق.' : 'تجد إشعارات الطلبات ومهام الموظفين في شاشة الإشعارات داخل التطبيق. الإشعارات البعيدة لهذه النسخة ما زالت قيد التجهيز.'}</Text> : <>
         <SettingRow label="تنبيهات المهام والوعود" value={notificationsEnabled} onChange={toggleNotifications} />
         <Text style={styles.fieldLabel}>نغمة الإشعار</Text>
         <View style={styles.soundChoices}>
@@ -214,11 +290,12 @@ export default function SettingsScreen() {
           <Text style={styles.outlineBtnText}>تحديث التنبيهات الآن</Text>
         </TouchableOpacity>
         <Text style={styles.hint}>تعمل التنبيهات من قاعدة الهاتف حتى بدون إنترنت.</Text>
+        </>}
       </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>الموقع</Text>
-        <SettingRow label="تسجيل موقع الزيارة" value={gpsEnabled} onChange={toggleGps} />
+        {!isOperationsApp && <SettingRow label="تسجيل موقع الزيارة" value={gpsEnabled} onChange={toggleGps} />}
         <TouchableOpacity style={styles.outlineBtn} onPress={saveWorkplace}>
           <Text style={styles.outlineBtnText}>{workplaceSet ? 'تحديث موقع العمل الحالي' : 'اعتماد موقعي الحالي كموقع العمل'}</Text>
         </TouchableOpacity>
@@ -232,7 +309,23 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
-        <InfoRow label="إصدار التطبيق" value={APP_VERSION} />
+        <Text style={styles.sectionTitle}>تحديث التطبيق</Text>
+        <InfoRow label="الإصدار الحالي" value={`${APP_VERSION} (${currentBuildNumber()})`} />
+        {availableUpdate && <View style={styles.updateBox}>
+          <Text style={styles.updateTitle}>يتوفر الإصدار {availableUpdate.versionName}</Text>
+          <Text style={styles.hint}>{availableUpdate.notes || 'تحسينات وإصلاحات جديدة.'}</Text>
+          <TouchableOpacity style={styles.primaryBtn} disabled={installingUpdate} onPress={installUpdate}>
+            {installingUpdate ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>تنزيل وتثبيت</Text>}
+          </TouchableOpacity>
+          {installingUpdate && <View style={styles.downloadProgressBox}>
+            <View style={styles.downloadProgressTrack}><View style={[styles.downloadProgressFill, { width: `${Math.round(updateProgress.fraction * 100)}%` }]} /></View>
+            <Text style={styles.downloadProgressText}>{Math.round(updateProgress.fraction * 100)}% · {(updateProgress.written / 1024 / 1024).toFixed(1)} من {(updateProgress.total / 1024 / 1024).toFixed(1)} م.ب</Text>
+          </View>}
+        </View>}
+        <TouchableOpacity style={styles.outlineBtn} disabled={checkingUpdate} onPress={checkForUpdate}>
+          {checkingUpdate ? <ActivityIndicator color={colors.primary} /> : <Text style={styles.outlineBtnText}>فحص وجود تحديث</Text>}
+        </TouchableOpacity>
+        <Text style={styles.hint}>{isOperationsApp ? 'يُنزّل التحديث من قناة إدارة العملاء والمخزون المستقلة، ثم يطلب Android تأكيد التثبيت.' : 'يتم تنزيل الإصدار المنشور من خادم المنصة عبر الشبكة المحلية أو Tailscale، ثم يطلب Android تأكيد التثبيت.'}</Text>
         <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
           <Text style={styles.logoutText}>تسجيل خروج</Text>
         </TouchableOpacity>
@@ -295,37 +388,51 @@ const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 40 },
   section: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: colors.line, ...shadow },
   titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { fontSize: 18, fontWeight: '900', color: colors.primary, marginBottom: 12 },
+  sectionTitle: { fontFamily: 'TajawalBold', fontSize: 18, fontWeight: '900', color: colors.primary, marginBottom: 12 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
-  label: { fontSize: 15, color: colors.ink, flex: 1, textAlign: 'right' },
-  hint: { fontSize: 12, color: colors.muted, marginTop: 8, lineHeight: 19, textAlign: 'right' },
+  label: { fontFamily: 'TajawalRegular', fontSize: 16, color: colors.ink, flex: 1, textAlign: 'right' },
+  hint: { fontFamily: 'TajawalRegular', fontSize: 13, color: colors.muted, marginTop: 8, lineHeight: 19, textAlign: 'right' },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: colors.line },
-  infoLabel: { fontSize: 13, color: colors.muted },
-  infoValue: { flex: 1, fontSize: 13, color: colors.ink, fontWeight: '700', textAlign: 'left' },
+  infoLabel: { fontFamily: 'TajawalRegular', fontSize: 14, color: colors.muted },
+  infoValue: { fontFamily: 'TajawalBold', flex: 1, fontSize: 14, color: colors.ink, fontWeight: '700', textAlign: 'left' },
   danger: { color: '#B42318' },
   errorText: { color: '#B42318', backgroundColor: '#FEF3F2', padding: 10, borderRadius: 8, marginTop: 10, textAlign: 'right' },
+  diagnosticsBox: { backgroundColor: '#FFF8E8', borderRadius: radius.sm, padding: 10, marginTop: 10, borderWidth: 1, borderColor: colors.line },
+  diagnosticsTitle: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 15, fontWeight: '900', textAlign: 'right', marginBottom: 6 },
+  diagnosticItem: { borderTopWidth: 1, borderTopColor: colors.line, paddingVertical: 8 },
+  diagnosticHeading: { fontFamily: 'TajawalBold', color: colors.ink, fontSize: 13, fontWeight: '900', textAlign: 'left' },
+  diagnosticError: { fontFamily: 'TajawalRegular', color: '#B42318', fontSize: 13, marginTop: 3, textAlign: 'left' },
+  diagnosticPayload: { fontFamily: 'TajawalRegular', color: colors.muted, fontSize: 13, marginTop: 3, textAlign: 'left' },
+  discardBtn: { backgroundColor: '#FEF3F2', borderRadius: radius.sm, padding: 12, alignItems: 'center', marginTop: 10 },
+  discardBtnText: { fontFamily: 'TajawalBold', color: '#B42318', fontSize: 14, fontWeight: '900' },
   badge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
   badgeOk: { backgroundColor: '#DDF7EC' },
   badgeWarn: { backgroundColor: '#FFF1D6' },
-  badgeText: { color: colors.ink, fontSize: 12, fontWeight: '800' },
+  badgeText: { fontFamily: 'TajawalBold', color: colors.ink, fontSize: 13, fontWeight: '800' },
   primaryBtn: { backgroundColor: colors.gold, borderRadius: radius.md, padding: 14, alignItems: 'center', marginTop: 14 },
-  primaryBtnText: { color: colors.primary, fontSize: 15, fontWeight: '900' },
+  primaryBtnText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 16, fontWeight: '900' },
   disabledBtn: { opacity: 0.65 },
   outlineBtn: { borderColor: colors.goldDark, borderWidth: 1, borderRadius: radius.md, padding: 12, alignItems: 'center', marginTop: 10 },
-  outlineBtnText: { color: colors.primary, fontWeight: '900' },
+  outlineBtnText: { fontFamily: 'TajawalBold', fontSize: 15, color: colors.primary, fontWeight: '900' },
   logoutBtn: { padding: 14, alignItems: 'center', backgroundColor: '#FEF3F2', borderRadius: 10, marginTop: 16 },
-  logoutText: { color: '#B42318', fontSize: 16, fontWeight: '700' },
+  logoutText: { fontFamily: 'TajawalBold', color: '#B42318', fontSize: 16, fontWeight: '700' },
   modalShade: { flex: 1, backgroundColor: 'rgba(0,40,34,.7)' },
   modalScroll: { flexGrow: 1, justifyContent: 'center', padding: 18 },
   modalCard: { backgroundColor: colors.surface, padding: 18, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.goldDark, ...shadow },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  modalTitle: { color: colors.primary, fontSize: 19, fontWeight: '900' },
-  modalClose: { color: colors.goldDark, fontWeight: '900' },
-  fieldLabel: { color: colors.ink, fontSize: 13, fontWeight: '800', textAlign: 'right', marginTop: 8, marginBottom: 5 },
+  modalTitle: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 20, fontWeight: '900' },
+  modalClose: { fontFamily: 'TajawalBold', fontSize: 15, color: colors.goldDark, fontWeight: '900' },
+  fieldLabel: { fontFamily: 'TajawalBold', color: colors.ink, fontSize: 14, fontWeight: '800', textAlign: 'right', marginTop: 8, marginBottom: 5 },
   input: { borderWidth: 1, borderColor: colors.line, backgroundColor: colors.background, borderRadius: radius.sm, paddingHorizontal: 12, height: 48, color: colors.ink },
   soundChoices: { flexDirection: 'row-reverse', gap: 6, marginTop: 3 },
   soundChoice: { flex: 1, paddingVertical: 9, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.line, alignItems: 'center' },
   soundChoiceActive: { backgroundColor: colors.gold, borderColor: colors.goldDark },
-  soundChoiceText: { color: colors.muted, fontSize: 11, fontWeight: '700' },
-  soundChoiceTextActive: { color: colors.primary, fontWeight: '900' },
+  soundChoiceText: { fontFamily: 'TajawalBold', color: colors.muted, fontSize: 13, fontWeight: '700' },
+  soundChoiceTextActive: { fontFamily: 'TajawalBold', fontSize: 15, color: colors.primary, fontWeight: '900' },
+  updateBox: { marginTop: 10, borderRadius: radius.sm, backgroundColor: '#F1F8F5', borderWidth: 1, borderColor: colors.line, padding: 12 },
+  updateTitle: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 16, fontWeight: '900', textAlign: 'right' },
+  downloadProgressBox: { marginTop: 10 },
+  downloadProgressTrack: { height: 10, borderRadius: 999, overflow: 'hidden', backgroundColor: '#DCE7E3' },
+  downloadProgressFill: { height: '100%', borderRadius: 999, backgroundColor: colors.primary },
+  downloadProgressText: { fontFamily: 'TajawalBold', marginTop: 6, color: colors.primary, fontSize: 13, fontWeight: '800', textAlign: 'center', fontVariant: ['tabular-nums'] },
 });

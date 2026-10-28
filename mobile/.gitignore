@@ -43,3 +43,16 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Private mobile setup and handset diagnostics
+google-services.json
+config/**/google-services.json
+*service-account*.json
+assets/payment-accounts/
+/*.xml
+/*.png
+/*.jpg
+/*.jpeg
+/*.log
+/.env*
+/build-export*/

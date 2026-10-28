@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { product } from '../config/product';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Alert,
   KeyboardAvoidingView, Platform, Modal, ActivityIndicator, ScrollView, Image,
@@ -8,6 +9,7 @@ import { useAuth } from '../store/auth-context';
 import {
   getBaseUrl, getStoredBaseUrl, getDefaultBaseUrl,
   setStoredBaseUrl, clearStoredBaseUrl, pingServer, isValidBaseUrl, ServerHealth,
+  prepareOnlineRoute,
 } from '../config/api';
 import { resetClient } from '../api/client';
 import {
@@ -48,6 +50,18 @@ export default function LoginScreen() {
     }
     setLoading(true);
     try {
+      const route = await prepareOnlineRoute();
+      if (!route.ok) {
+        const explicit = route.route === 'explicit';
+        Alert.alert(
+          explicit ? 'الخادم المحدد غير متاح' : 'تعذر الاتصال',
+          explicit
+            ? `تعذر الوصول إلى خادم التطوير المحدد: ${route.url}\n${route.error || ''}`
+            : 'تحقق من الإنترنت أو شبكة المكتب ومن إعداد «المحلية فقط». يمكنك اختيار «تسجيل الدخول دون اتصال» للعمل بالبيانات المحفوظة.',
+        );
+        return;
+      }
+      await resetClient();
       await login(username.trim(), password, rememberMe);
     } catch (err: any) {
       const status = err.response?.status;
@@ -72,7 +86,7 @@ export default function LoginScreen() {
       <View style={styles.card}>
         <Image source={brandImage} style={styles.brandImage} resizeMode="contain" />
         <Text style={styles.logo}>ALRAQi ERP</Text>
-        <Text style={styles.subtitle}>إدارة المديونية والتحصيل</Text>
+        <Text style={styles.subtitle}>{product.subtitle}</Text>
         <TextInput
           style={styles.input}
           placeholder="اسم المستخدم"
@@ -119,8 +133,8 @@ export default function LoginScreen() {
           <TouchableOpacity style={styles.offlineButton} onPress={handleOffline}>
             <Ionicons name="finger-print" size={22} color={colors.primary} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.offlineTitle}>فتح البيانات المحفوظة</Text>
-              <Text style={styles.offlineHint}>يعمل دون إنترنت باسم {cachedUser.fullName}</Text>
+              <Text style={styles.offlineTitle}>الدخول بالبصمة</Text>
+              <Text style={styles.offlineHint}>فتح آمن باسم {cachedUser.fullName} بعد التحقق من بصمتك</Text>
             </View>
           </TouchableOpacity>
         )}
@@ -366,63 +380,63 @@ const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'center', backgroundColor: colors.background, padding: 20 },
   card: { backgroundColor: '#fff', borderRadius: radius.lg, padding: 24, borderWidth: 1, borderColor: colors.line, ...shadow },
   brandImage: { width: 190, height: 145, alignSelf: 'center', marginBottom: 8 },
-  logo: { fontSize: 22, fontWeight: '900', color: colors.primary, textAlign: 'center', marginBottom: 3 },
-  subtitle: { fontSize: 13, color: colors.muted, textAlign: 'center', marginBottom: 28 },
-  input: { borderWidth: 1, borderColor: colors.line, backgroundColor: '#FAFBFA', borderRadius: 14, padding: 14, fontSize: 16, marginBottom: 13, color: colors.ink, textAlign: 'right' },
+  logo: { fontFamily: 'TajawalBold', fontSize: 23, fontWeight: '900', color: colors.primary, textAlign: 'center', marginBottom: 3 },
+  subtitle: { fontFamily: 'TajawalRegular', fontSize: 14, color: colors.muted, textAlign: 'center', marginBottom: 28 },
+  input: { fontFamily: 'TajawalRegular', borderWidth: 1, borderColor: colors.line, backgroundColor: '#FAFBFA', borderRadius: 14, padding: 14, fontSize: 16, marginBottom: 13, color: colors.ink, textAlign: 'right' },
   passwordWrap: { borderWidth: 1, borderColor: colors.line, backgroundColor: '#FAFBFA', borderRadius: 14, paddingHorizontal: 14, marginBottom: 13, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  passwordInput: { flex: 1, paddingVertical: 14, fontSize: 16, color: colors.ink, textAlign: 'right' },
+  passwordInput: { fontFamily: 'TajawalRegular', flex: 1, paddingVertical: 14, fontSize: 16, color: colors.ink, textAlign: 'right' },
   button: { backgroundColor: colors.gold, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 5, ...shadow },
-  buttonText: { color: colors.primary, fontSize: 18, fontWeight: '800' },
+  buttonText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 18, fontWeight: '800' },
   serverLink: { marginTop: 16, padding: 10, alignItems: 'center' },
-  serverLinkText: { color: colors.secondary, fontSize: 11 },
+  serverLinkText: { fontFamily: 'TajawalRegular', color: colors.secondary, fontSize: 13 },
   offlineButton: { marginTop: 12, padding: 12, flexDirection: 'row-reverse', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: colors.primarySoft },
-  offlineTitle: { color: colors.primary, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  offlineHint: { color: colors.muted, fontSize: 10, marginTop: 2, textAlign: 'right' },
-  forgot: { color: colors.secondary, fontSize: 12, fontWeight: '700', textAlign: 'center', marginTop: 14 },
+  offlineTitle: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 14, fontWeight: '800', textAlign: 'right' },
+  offlineHint: { fontFamily: 'TajawalRegular', color: colors.muted, fontSize: 13, marginTop: 2, textAlign: 'right' },
+  forgot: { fontFamily: 'TajawalBold', color: colors.secondary, fontSize: 13, fontWeight: '700', textAlign: 'center', marginTop: 14 },
   rememberRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 9, marginBottom: 8, paddingHorizontal: 3 },
-  rememberTitle: { color: colors.primary, fontSize: 13, fontWeight: '800', textAlign: 'right' },
-  rememberHint: { color: colors.muted, fontSize: 10, marginTop: 2, textAlign: 'right' },
+  rememberTitle: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 14, fontWeight: '800', textAlign: 'right' },
+  rememberHint: { fontFamily: 'TajawalRegular', color: colors.muted, fontSize: 13, marginTop: 2, textAlign: 'right' },
 
   // Modal
   modalContainer: { flex: 1, backgroundColor: colors.background },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: colors.primary, paddingTop: 50 },
-  modalTitle: { color: '#fff', fontSize: 18, fontWeight: '600' },
-  modalClose: { color: colors.gold, fontSize: 22, fontWeight: '800', padding: 4 },
+  modalTitle: { fontFamily: 'TajawalMedium', color: '#fff', fontSize: 18, fontWeight: '600' },
+  modalClose: { fontFamily: 'TajawalBold', color: colors.gold, fontSize: 23, fontWeight: '800', padding: 4 },
 
   // Cards
-  cardTitle: { fontSize: 14, fontWeight: '700', color: colors.primary, marginBottom: 10 },
-  label: { fontSize: 13, color: colors.muted, marginBottom: 6, marginTop: 8, textAlign: 'right' },
+  cardTitle: { fontFamily: 'TajawalBold', fontSize: 15, fontWeight: '700', color: colors.primary, marginBottom: 10 },
+  label: { fontFamily: 'TajawalRegular', fontSize: 14, color: colors.muted, marginBottom: 6, marginTop: 8, textAlign: 'right' },
   buttonRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
   btn: { flex: 1, padding: 12, borderRadius: 8, alignItems: 'center' },
   btnTest: { backgroundColor: colors.primary },
   btnSave: { backgroundColor: colors.gold },
   btnReset: { backgroundColor: colors.danger },
-  btnText: { color: colors.surface, fontSize: 14, fontWeight: '700' },
-  note: { fontSize: 12, color: colors.muted, marginTop: 4, lineHeight: 18, textAlign: 'right' },
+  btnText: { fontFamily: 'TajawalBold', color: colors.surface, fontSize: 15, fontWeight: '700' },
+  note: { fontFamily: 'TajawalRegular', fontSize: 13, color: colors.muted, marginTop: 4, lineHeight: 18, textAlign: 'right' },
 
   // Status row
   statusRow: { flexDirection: 'row-reverse', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.line },
-  statusLabel: { fontSize: 11, color: '#999', marginBottom: 2 },
-  statusValue: { fontSize: 13, color: '#333', fontWeight: '500' },
+  statusLabel: { fontFamily: 'TajawalRegular', fontSize: 13, color: '#999', marginBottom: 2 },
+  statusValue: { fontFamily: 'TajawalMedium', fontSize: 14, color: '#333', fontWeight: '500' },
   healthBlock: { alignItems: 'flex-end' },
-  statusBadge: { fontSize: 11, fontWeight: '700', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, overflow: 'hidden' },
+  statusBadge: { fontFamily: 'TajawalBold', fontSize: 13, fontWeight: '700', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, overflow: 'hidden' },
   badgeOk: { color: '#fff', backgroundColor: colors.success },
   badgeFail: { color: '#fff', backgroundColor: colors.danger },
-  pingText: { fontSize: 10, color: '#999', marginTop: 2 },
+  pingText: { fontFamily: 'TajawalRegular', fontSize: 13, color: '#999', marginTop: 2 },
 
   // Info
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
-  infoLabel: { fontSize: 12, color: '#999' },
-  infoValue: { fontSize: 12, color: '#333', maxWidth: '70%' },
+  infoLabel: { fontFamily: 'TajawalRegular', fontSize: 13, color: '#999' },
+  infoValue: { fontFamily: 'TajawalRegular', fontSize: 13, color: '#333', maxWidth: '70%' },
 
   // Result box
   resultBox: { marginTop: 12, padding: 12, borderRadius: 8 },
   resultOk: { backgroundColor: '#e8f5e9' },
   resultFail: { backgroundColor: '#fdecea' },
-  resultTitle: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8 },
-  resultError: { fontSize: 13, color: '#b71c1c' },
+  resultTitle: { fontFamily: 'TajawalMedium', fontSize: 15, fontWeight: '600', color: '#333', marginBottom: 8 },
+  resultError: { fontFamily: 'TajawalRegular', fontSize: 14, color: '#b71c1c' },
   resultGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   infoLine: { minWidth: '45%' },
-  infoLineLabel: { fontSize: 11, color: '#999' },
-  infoLineValue: { fontSize: 13, color: '#333', fontWeight: '500' },
+  infoLineLabel: { fontFamily: 'TajawalRegular', fontSize: 13, color: '#999' },
+  infoLineValue: { fontFamily: 'TajawalMedium', fontSize: 14, color: '#333', fontWeight: '500' },
 });

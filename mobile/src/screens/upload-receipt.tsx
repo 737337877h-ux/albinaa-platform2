@@ -69,15 +69,15 @@ export default function UploadReceiptScreen({ route, navigation }: any) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, padding: 20 },
-  title: { fontSize: 20, fontWeight: '900', color: colors.primary, textAlign: 'center', marginBottom: 24 },
+  title: { fontFamily: 'TajawalBold', fontSize: 20, fontWeight: '900', color: colors.primary, textAlign: 'center', marginBottom: 24 },
   preview: { width: '100%', height: 300, borderRadius: radius.md, marginBottom: 16 },
   placeholder: { width: '100%', height: 300, borderRadius: radius.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, justifyContent: 'center', alignItems: 'center', marginBottom: 16, ...shadow },
-  placeholderText: { color: colors.muted, fontSize: 16 },
+  placeholderText: { fontFamily: 'TajawalRegular', color: colors.muted, fontSize: 16 },
   buttons: { flexDirection: 'row', gap: 12, marginBottom: 24 },
   cameraBtn: { flex: 1, backgroundColor: colors.primary, padding: 16, borderRadius: radius.md, alignItems: 'center' },
   galleryBtn: { flex: 1, backgroundColor: colors.gold, padding: 16, borderRadius: radius.md, alignItems: 'center' },
-  btnText: { color: colors.surface, fontSize: 16, fontWeight: '800' },
+  btnText: { fontFamily: 'TajawalBold', color: colors.surface, fontSize: 16, fontWeight: '800' },
   uploadBtn: { backgroundColor: colors.gold, padding: 18, borderRadius: radius.md, alignItems: 'center', ...shadow },
   disabled: { opacity: 0.6 },
-  uploadText: { color: colors.primary, fontSize: 18, fontWeight: '900' },
+  uploadText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 18, fontWeight: '900' },
 });

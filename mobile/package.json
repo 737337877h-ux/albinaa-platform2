@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.3.13",
+  "version": "1.3.72",
   "main": "index.ts",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -11,20 +11,27 @@
     "@tanstack/react-query": "^5.101.4",
     "axios": "^1.18.1",
     "expo": "~57.0.11",
+    "expo-audio": "~57.0.4",
     "expo-background-fetch": "~57.0.8",
+    "expo-camera": "~57.0.4",
     "expo-constants": "~57.0.9",
     "expo-contacts": "~57.0.3",
+    "expo-document-picker": "~57.0.1",
+    "expo-file-system": "~57.0.2",
     "expo-font": "~57.0.1",
     "expo-image-manipulator": "~57.0.8",
     "expo-image-picker": "~57.0.8",
+    "expo-intent-launcher": "~57.0.1",
     "expo-local-authentication": "~57.0.2",
     "expo-location": "~57.0.8",
     "expo-notifications": "~57.0.9",
     "expo-secure-store": "~57.0.1",
+    "expo-sharing": "~57.0.18",
     "expo-splash-screen": "~57.0.5",
     "expo-sqlite": "~57.0.1",
     "expo-status-bar": "~57.0.1",
     "expo-task-manager": "~57.0.8",
+    "jsbarcode": "3.12.3",
     "react": "19.2.3",
     "react-hook-form": "^7.83.0",
     "react-native": "0.86.2",
@@ -51,7 +58,10 @@
     "web": "expo start --web",
     "lint": "eslint src/ App.tsx",
     "typecheck": "tsc --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "android:prepare": "expo prebuild --platform android --no-install && node scripts/install-product-hook.cjs",
+    "android:collector": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-collector.ps1",
+    "android:operations": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-operations.ps1"
   },
   "private": true
 }

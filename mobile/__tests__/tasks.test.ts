@@ -1,5 +1,14 @@
 import { describe, expect, it } from '@jest/globals';
-import { collapseTasksByCustomer } from '../src/utils/tasks';
+import { collapseTasksByCustomer, isDueForTodayWork, taskDateKey, isDailyPriority } from '../src/utils/tasks';
+
+it('keeps a scheduled promise selectable beside a daily recommendation for the same account', () => {
+  const tasks = [
+    { id: 'priority', customerId: 'advance', taskType: 'risk_high' },
+    { id: 'promise', customerId: 'advance', taskType: 'promise_due' },
+  ];
+  expect(collapseTasksByCustomer(tasks.filter(t => !isDailyPriority(t.taskType))).map(t => t.id)).toEqual(['promise']);
+  expect(isDailyPriority('followup_due')).toBe(false);
+});
 
 describe('collapseTasksByCustomer', () => {
   it('shows every customer once and keeps the most important task', () => {
@@ -20,5 +29,18 @@ describe('collapseTasksByCustomer', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('focused');
+  });
+});
+
+describe('today task policy', () => {
+  it('keeps today separate from overdue and future tasks', () => {
+    expect(isDueForTodayWork('2026-08-29', '2026-08-30')).toBe(false);
+    expect(isDueForTodayWork('2026-08-30T00:00:00.000Z', '2026-08-30')).toBe(true);
+    expect(isDueForTodayWork('2026-08-31', '2026-08-30')).toBe(false);
+  });
+
+  it('normalizes ISO task dates without shifting their calendar day', () => {
+    expect(taskDateKey('2026-08-30T23:59:59.000Z')).toBe('2026-08-30');
+    expect(taskDateKey(null)).toBe('');
   });
 });

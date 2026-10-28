@@ -3,27 +3,46 @@ import type { AuthUser } from '../api/auth';
 
 const TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
+const SESSION_KEY = 'albinaa.session.v2';
+
+async function tokens(): Promise<{accessToken: string; refreshToken: string} | null> {
+  const value = await SecureStore.getItemAsync(SESSION_KEY);
+  if (value !== null) return JSON.parse(value);
+  // Existing installations migrate on the next successful login/refresh.
+  const [accessToken, refreshToken] = await Promise.all([
+    SecureStore.getItemAsync(TOKEN_KEY), SecureStore.getItemAsync(REFRESH_TOKEN_KEY),
+  ]);
+  return accessToken || refreshToken ? {accessToken: accessToken || '', refreshToken: refreshToken || ''} : null;
+}
 const CACHED_USER_KEY = 'albinaa.cached_user';
 const BIOMETRIC_KEY = 'albinaa.biometric_enabled';
+const ACTIVITY_KEY = 'albinaa.last_user_activity';
+export async function getLastUserActivity() { return Number(await SecureStore.getItemAsync(ACTIVITY_KEY) || 0); }
+let activityWrite: Promise<void> = Promise.resolve();
+export function setLastUserActivity(value: number) {
+  activityWrite = activityWrite.catch(() => undefined).then(() => SecureStore.setItemAsync(ACTIVITY_KEY, String(value)));
+  return activityWrite;
+}
 const REMEMBER_ME_KEY = 'albinaa.remember_me';
 const REMEMBERED_USERNAME_KEY = 'albinaa.remembered_username';
 
 export async function getAccessToken(): Promise<string | null> {
-  return SecureStore.getItemAsync(TOKEN_KEY);
+  return (await tokens())?.accessToken || null;
 }
 
 export async function getRefreshToken(): Promise<string | null> {
-  return SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+  return (await tokens())?.refreshToken || null;
 }
 
 export async function setTokens(accessToken: string, refreshToken: string): Promise<void> {
-  await SecureStore.setItemAsync(TOKEN_KEY, accessToken);
-  await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
+  if (!accessToken || !refreshToken) throw new Error('استجابة جلسة غير مكتملة');
+  // A single encrypted write cannot leave a new access token paired with an old refresh token.
+  await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify({accessToken, refreshToken}));
 }
 
 export async function clearTokens(): Promise<void> {
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
-  await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+  // Tombstone also prevents obsolete legacy tokens from becoming active again.
+  await SecureStore.setItemAsync(SESSION_KEY, 'null');
 }
 
 export async function getCachedUser(): Promise<AuthUser | null> {
@@ -38,6 +57,7 @@ export async function getCachedUser(): Promise<AuthUser | null> {
 }
 
 export async function setCachedUser(user: AuthUser): Promise<void> {
+  await (await import('../db/database')).purgeInventoryCosts(user.permissions??[]);
   await SecureStore.setItemAsync(CACHED_USER_KEY, JSON.stringify(user));
 }
 

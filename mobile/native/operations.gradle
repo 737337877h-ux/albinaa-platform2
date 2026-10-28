@@ -1,0 +1,33 @@
+// Applied by the native build hook. Default builds retain the collector identity.
+def operations = project.findProperty('alraqiApp') == 'operations'
+def envOperations = System.getenv('ALRAQI_APP') == 'operations'
+if (operations != envOperations) {
+    throw new GradleException('ALRAQI_APP and -PalraqiApp must select the same application. Use scripts/build-operations.ps1.')
+}
+android.defaultConfig {
+    manifestPlaceholders.alraqiAppLabel = operations ? 'الراقي إدارة العملاء والمخزون' : '@string/app_name'
+    manifestPlaceholders.alraqiScheme = operations ? 'alraqi-operations' : 'albinaa'
+    manifestPlaceholders.alraqiIcon = operations ? '@mipmap/operations_launcher' : '@mipmap/ic_launcher'
+    manifestPlaceholders.alraqiRoundIcon = operations ? '@mipmap/operations_launcher' : '@mipmap/ic_launcher_round'
+    if (operations) {
+        applicationId 'com.alraqi.operations'
+        versionCode 9
+        versionName '1.0.8'
+    }
+}
+
+if (operations) {
+    android.sourceSets.main.res.srcDir '../../native/operations-res'
+} else {
+    android.sourceSets.main.res.srcDir '../../native/collector-res'
+}
+
+// Gradle must not reuse the other application's embedded JS/config when the
+// source is unchanged and only the selected product differs.
+rootProject.allprojects { p ->
+    p.tasks.configureEach { t ->
+        if (t.name.contains('Bundle') || t.name == 'createExpoConfig') {
+            t.inputs.property('alraqiProduct', operations ? 'operations' : 'collector')
+        }
+    }
+}

@@ -5,7 +5,7 @@ const ARABIC_DIGITS: Record<string, string> = {
   '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
 };
 
-function westernDigits(value: string): string {
+export function westernDigits(value: string): string {
   return value.replace(/[٠-٩۰-۹]/g, (digit) => ARABIC_DIGITS[digit] || digit);
 }
 
@@ -62,7 +62,8 @@ export function taskLabel(value: unknown): string {
   const raw = String(value || '').trim();
   const labels: Record<string, string> = {
     visit: 'زيارة', call: 'اتصال', sms: 'رسالة نصية', whatsapp: 'واتساب',
-    followup: 'متابعة', collection: 'تحصيل', other: 'أخرى',
+    followup: 'متابعة', followup_due: 'متابعة مستحقة', collection: 'تحصيل',
+    collection_remaining: 'تحصيل المبلغ المتبقي', other: 'أخرى',
     promise_due: 'وعد سداد مستحق', promise_due_today: 'وعد مستحق اليوم',
     promise_overdue: 'وعد سداد متأخر', promise_escalation: 'تصعيد وعد متأخر',
     followup_overdue: 'متابعة متأخرة', risk_critical: 'مخاطر حرجة', risk_high: 'مخاطر مرتفعة',
