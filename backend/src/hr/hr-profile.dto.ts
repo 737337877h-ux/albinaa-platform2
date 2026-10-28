@@ -1,4 +1,4 @@
-import {IsIn,IsInt,IsOptional,IsString,Matches,Max,MaxLength,Min,MinLength,IsUUID} from 'class-validator';
+import {IsIn,IsInt,IsOptional,IsString,Matches,MaxLength,Min,MinLength,IsUUID} from 'class-validator';
 export class HrProfileDto {
  @IsInt() @Min(1) version!:number;
  @IsOptional() @IsString() @MaxLength(40) phone?:string;

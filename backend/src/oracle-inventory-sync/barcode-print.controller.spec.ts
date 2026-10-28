@@ -1,4 +1,5 @@
 import { BarcodePrintService } from './barcode-print.controller';
+import JsBarcode from 'jsbarcode';
 describe('barcode queue safety', () => {
  const org='ced51b8c-59bb-4353-8308-a50667ef5d6c';
  const actor:any={id:'e9436c07-4896-4f9b-a290-1585030a039e',organizationId:org};
@@ -10,8 +11,8 @@ describe('barcode queue safety', () => {
  it('rejects unreadably narrow labels before writing',async()=>{await expect(service.create(actor,{...dto,widthMm:20})).rejects.toThrow('زد عرض');expect(db.$executeRaw).not.toHaveBeenCalled();});
  it('rejects missing or wrong agent secrets without touching the queue',async()=>{await expect(service.next('')).rejects.toThrow();await expect(service.next('y'.repeat(64))).rejects.toThrow();expect(db.$executeRaw).not.toHaveBeenCalled();});
  it('returns existing job for a duplicate operation and detects changed content',async()=>{
-  const result:any={};require('jsbarcode')(result,dto.itemCode,{format:'CODE128',displayValue:false});
-  const {operationId,...payload}=dto;db.$queryRaw.mockResolvedValue([{id:'existing',status:'submitted',payload:{...payload,bits:result.encodings.map((e:any)=>e.data).join('')}}]);
+  const result:any={};JsBarcode(result,dto.itemCode,{format:'CODE128',displayValue:false});
+  const {operationId:_operationId,...payload}=dto;db.$queryRaw.mockResolvedValue([{id:'existing',status:'submitted',payload:{...payload,bits:result.encodings.map((e:any)=>e.data).join('')}}]);
   expect(await service.create(actor,dto)).toEqual({id:'existing',status:'submitted'});
   await expect(service.create(actor,{...dto,copies:2})).rejects.toThrow('بإعدادات مختلفة');
  });

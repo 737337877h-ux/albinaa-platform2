@@ -1,6 +1,7 @@
 import { BadRequestException, Body, ConflictException, Controller, Get, Headers, Injectable, Post, UnauthorizedException } from '@nestjs/common';
 import { IsBoolean, IsInt, IsNumber, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
 import { randomUUID, timingSafeEqual } from 'crypto';
+import JsBarcode from 'jsbarcode';
 import { PrismaService } from '../prisma/prisma.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
@@ -40,7 +41,7 @@ export class BarcodePrintService {
     if (actor.organizationId !== this.org()) throw new BadRequestException('الطابعة غير مهيأة لهذه المنشأة');
     const { operationId, ...payload } = dto;
     const encoded: any = {};
-    require('jsbarcode')(encoded, dto.itemCode, { format: 'CODE128', displayValue: false });
+    JsBarcode(encoded, dto.itemCode, { format: 'CODE128', displayValue: false });
     const bits = encoded.encodings.map((e: any) => e.data).join('');
     // Two physical dots per narrow bar plus a ten-module quiet zone at each end.
     if ((bits.length + 20) * 2 > (dto.widthMm - 4) * 203 / 25.4) throw new BadRequestException('كود الصنف طويل لهذا المقاس؛ زد عرض الملصق');

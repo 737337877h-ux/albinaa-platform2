@@ -1,4 +1,5 @@
 'use client';
+import NextImage from 'next/image';
 import {useState} from 'react';
 import {api} from '@/lib/api';
 import {createRequestId} from '@/lib/request-id';
@@ -16,5 +17,5 @@ export function TaskAttachmentList({files,title}:{files?:TaskAttachment[];title:
  const [preview,setPreview]=useState<{name:string;uri:string}|null>(null),[loading,setLoading]=useState<string|null>(null);
  async function open(f:TaskAttachment){setLoading(f.id);try{const d=await api<{name:string;mime:string;base64:string}>('/hr/tasks/attachments/'+f.id);if(d.mime.startsWith('image/'))setPreview({name:d.name,uri:`data:${d.mime};base64,${d.base64}`});else {const url=URL.createObjectURL(new Blob([Uint8Array.from(atob(d.base64),c=>c.charCodeAt(0))],{type:d.mime}));const a=document.createElement('a');a.href=url;a.download=d.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}}catch(e){toast((e as Error).message,'err');}finally{setLoading(null);}}
  if(!files?.length)return null;
- return <section className="space-y-2 rounded border p-3"><h3 className="font-bold">{title}</h3><div className="flex flex-wrap gap-2">{files.map(f=><Button key={f.id} variant="secondary" disabled={loading!==null} onClick={()=>void open(f)}>{loading===f.id?'جارٍ الفتح…':f.mime.startsWith('image/')?'عرض الصورة':'تنزيل الملف'}: {f.name}{f.createdAt?' — '+new Date(f.createdAt).toLocaleString('ar-YE'):''}</Button>)}</div><Dialog open={!!preview} onClose={()=>setPreview(null)} title={preview?.name??'المرفق'}>{preview&&<img src={preview.uri} alt={preview.name} className="max-h-[75vh] w-full object-contain"/>}</Dialog></section>;
+ return <section className="space-y-2 rounded border p-3"><h3 className="font-bold">{title}</h3><div className="flex flex-wrap gap-2">{files.map(f=><Button key={f.id} variant="secondary" disabled={loading!==null} onClick={()=>void open(f)}>{loading===f.id?'جارٍ الفتح…':f.mime.startsWith('image/')?'عرض الصورة':'تنزيل الملف'}: {f.name}{f.createdAt?' — '+new Date(f.createdAt).toLocaleString('ar-YE'):''}</Button>)}</div><Dialog open={!!preview} onClose={()=>setPreview(null)} title={preview?.name??'المرفق'}>{preview&&<NextImage unoptimized width={1200} height={900} src={preview.uri} alt={preview.name} className="max-h-[75vh] w-full object-contain"/>}</Dialog></section>;
 }

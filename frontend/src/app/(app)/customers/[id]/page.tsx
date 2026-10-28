@@ -1,4 +1,5 @@
 'use client';
+import NextImage from 'next/image';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
@@ -1612,7 +1613,7 @@ export default function Customer360Page() {
               <div className="flex max-h-[75vh] items-center justify-center overflow-auto rounded-xl bg-concrete-100 p-3 dark:bg-iron-900">
                 {receiptPreviewMime === 'application/pdf'
                   ? <object data={receiptPreviewUrl} type="application/pdf" className="h-[70vh] w-full rounded-lg" aria-label={receiptPreviewName} />
-                  : <img src={receiptPreviewUrl} alt={receiptPreviewName} className="max-h-[70vh] max-w-full rounded-lg object-contain" />}
+                  : <NextImage unoptimized width={1200} height={900} src={receiptPreviewUrl} alt={receiptPreviewName} className="max-h-[70vh] max-w-full rounded-lg object-contain" />}
               </div>
             )}
           </Dialog>

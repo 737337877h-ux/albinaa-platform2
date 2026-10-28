@@ -62,7 +62,7 @@ export class HrRequestsService {
    if(d.status==='cancelled'){if(!self)throw new ForbiddenException('يمكن للموظف إلغاء طلبه فقط');}
    else if(!u.permissions.includes('hr.requests.review')||self||r.submittedBy===u.id)throw new ForbiddenException('يلزم مسؤول آخر مخول لمراجعة الطلب');
    if(d.status==='approved'&&!r.employee.active)throw new BadRequestException('الموظف غير نشط');
-   let plan:{}|{monthlyInstallment:Prisma.Decimal;installmentStartMonth:string}={};
+   let plan:Partial<{monthlyInstallment:Prisma.Decimal;installmentStartMonth:string}>={};
    if(d.status==='approved'&&r.kind==='advance'){
     if(!d.monthlyInstallment||!d.installmentStartMonth)throw new BadRequestException('حدد قسط السلفة وشهر بداية الاستقطاع من شاشة الطلبات');
     await tx.$queryRaw`SELECT id FROM hr_employees WHERE id=${r.employeeId}::uuid FOR UPDATE`;

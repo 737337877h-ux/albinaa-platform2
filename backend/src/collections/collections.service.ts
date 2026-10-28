@@ -390,7 +390,7 @@ export class CollectionsService {
       .filter((collector) => collector.oracleCollectorNo !== null)
       .map((collector) => [String(collector.oracleCollectorNo), collector]));
 
-    const oracleItems = durableReceipts.flatMap(({ row, request: original }) => {
+    const oracleItems = durableReceipts.flatMap(({ row }) => {
       const request = stateByAudit.get(row.id);
       if (!request || !countableReceiptRequest(request)) return [];
       const customer = request.platformCustomerId ? customerById.get(request.platformCustomerId)

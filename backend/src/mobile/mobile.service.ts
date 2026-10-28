@@ -16,12 +16,11 @@ import { UploadOracleRequestReceiptDto } from './dto/upload-oracle-request-recei
 import { UpdateCustomerFieldDto } from './dto/update-customer-field.dto';
 import { DashboardService } from '../dashboard/dashboard.service';
 import { priorityOfTaskType, REFRESHED_DAILY_TASK_TYPES } from '../tasks/tasks.service';
-import { isActionableDebtorBalance, isSignificantBalance, normalizedCurrencyCode } from '../common/debt-followup-policy';
+import { isActionableDebtorBalance, isSignificantBalance } from '../common/debt-followup-policy';
 import { hasMobileFeature } from '../common/mobile-feature-permissions';
 import { OracleInventoryReadService } from '../oracle-inventory-sync/oracle-inventory-read.service';
 import { OracleInventoryItemsQueryDto, OracleInventorySourceQueryDto } from '../oracle-inventory-sync/dto/oracle-inventory-query.dto';
 import { OracleTestRequestsService } from '../oracle-test-requests/oracle-test-requests.service';
-import { randomUUID } from 'crypto';
 import { durableOracleRequest } from '../common/oracle-request-audit';
 import { NotificationsService } from '../notifications/notifications.service';
 import { inventoryCostAccess } from './inventory-cost-access';
@@ -74,11 +73,6 @@ export function mobileTaskBucket(
     ? dueDate.toISOString().slice(0, 10)
     : String(dueDate ?? '').slice(0, 10);
   return due < todayKey ? 'overdue' : due === todayKey ? 'today' : 'upcoming';
-}
-
-function oracleCurrencyToPlatform(code: unknown): string {
-  const normalized = normalizedCurrencyCode(String(code ?? ''));
-  return normalized === 'YR' ? 'YER' : normalized === 'SR' ? 'SAR' : normalized;
 }
 
 export function mobileOracleReceiptCollection(

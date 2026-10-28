@@ -26,7 +26,7 @@ describe('existing mobile contact attempts', () => {
   it('uses the same normalized key for insert and replay lookup without duplicating the record', async () => {
     let stored: any;
     const tx: any = {
-      $queryRaw: jest.fn(async (sql: TemplateStringsArray, ...args: any[]) => sql.join('').includes('SELECT id,status') ? (stored ? [stored] : []) : []),
+      $queryRaw: jest.fn(async (sql: TemplateStringsArray, ..._args: any[]) => sql.join('').includes('SELECT id,status') ? (stored ? [stored] : []) : []),
       $executeRaw: jest.fn(async (_sql: TemplateStringsArray, id: string) => { stored = {id, status:'pending'}; }),
       customerAssignment: {findFirst: jest.fn().mockResolvedValue(null)},
     };
