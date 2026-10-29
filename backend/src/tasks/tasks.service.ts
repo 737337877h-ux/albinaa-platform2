@@ -5,6 +5,7 @@ import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { isActionableDebtorBalance } from '../common/debt-followup-policy';
+import { orgCalendarDayUtc } from '../common/org-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { PromisesService } from '../promises/promises.service';
 import { CompleteTaskDto, TASK_COMPLETE_RESULT_LABELS } from './dto/complete-task.dto';
@@ -142,16 +143,6 @@ function fmtAmount(n: number): string {
 }
 
 /**
- * منتصف ليلة التوقيت المحلي كـ UTC — أعمدة @db.Date تُخزَّن وتُقرأ بمنتصف ليلة UTC،
- * فمقارنة التواريخ المحلية مباشرة تنكسر فرق التوقيت (مثل UTC+3). هذا يضمن أن
- * «اليوم» يطابق ما يُقرأ فعليًا من قاعدة البيانات.
- */
-function startOfLocalDayUtc(d: Date): Date {
-  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-}
-
-
-/**
  * محرك المهام اليومي — "عمل اليوم" (أهم شاشة حسب المتطلبات الأصلية §10).
  *
  * منذ PR 5 (Daily Work Queue) المصدر الأساسي هو المهام المخزنة المولّدة عبر
@@ -273,7 +264,7 @@ export class TasksService {
   }
 
   private emptyTodayBoard() {
-    const today = startOfLocalDayUtc(new Date());
+    const today = orgCalendarDayUtc();
     return {
       collectorId: null,
       isCollector: false,
@@ -298,7 +289,7 @@ export class TasksService {
     // 0) مسح الوعود المتأخرة أولاً (idempotent)
     await this.promises.sweepOverdue(orgId);
 
-    const today = startOfLocalDayUtc(new Date());
+    const today = orgCalendarDayUtc();
     const tomorrow = new Date(today.getTime() + 86_400_000);
     const isAdmin = user.permissions.includes('customers.read_all');
 
@@ -340,7 +331,7 @@ export class TasksService {
     const orgId = user.organizationId;
     const collector = await this.resolveCollectorOrNull(user, collectorIdParam);
     const isAdmin = user.permissions.includes('customers.read_all');
-    const today = startOfLocalDayUtc(new Date());
+    const today = orgCalendarDayUtc();
     const tomorrow = new Date(today.getTime() + 86_400_000);
     const dueDate = bucket === 'today' ? { gte: today, lt: tomorrow } : { lt: today };
     const tasks = await this.prisma.task.findMany({
@@ -546,7 +537,7 @@ export class TasksService {
     if (!enabled) {
       return { organizationId: orgId, enabled: false, skipped: true, reason: 'smart_tasks_disabled', createdTasks: 0 };
     }
-    const today = startOfLocalDayUtc(new Date());
+    const today = orgCalendarDayUtc();
     const tomorrow = new Date(today.getTime() + 86_400_000);
     const staleDays = Math.max(1, Number(await this.setting(orgId, 'smartTasks.followupStaleDays', 7)) || 7);
     const minDebtAgeDays = Math.max(1, Number(await this.setting(orgId, 'smartTasks.minDebtAgeDays', 7)) || 7);
@@ -1186,7 +1177,7 @@ export class TasksService {
     const [actionableBalance] = await this.operationalDebtorBalances(user.organizationId, [customerId]);
     if (!actionableBalance) return [];
 
-    const today = startOfLocalDayUtc(new Date());
+    const today = orgCalendarDayUtc();
     const tomorrow = new Date(today.getTime() + 86_400_000);
     const selected = new Map<string, typeof tasks[number]>();
     for (const task of tasks) {
@@ -1224,7 +1215,7 @@ export class TasksService {
     bucket: 'today' | 'overdue' | 'upcoming' | 'all' = 'all',
   ) {
     const collector = await this.resolveCollector(user, collectorIdParam);
-    const today = startOfLocalDayUtc(new Date());
+    const today = orgCalendarDayUtc();
     const tomorrow = new Date(today.getTime() + 86_400_000);
     const dueDate = bucket === 'today'
       ? { gte: today, lt: tomorrow }

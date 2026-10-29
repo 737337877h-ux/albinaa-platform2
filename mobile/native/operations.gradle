@@ -16,10 +16,12 @@ android.defaultConfig {
     }
 }
 
-if (operations) {
-    android.sourceSets.main.res.srcDir '../../native/operations-res'
-} else {
-    android.sourceSets.main.res.srcDir '../../native/collector-res'
+// Product resources overlay Expo's generated main resources. Adding both to
+// main gives them equal priority and duplicates notification sounds on prebuild.
+android.buildTypes.configureEach { buildType ->
+    android.sourceSets.getByName(buildType.name).res.srcDir(
+        operations ? '../../native/operations-res' : '../../native/collector-res'
+    )
 }
 
 // Gradle must not reuse the other application's embedded JS/config when the

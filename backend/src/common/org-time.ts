@@ -18,6 +18,11 @@ export function orgDateOnly(value: Date = new Date()): string {
   }).format(value);
 }
 
+/** Calendar date for @db.Date columns, encoded at UTC midnight (not an instant boundary). */
+export function orgCalendarDayUtc(value: Date = new Date()): Date {
+  return new Date(`${orgDateOnly(value)}T00:00:00.000Z`);
+}
+
 /** السنة المحاسبية حسب توقيت المنشأة، بما في ذلك الساعات القريبة من رأس السنة. */
 export function orgYear(value: Date = new Date()): number {
   return Number(orgDateOnly(value).slice(0, 4));
