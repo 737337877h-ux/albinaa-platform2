@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
-import { orgDateOnly } from '../common/org-time';
+import { orgCalendarDayUtc } from '../common/org-time';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RiskRefreshService } from '../risk/risk-refresh.service';
@@ -41,7 +41,7 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
 };
 
 function statusForDueDate(dueDate: Date): 'upcoming' | 'due_today' {
-  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const today = orgCalendarDayUtc();
   return dueDate.getTime() <= today.getTime() ? 'due_today' : 'upcoming';
 }
 
@@ -136,7 +136,7 @@ export class PromisesService {
 
     // البند ثالثًا: الوعد + مهمته في Transaction واحدة — لا وعد بلا مهمة أبدًا
     const promise = await this.prisma.$transaction(async (tx) => {
-      const today = new Date(`${orgDateOnly()}T00:00:00.000Z`);
+      const today = orgCalendarDayUtc();
       await tx.task.updateMany({
         where: { customerId: dto.customerId, assignedTo: collectorId, status: 'open', dueDate: { lte: today } },
         data: { status: 'done' },
@@ -145,7 +145,7 @@ export class PromisesService {
         data: {
           customerId: dto.customerId,
           collectorId,
-          promiseDate: dto.promiseDate ? new Date(dto.promiseDate) : new Date(),
+          promiseDate: dto.promiseDate ? new Date(dto.promiseDate) : orgCalendarDayUtc(),
           dueDate,
           expectedAmount: dto.expectedAmount,
           currencyCode: dto.currencyCode,
@@ -235,7 +235,7 @@ export class PromisesService {
     let newStatus: string | undefined;
     if (dto.dueDate) {
       newDueDate = new Date(dto.dueDate);
-      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const today = orgCalendarDayUtc();
       // البند رابعًا: تاريخ ماضٍ لا يُقبل مباشرة — التأخير له مسار الحالة (unfulfilled بسبب)
       if (newDueDate.getTime() < today.getTime()) {
         throw new BadRequestException(
@@ -305,7 +305,7 @@ export class PromisesService {
         throw new BadRequestException('التأجيل يتطلب newDueDate — لا يبقى وعد مؤجلاً بلا موعد جديد');
       }
       postponeDueDate = new Date(dto.newDueDate);
-      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const today = orgCalendarDayUtc();
       if (postponeDueDate.getTime() <= today.getTime()) {
         throw new BadRequestException('موعد التأجيل يجب أن يكون تاريخًا قادمًا');
       }
@@ -348,7 +348,7 @@ export class PromisesService {
             assignedTo: before.collectorId,
             createdBy: actor.id,
             taskType: 'promise_escalation',
-            dueDate: new Date(),
+            dueDate: orgCalendarDayUtc(),
             priorityReason: `وعد غير منفذ: ${dto.reason}`,
             expectedAmount: before.expectedAmount,
             expectedCurrency: before.currencyCode,
@@ -394,7 +394,7 @@ export class PromisesService {
   async sweepOverdue(orgId: string) {
     // Only approved, uniquely attributable receipts may resolve a promise before escalation.
     await this.settlement?.reconcileForOrganization(orgId, { dryRun: false, automatic: true });
-    const today = new Date(`${orgDateOnly()}T00:00:00.000Z`);
+    const today = orgCalendarDayUtc();
     const overdue = await this.prisma.paymentPromise.findMany({
       where: {
         customer: { organizationId: orgId },
