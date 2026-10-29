@@ -1,0 +1,8 @@
+import {queueHrTaskNotification} from './hr-task-notifications';
+describe('employee task notification recipients',()=>{
+ const assignment={id:'assignment',employee:{active:true,loginUserId:'employee-user'}};
+ const setup=()=>({user:{findMany:jest.fn().mockResolvedValue([{id:'recipient'}])},notification:{create:jest.fn().mockResolvedValue({id:'notification'})},hrPushDelivery:{create:jest.fn()}});
+ it.each(['assigned','complete','return','cancel'] as const)('notifies the assigned employee for %s',async event=>{const tx=setup();await queueHrTaskNotification(tx as any,'org','actor','task',assignment,event);expect(tx.user.findMany.mock.calls[0][0].where).toEqual({organizationId:'org',isActive:true,id:'employee-user'});expect(tx.hrPushDelivery.create).toHaveBeenCalledWith({data:expect.objectContaining({id:'notification',userId:'recipient',payload:expect.objectContaining({assignmentId:'assignment',reviewerEvent:false})})});});
+ it('notifies only authorized reviewers in the same organization and excludes the submitting employee',async()=>{const tx=setup();await queueHrTaskNotification(tx as any,'org','actor','task',assignment,'submit');expect(tx.user.findMany.mock.calls[0][0].where).toMatchObject({organizationId:'org',isActive:true,id:{not:'actor'},userRoles:{some:{role:{rolePermissions:{some:{permission:{code:'hr.tasks.manage'}}}}}}});});
+ it('does not include task content or attachments on the lock screen',async()=>{const tx=setup();await queueHrTaskNotification(tx as any,'org','actor','task',assignment,'assigned');const payload=tx.notification.create.mock.calls[0][0].data.payload;expect(Object.keys(payload).sort()).toEqual(['assignmentId','href','message','reviewerEvent','taskId','title']);});
+});

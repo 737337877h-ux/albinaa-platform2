@@ -1,0 +1,15 @@
+import {BadRequestException,ForbiddenException,ConflictException} from '@nestjs/common';
+import {adenDate,HrAttendanceService,qrSign,qrCheck,scheduleFor,workDayFor} from './hr-attendance.service';
+const now=new Date('2026-09-16T05:00:00Z'),secret='test-signing-key',org='org';
+describe('HR attendance safeguards',()=>{
+ it('binds QR to organization, signature and expiry',()=>{const t=qrSign(secret,org,now);expect(()=>qrCheck(secret,t,org,now)).not.toThrow();expect(()=>qrCheck(secret,t,'other',now)).toThrow(BadRequestException);expect(()=>qrCheck(secret,t+'x',org,now)).toThrow();expect(()=>qrCheck(secret,t,org,new Date(now.getTime()+45001))).toThrow();});
+ it('uses Aden date rather than UTC date at midnight',()=>expect(adenDate(new Date('2026-09-16T22:00:00Z'))).toBe('2026-09-17'));
+ it('associates overnight work before shift end with the previous day',()=>{const e={startTime:'22:00',endTime:'06:00'};expect(workDayFor(e,new Date('2026-09-16T23:00:00Z'))).toBe('2026-09-16');expect(workDayFor(e,new Date('2026-09-17T04:00:00Z'))).toBe('2026-09-17');});
+ it('preserves overnight duration and configured weekly holidays',()=>{const e={startTime:'22:00',endTime:'06:00',breakMinutes:60,workDays:[6,0,1,2,3,4]};const s=scheduleFor(e,'2026-09-18')!;expect(s.workDay).toBe(false);expect(new Date(s.end).getTime()-new Date(s.start).getTime()).toBe(8*3600000);});
+ const u:any={id:'user',organizationId:org};const d:any={operationId:'op',method:'location',action:'in',latitude:15,longitude:44,accuracy:10,capturedAt:Date.now()};
+ function service(employee:any){const tx={hrEmployee:{findFirst:jest.fn().mockResolvedValue(employee)},hrAttendance:{findFirst:jest.fn().mockResolvedValue(null)}};return {s:new HrAttendanceService({$transaction:(fn:any)=>fn(tx)} as any,{get:()=>secret} as any),tx};}
+ it('rejects unlinked and exempt employees',async()=>{await expect(service(null).s.punch(u,d)).rejects.toThrow(ForbiddenException);await expect(service({attendanceExempt:true}).s.punch(u,d)).rejects.toThrow(BadRequestException);});
+ it('requires QR for office staff and rejects stale/mocked locations',async()=>{await expect(service({id:'e',workMode:'office'}).s.punch(u,d)).rejects.toThrow(ForbiddenException);await expect(service({id:'e',workMode:'field'}).s.punch(u,{...d,capturedAt:1})).rejects.toThrow(BadRequestException);await expect(service({id:'e',workMode:'field'}).s.punch(u,{...d,capturedAt:Date.now(),mocked:true})).rejects.toThrow(BadRequestException);});
+ it('returns a prior same-operation punch without requiring an expired QR again',async()=>{const {s,tx}=service({id:'e'});tx.hrAttendance.findFirst.mockResolvedValue({employeeId:'e',inOperationId:'op',id:'existing'});expect((await s.punch(u,{...d,method:'qr',token:'expired'})).id).toBe('existing');});
+ it('rejects operation ID belonging to another employee or action',async()=>{const {s,tx}=service({id:'e'});tx.hrAttendance.findFirst.mockResolvedValue({employeeId:'other',inOperationId:'op'});await expect(s.punch(u,d)).rejects.toThrow(ConflictException);});
+});

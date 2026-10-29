@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
 import {
   getAccessToken, getRefreshToken, setTokens, clearTokens, isAuthenticated,
+  getRememberedUsername, isRememberMeEnabled, setRememberMe,
 } from '../src/utils/secure-storage';
 
 describe('secure-storage', () => {
   beforeEach(async () => {
     await clearTokens();
+    await setRememberMe(false);
   });
 
   it('returns null when no tokens stored', async () => {
@@ -33,5 +35,14 @@ describe('secure-storage', () => {
   it('isAuthenticated returns true when token exists', async () => {
     await setTokens('access-123', 'refresh-456');
     expect(await isAuthenticated()).toBe(true);
+  });
+
+  it('remembers the username without storing a password', async () => {
+    await setRememberMe(true, 'collector.one');
+    expect(await isRememberMeEnabled()).toBe(true);
+    expect(await getRememberedUsername()).toBe('collector.one');
+    await setRememberMe(false);
+    expect(await isRememberMeEnabled()).toBe(false);
+    expect(await getRememberedUsername()).toBe('');
   });
 });

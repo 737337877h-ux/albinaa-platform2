@@ -30,7 +30,9 @@ export class AuthService {
     // ── Max sessions per user: revoke oldest active sessions ──
     const maxSessions = Number(process.env.MAX_SESSIONS_PER_USER ?? 5);
     const activeSessions = await this.prisma.authSession.findMany({
-      where: { userId, revokedAt: null },
+      // A rotation replaces one slot; expired sessions occupy no active slot.
+      // Counting the replaced session used to evict another app at the limit.
+      where: { userId, revokedAt: null, expiresAt: { gt: new Date() }, ...(replacedSessionId ? { id: { not: replacedSessionId } } : {}) },
       orderBy: { createdAt: 'asc' },
     });
     if (activeSessions.length >= maxSessions) {

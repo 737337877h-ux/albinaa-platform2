@@ -1,30 +1,253 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
-import { priorityOfTaskType } from '../tasks/tasks.service';
+import { priorityOfTaskType, REFRESHED_DAILY_TASK_TYPES } from '../tasks/tasks.service';
+import { isActionableDebtorBalance, isSignificantBalance } from '../common/debt-followup-policy';
+import { orgDateOnly, startOfNextOrgDay, startOfOrgDay } from '../common/org-time';
+import { oracleReceiptActivity } from '../common/oracle-receipt-activity';
+import { reconcileReceiptRequests, countableReceiptRequest, recordedLocalReceiptFinals } from '../common/oracle-receipt-reconciliation';
+import { OracleTestRequestsService } from '../oracle-test-requests/oracle-test-requests.service';
+import { AgingService } from '../aging/aging.service';
+import { effectiveBalances as loadEffectiveBalances } from './effective-balances';
+
+type DebtSnapshot = {
+  customerId: string;
+  currencyCode: string;
+  balance: unknown;
+  customer?: {
+    id: string;
+    name: string;
+    externalCustomerCode: string;
+  };
+};
+
+type DebtChangeAccount = {
+  customerId: string;
+  customerName: string;
+  customerCode: string;
+  currencyCode: string;
+  previousBalance: number;
+  currentBalance: number;
+  change: number;
+  direction: 'increase' | 'decrease';
+};
+
+type SnapshotImport = {
+  id: string;
+  importedAt: Date;
+  fileName: string;
+  snapshots: DebtSnapshot[];
+};
+
+type CustomerAlertCandidate = {
+  id: string;
+  name: string;
+  externalCustomerCode: string;
+  createdAt: Date;
+  assigned: boolean;
+};
+
+export function buildCustomerAlerts(candidates: CustomerAlertCandidate[], since: Date) {
+  const newestFirst = [...candidates].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const shape = (customer: CustomerAlertCandidate) => ({
+    id: customer.id,
+    name: customer.name,
+    externalCustomerCode: customer.externalCustomerCode,
+    createdAt: customer.createdAt,
+  });
+  const unassigned = newestFirst.filter((customer) => !customer.assigned);
+  const recent = newestFirst.filter((customer) => customer.createdAt >= since);
+  return {
+    unassigned: { count: unassigned.length, items: unassigned.slice(0, 5).map(shape) },
+    newCustomers: { count: recent.length, since, items: recent.slice(0, 5).map(shape) },
+  };
+}
+
+const snapshotKey = (snapshot: Pick<DebtSnapshot, 'customerId' | 'currencyCode'>) =>
+  `${snapshot.customerId}|${snapshot.currencyCode}`;
+
+/**
+ * Prevents comparing a full customer import with an advances import or a job
+ * that has no balance snapshots. Comparable imports must cover at least 70%
+ * of the larger customer portfolio.
+ */
+export function findComparablePreviousImport(
+  latest: SnapshotImport,
+  candidates: SnapshotImport[],
+): SnapshotImport | null {
+  const latestKeys = new Set(latest.snapshots.map(snapshotKey));
+  if (latestKeys.size === 0) return null;
+
+  for (const candidate of candidates) {
+    const candidateKeys = new Set(candidate.snapshots.map(snapshotKey));
+    if (candidateKeys.size === 0) continue;
+    let overlap = 0;
+    for (const key of candidateKeys) {
+      if (latestKeys.has(key)) overlap += 1;
+    }
+    if (overlap / Math.max(latestKeys.size, candidateKeys.size) >= 0.7) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Chooses the newest two full-portfolio imports. Small correction batches and
+ * live deltas are excluded even when they overlap perfectly with each other.
+ */
+export function findLatestComparableImportPair(imports: SnapshotImport[]) {
+  if (imports.length === 0) return { latest: null, previous: null };
+  const sizes = imports.map((item) => new Set(item.snapshots.map(snapshotKey)).size);
+  const maximumSize = Math.max(...sizes);
+  const fullPortfolioFloor = Math.max(1, Math.ceil(maximumSize * 0.7));
+  const fullImports = imports.filter((_, index) => sizes[index] >= fullPortfolioFloor);
+  const [latest, ...candidates] = fullImports;
+  if (!latest) return { latest: null, previous: null };
+  return { latest, previous: findComparablePreviousImport(latest, candidates) };
+}
+
+export function summarizeDebtChange(latest: DebtSnapshot[], previous: DebtSnapshot[]) {
+  const latestMap = new Map<string, DebtSnapshot>();
+  const previousMap = new Map<string, DebtSnapshot>();
+  for (const snapshot of latest) latestMap.set(snapshotKey(snapshot), snapshot);
+  for (const snapshot of previous) previousMap.set(snapshotKey(snapshot), snapshot);
+
+  const perCurrency: Record<string, {
+    amount: number;
+    netChange: number;
+    positiveIncreases: number;
+    decreases: number;
+    accounts: number;
+    affectedCount: number;
+    newDebtors: number;
+    affectedAccounts: DebtChangeAccount[];
+  }> = {};
+
+  for (const key of new Set([...latestMap.keys(), ...previousMap.keys()])) {
+    const latestSnapshot = latestMap.get(key);
+    const previousSnapshot = previousMap.get(key);
+    const current = Number(latestSnapshot?.balance ?? 0);
+    const prior = Number(previousSnapshot?.balance ?? 0);
+    const difference = current - prior;
+    const snapshot = latestSnapshot ?? previousSnapshot;
+    const currency = snapshot?.currencyCode;
+    if (!currency) continue;
+    const row = (perCurrency[currency] ??= {
+      amount: 0,
+      netChange: 0,
+      positiveIncreases: 0,
+      decreases: 0,
+      accounts: 0,
+      affectedCount: 0,
+      newDebtors: 0,
+      affectedAccounts: [],
+    });
+    row.netChange += difference;
+    row.amount = row.netChange;
+    if (difference > 0.005) {
+      row.positiveIncreases += difference;
+      row.accounts += 1;
+      if (prior <= 0 && current > 0) row.newDebtors += 1;
+    } else if (difference < -0.005) {
+      row.decreases += -difference;
+    } else {
+      continue;
+    }
+    row.affectedCount += 1;
+    row.affectedAccounts.push({
+      customerId: snapshot.customer?.id ?? snapshot.customerId,
+      customerName: snapshot.customer?.name ?? 'حساب غير مسمى',
+      customerCode: snapshot.customer?.externalCustomerCode ?? snapshot.customerId,
+      currencyCode: currency,
+      previousBalance: prior,
+      currentBalance: current,
+      change: difference,
+      direction: difference > 0 ? 'increase' : 'decrease',
+    });
+  }
+
+  for (const row of Object.values(perCurrency)) {
+    row.affectedAccounts.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+  }
+
+  return perCurrency;
+}
+
+/** Gross movement must not disappear when an account has equal incoming/outgoing entries. */
+export function applyGrossLedgerMovement(summary: ReturnType<typeof summarizeDebtChange>, rows: { currencyCode: string; amountSigned: unknown }[]) {
+  for (const row of Object.values(summary)) { row.positiveIncreases = 0; row.decreases = 0; }
+  for (const entry of rows) {
+    const row = summary[entry.currencyCode];
+    const amount = Number(entry.amountSigned);
+    if (!row || !Number.isFinite(amount)) continue;
+    if (amount > 0) row.positiveIncreases += amount;
+    else row.decreases -= amount;
+  }
+  return summary;
+}
+
+type DebtMovement = {
+  customerId: string;
+  currencyCode: string;
+  amountSigned: number;
+  occurredAt: Date;
+  source: 'platform' | 'oracle';
+  documentKey?: string | null;
+};
+
+/** Prefer the published Oracle copy when the same receipt is also present in the platform ledger. */
+export function deduplicateDebtMovements<T extends DebtMovement>(rows: T[]) {
+  const oracleKeys = new Set(rows.filter((row) => row.source === 'oracle' && row.documentKey).map((row) => row.documentKey!));
+  return rows.filter((row) => row.source === 'oracle' || !row.documentKey || !oracleKeys.has(row.documentKey));
+}
 
 /**
  * Dashboard API — المؤشرات الأساسية المتاحة من بيانات المرحلة الحالية.
  * ملاحظات منهجية موثقة (من مرحلة التحقق):
  * - كل المؤشرات المالية مفصولة حسب العملة — لا جمع مخلوطًا بين عملات.
- * - "المديونية الجديدة" = الزيادات الموجبة بين آخر استيرادين (Snapshots).
+ * - تغير المديونية = صافي الفرق بين آخر استيرادين متجانسين، مع فصل الزيادات عن الانخفاضات.
  * - أعمار الديون "تقديرية" حصريًا (بحسب أقدم حركة متاحة، لا تواريخ استحقاق) —
  *   تُعرض بعلامة estimated=true ولا تُقدَّم كعمر محاسبي مؤكد.
  */
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly agingService: AgingService,
+    @Optional() private readonly oracleRequests?: OracleTestRequestsService) {}
+
+  async navCounts(user: AuthUser) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const collector = user.permissions.includes('customers.read_all')
+      ? null
+      : await this.prisma.collector.findUnique({ where: { userId: user.id }, select: { id: true } });
+    const customerScope = user.permissions.includes('customers.read_all')
+      ? { organizationId: user.organizationId }
+      : { organizationId: user.organizationId, assignments: { some: { collectorId: collector?.id ?? { in: [] }, effectiveTo: null } } };
+    const taskWhere = user.permissions.includes('customers.read_all')
+      ? {
+          status: 'open',
+          taskType: { notIn: [...REFRESHED_DAILY_TASK_TYPES] },
+          customer: { organizationId: user.organizationId },
+        }
+      : {
+          status: 'open',
+          taskType: { notIn: [...REFRESHED_DAILY_TASK_TYPES] },
+          assignedTo: collector?.id ?? { in: [] },
+        };
+    const tasks = await this.prisma.task.count({ where: taskWhere });
+    const followups = await this.prisma.followup.count({ where: { customer: customerScope, deletedAt: null, nextFollowupDate: { lte: today } } });
+    const promises = await this.prisma.paymentPromise.count({ where: { customer: customerScope, status: { in: ['upcoming', 'due_today', 'unfulfilled'] }, dueDate: { lte: today } } });
+    return { tasks, followups, promises };
+  }
 
   async summary(user: AuthUser) {
     const orgId = user.organizationId;
 
-    const [totalCustomers, activeCustomers, balances, lastImport, pendingDuplicates] =
+    const [totalCustomers, activeCustomers, balances, lastImport, pendingDuplicates, advanceBalances] =
       await Promise.all([
-        this.prisma.customer.count({ where: { organizationId: orgId } }),
-        this.prisma.customer.count({ where: { organizationId: orgId, status: 'active' } }),
+        this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' }, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
+        this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
         this.prisma.customerBalance.findMany({
-          where: { customer: { organizationId: orgId } },
-          select: { customerId: true, currencyCode: true, accountingBalance: true },
+          where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
+          select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
         }),
         this.prisma.importJob.findFirst({
           where: { organizationId: orgId, status: 'completed' },
@@ -34,7 +257,32 @@ export class DashboardService {
         this.prisma.potentialDuplicateCustomer.count({
           where: { reviewStatus: 'pending', customerA: { organizationId: orgId } },
         }),
+        this.prisma.customerBalance.findMany({
+          where: { customer: { organizationId: orgId, customerType: 'advance', status: 'active' } },
+          select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
+        }),
       ]);
+
+    const allEffectiveBalances = await loadEffectiveBalances(this.prisma, [...balances, ...advanceBalances]);
+    const effectiveBalances = allEffectiveBalances.slice(0, balances.length);
+    const effectiveAdvanceBalances = allEffectiveBalances.slice(balances.length);
+    const actionableCustomerIds = [...new Set(effectiveBalances
+      .filter((balance) => isActionableDebtorBalance(balance.effectiveBalance, balance.currencyCode))
+      .map((balance) => balance.customerId))];
+    const newCustomerSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const customerAlertCandidates = actionableCustomerIds.length
+      ? await this.prisma.customer.findMany({
+          where: { id: { in: actionableCustomerIds }, organizationId: orgId, status: 'active' },
+          select: {
+            id: true, name: true, externalCustomerCode: true, createdAt: true,
+            assignments: { where: { effectiveTo: null }, select: { id: true }, take: 1 },
+          },
+        })
+      : [];
+    const customerAlerts = buildCustomerAlerts(
+      customerAlertCandidates.map((customer) => ({ ...customer, assigned: customer.assignments.length > 0 })),
+      newCustomerSince,
+    );
 
     // ---- تجميع حسب العملة: مدينون/دائنون/صفر + الإجماليات ----
     const byCurrency: Record<string, {
@@ -42,80 +290,248 @@ export class DashboardService {
       creditors: number; creditTotal: number;
       zero: number;
     }> = {};
-    for (const b of balances) {
+    for (const b of effectiveBalances) {
       const ccy = b.currencyCode;
       byCurrency[ccy] ??= { debtors: 0, debtTotal: 0, creditors: 0, creditTotal: 0, zero: 0 };
-      const v = Number(b.accountingBalance);
+      const v = b.effectiveBalance;
       if (v > 0) { byCurrency[ccy].debtors += 1; byCurrency[ccy].debtTotal += v; }
       else if (v < 0) { byCurrency[ccy].creditors += 1; byCurrency[ccy].creditTotal += -v; }
       else byCurrency[ccy].zero += 1;
+    }
+
+    const advanceByCurrency: Record<string, {
+      accounts: number; debtorAccounts: number; debtorBalance: number;
+      creditorAccounts: number; creditorBalance: number; netBalance: number;
+    }> = {};
+    const significantAdvanceAccounts = new Set<string>();
+    for (const balance of effectiveAdvanceBalances) {
+      if (!isSignificantBalance(balance.effectiveBalance, balance.currencyCode)) continue;
+      significantAdvanceAccounts.add(balance.customerId);
+      advanceByCurrency[balance.currencyCode] ??= {
+        accounts: 0, debtorAccounts: 0, debtorBalance: 0,
+        creditorAccounts: 0, creditorBalance: 0, netBalance: 0,
+      };
+      const summary = advanceByCurrency[balance.currencyCode];
+      summary.accounts += 1;
+      summary.netBalance += balance.effectiveBalance;
+      if (balance.effectiveBalance > 0) {
+        summary.debtorAccounts += 1;
+        summary.debtorBalance += balance.effectiveBalance;
+      } else {
+        summary.creditorAccounts += 1;
+        summary.creditorBalance += -balance.effectiveBalance;
+      }
     }
 
     return {
       customers: {
         total: totalCustomers,
         active: activeCustomers,
-        withBalances: new Set(balances.map((b) => b.customerId)).size,
+        withBalances: new Set(effectiveBalances.filter((b) => Math.abs(b.effectiveBalance) > 0.005).map((b) => b.customerId)).size,
+      },
+      advances: {
+        accounts: significantAdvanceAccounts.size,
+        byCurrency: advanceByCurrency,
+        sourceAccountCodes: ['113101001', '113101002'],
       },
       byCurrency,
       lastImport,
       pendingDuplicateAlerts: pendingDuplicates,
-      newDebt: await this.newDebtBetweenLastTwoImports(orgId),
+      customerAlerts,
+      newDebt: await this.debtChangeLast24Hours(user),
       agingEstimated: await this.estimatedAging(orgId),
       // مؤشرات المتابعات/الوعود/التحصيل تُفعَّل في مراحلها القادمة بنفس الـ endpoint
       followupsToday: null,
       promisesDueToday: null,
       collectionsToday: null,
+      methodology: {
+        debtScope: 'أرصدة الحسابات النشطة فقط؛ الحسابات المدمجة محفوظة للتدقيق ولا تدخل في إجمالي المديونية',
+      },
     };
   }
 
-  /** المديونية الجديدة بين آخر استيرادين: زيادات موجبة + عملاء ظهروا مدينين لأول مرة. */
-  private async newDebtBetweenLastTwoImports(orgId: string) {
-    const lastTwo = await this.prisma.importJob.findMany({
-      where: { organizationId: orgId, status: 'completed' },
+  /** صافي تغير المديونية بين آخر استيرادين متجانسين، مع تفاصيل الزيادات والانخفاضات. */
+  async newDebtBetweenLastTwoImports(orgId: string) {
+    const recentImports = await this.prisma.importJob.findMany({
+      where: {
+        organizationId: orgId,
+        status: 'completed',
+        snapshots: {
+          some: {
+            reversedAt: null,
+            customer: {
+              status: 'active',
+              OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+            },
+          },
+        },
+      },
       orderBy: { importedAt: 'desc' },
-      take: 2,
-      select: { id: true, importedAt: true },
+      take: 20,
+      select: {
+        id: true,
+        importedAt: true,
+        fileName: true,
+        snapshots: {
+          where: {
+            reversedAt: null,
+            customer: {
+              status: 'active',
+              OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+            },
+          },
+          orderBy: { snapshotAt: 'asc' },
+          select: {
+            customerId: true,
+            currencyCode: true,
+            balance: true,
+            customer: { select: { id: true, name: true, externalCustomerCode: true } },
+          },
+        },
+      },
     });
-    if (lastTwo.length === 0) return null;
+    if (recentImports.length === 0) return null;
 
-    const [latest, previous] = lastTwo;
-    const latestSnaps = await this.prisma.balanceSnapshot.findMany({
-      where: { importJobId: latest.id },
-      select: { customerId: true, currencyCode: true, balance: true },
-    });
-    const prevMap = new Map<string, number>();
-    if (previous) {
-      const prevSnaps = await this.prisma.balanceSnapshot.findMany({
-        where: { importJobId: previous.id },
-        select: { customerId: true, currencyCode: true, balance: true },
-      });
-      for (const s of prevSnaps) {
-        prevMap.set(`${s.customerId}|${s.currencyCode}`, Number(s.balance));
-      }
+    const { latest, previous } = findLatestComparableImportPair(recentImports);
+    if (!latest) return null;
+    if (!previous) {
+      return {
+        betweenImports: { latest: latest.importedAt, previous: null },
+        comparison: { latestFile: latest.fileName, previousFile: null, comparable: false },
+        perCurrency: {},
+        note: 'لا يوجد استيراد عملاء سابق متجانس للمقارنة؛ لم تُعتبر الأرصدة الحالية مديونية جديدة.',
+      };
     }
 
-    const perCurrency: Record<string, { amount: number; accounts: number; newDebtors: number }> = {};
-    for (const s of latestSnaps) {
-      const cur = Number(s.balance);
-      const prev = prevMap.get(`${s.customerId}|${s.currencyCode}`);
-      const increase = prev === undefined ? (cur > 0 ? cur : 0) : Math.max(cur - prev, 0);
-      if (increase > 0) {
-        const c = (perCurrency[s.currencyCode] ??= { amount: 0, accounts: 0, newDebtors: 0 });
-        c.amount += increase;
-        c.accounts += 1;
-        if (prev === undefined || prev <= 0) c.newDebtors += 1;
-      }
-    }
+    const perCurrency = summarizeDebtChange(latest.snapshots, previous.snapshots);
     return {
       betweenImports: {
         latest: latest.importedAt,
-        previous: previous?.importedAt ?? null,
+        previous: previous.importedAt,
+      },
+      comparison: {
+        latestFile: latest.fileName,
+        previousFile: previous.fileName,
+        comparable: true,
       },
       perCurrency,
-      note: previous
-        ? null
-        : 'استيراد واحد فقط حتى الآن — كل رصيد مدين يُعد مديونية جديدة',
+      note: 'صافي التغير هو المؤشر الرئيسي؛ الزيادات والانخفاضات معروضة منفصلة ولا تُخلط ملفات العملاء بالسلف.',
+    };
+  }
+
+  /** صافي تغير المديونية من حركات المنصة وOracle المنشورة خلال آخر 24 ساعة، ضمن عملاء المستخدم فقط. */
+  async debtChangeLast24Hours(user: AuthUser) {
+    const now = new Date();
+    const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const canReadAll = user.permissions.includes('customers.read_all');
+    const collector = canReadAll
+      ? null
+      : await this.prisma.collector.findUnique({ where: { userId: user.id }, select: { id: true } });
+    const balances = await this.prisma.customerBalance.findMany({
+      where: {
+        customer: {
+          organizationId: user.organizationId,
+          status: 'active',
+          OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
+          ...(canReadAll ? {} : {
+            assignments: { some: { collectorId: collector?.id ?? { in: [] }, effectiveTo: null } },
+          }),
+        },
+      },
+      select: {
+        customerId: true,
+        currencyCode: true,
+        accountingBalance: true,
+        lastImportJob: { select: { importedAt: true } },
+        customer: { select: { id: true, name: true, externalCustomerCode: true } },
+      },
+    });
+    if (!balances.length) {
+      return {
+        window: { from: since, to: now, hours: 24 },
+        source: 'platform_and_published_oracle_movements',
+        perCurrency: {},
+        note: 'لا توجد حسابات ضمن نطاق المستخدم.',
+      };
+    }
+    const earliestImport = balances.reduce<Date | null>((earliest, row) => {
+      const date = row.lastImportJob?.importedAt ?? null;
+      if (!date) return earliest;
+      return !earliest || date < earliest ? date : earliest;
+    }, null);
+    const ledgerFrom = earliestImport && earliestImport < since ? earliestImport : since;
+    const customerIds = [...new Set(balances.map((row) => row.customerId))];
+    const ledgerRows = await this.prisma.operationalLedger.findMany({
+      where: {
+        customerId: { in: customerIds },
+        createdAt: { gte: ledgerFrom },
+      },
+      select: { customerId: true, currencyCode: true, amountSigned: true, createdAt: true, sourceTable: true, sourceId: true },
+    });
+    const collectionIds = ledgerRows.filter((row) => row.sourceTable === 'collections').map((row) => row.sourceId);
+    const collections = collectionIds.length ? await this.prisma.collection.findMany({
+      where: { id: { in: collectionIds } },
+      select: { id: true, customerId: true, currencyCode: true, receiptNumber: true, referenceNumber: true },
+    }) : [];
+    const collectionById = new Map(collections.map((row) => [row.id, row]));
+    const publications = await this.prisma.oracleMovementPublicationLedger.findMany({
+      where: { organizationId: user.organizationId, movementKind: 'customer', status: 'published',
+        reversedAt: null, platformEntityId: { not: null } },
+      select: { sourceFingerprint: true, platformEntityId: true },
+    });
+    const fingerprints = publications.map((row) => row.sourceFingerprint);
+    const mirrors = fingerprints.length ? await this.prisma.oracleCustomerMovementMirror.findMany({
+      where: { organizationId: user.organizationId, sourceFingerprint: { in: fingerprints },
+        sourceCreatedAt: { gte: since, lte: now } },
+      orderBy: { loadedAt: 'desc' },
+      select: { sourceFingerprint: true, sourceCreatedAt: true, documentNumber: true, documentSerial: true },
+    }) : [];
+    const mirrorByFingerprint = new Map(mirrors.map((row) => [row.sourceFingerprint, row]));
+    const publicationByEntity = new Map(publications.map((row) => [row.platformEntityId!, row.sourceFingerprint]));
+    const oracleIds = publications.filter((row) => mirrorByFingerprint.has(row.sourceFingerprint)).map((row) => row.platformEntityId!);
+    const oracleRows = oracleIds.length ? await this.prisma.importedTransaction.findMany({
+      where: { id: { in: oracleIds }, customerId: { in: customerIds }, reversedAt: null },
+      select: { id: true, customerId: true, currencyCode: true, debit: true, credit: true },
+    }) : [];
+    const docKey = (customerId: string, currencyCode: string, value?: string | null) =>
+      value ? `${customerId}|${currencyCode}|${value}` : null;
+    const movements = deduplicateDebtMovements([
+      ...ledgerRows.map((row) => {
+        const collection = collectionById.get(row.sourceId);
+        return { customerId: row.customerId, currencyCode: row.currencyCode,
+          amountSigned: Number(row.amountSigned), occurredAt: row.createdAt, source: 'platform' as const,
+          documentKey: collection ? docKey(row.customerId, row.currencyCode, collection.referenceNumber ?? collection.receiptNumber) : null };
+      }),
+      ...oracleRows.map((row) => {
+        const mirror = mirrorByFingerprint.get(publicationByEntity.get(row.id)!)!;
+        return { customerId: row.customerId, currencyCode: row.currencyCode,
+          amountSigned: Number(row.debit) - Number(row.credit), occurredAt: mirror.sourceCreatedAt!, source: 'oracle' as const,
+          documentKey: docKey(row.customerId, row.currencyCode, mirror.documentSerial ?? mirror.documentNumber) };
+      }),
+    ]);
+    const current: DebtSnapshot[] = [];
+    const previous: DebtSnapshot[] = [];
+    for (const balance of balances) {
+      const matching = movements.filter((row) => row.customerId === balance.customerId && row.currencyCode === balance.currencyCode);
+      const importedAt = balance.lastImportJob?.importedAt;
+      const afterImport = matching.reduce((sum, row) =>
+        row.source === 'platform' && (!importedAt || row.occurredAt > importedAt) ? sum + row.amountSigned : sum, 0);
+      const recent = matching.reduce((sum, row) => row.occurredAt >= since ? sum + row.amountSigned : sum, 0);
+      const effective = Number(balance.accountingBalance) + afterImport;
+      const snapshot = {
+        customerId: balance.customerId,
+        currencyCode: balance.currencyCode,
+        customer: balance.customer,
+      };
+      current.push({ ...snapshot, balance: effective });
+      previous.push({ ...snapshot, balance: effective - recent });
+    }
+    return {
+      window: { from: since, to: now, hours: 24 },
+      source: 'platform_and_published_oracle_movements',
+      scope: canReadAll ? 'all_customers' : 'assigned_customers',
+      perCurrency: applyGrossLedgerMovement(summarizeDebtChange(current, previous), movements.filter(row => row.occurredAt >= since)),
+      note: 'يعرض حركات المنصة وحركات Oracle المنشورة خلال آخر 24 ساعة حسب وقت المستند، دون تكرار السندات المرتبطة، وضمن حسابات المستخدم المسموحة.',
     };
   }
 
@@ -125,14 +541,20 @@ export class DashboardService {
    */
   private async estimatedAging(orgId: string) {
     const debtors = await this.prisma.customerBalance.findMany({
-      where: { customer: { organizationId: orgId }, accountingBalance: { gt: 0 } },
+      where: {
+        customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        accountingBalance: { gt: 0 },
+      },
       select: { customerId: true, currencyCode: true, accountingBalance: true },
     });
     if (debtors.length === 0) return { estimated: true, buckets: {}, note: 'لا مدينين' };
 
     const oldest = await this.prisma.importedTransaction.groupBy({
       by: ['customerId', 'currencyCode'],
-      where: { customer: { organizationId: orgId } },
+      where: {
+        customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        reversedAt: null,
+      },
       _min: { txDate: true },
     });
     const oldestMap = new Map<string, Date>();
@@ -169,39 +591,71 @@ export class DashboardService {
    */
   async kpis(user: AuthUser) {
     const orgId = user.organizationId;
-    const today = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
-    const tomorrow = new Date(today.getTime() + 86_400_000);
+    const todayDate = orgDateOnly();
+    const today = startOfOrgDay(todayDate);
+    const tomorrow = startOfNextOrgDay(todayDate);
 
-    const [totalCustomers, activeCustomers, balances, scores, todayTasks, aging] = await Promise.all([
-      this.prisma.customer.count({ where: { organizationId: orgId } }),
-      this.prisma.customer.count({ where: { organizationId: orgId, status: 'active' } }),
+    const [totalCustomers, activeCustomers, balances, scores, todayTasks, agingReport] = await Promise.all([
+      this.prisma.customer.count({ where: { organizationId: orgId, status: { not: 'merged' }, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
+      this.prisma.customer.count({ where: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } }),
       this.prisma.customerBalance.findMany({
-        where: { customer: { organizationId: orgId }, accountingBalance: { gt: 0 } },
-        select: { customerId: true, currencyCode: true, accountingBalance: true },
+        where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
+        select: { customerId: true, currencyCode: true, accountingBalance: true, lastImportJob: { select: { importedAt: true } } },
       }),
       this.prisma.customerScore.findMany({
-        where: { customer: { organizationId: orgId } },
+        where: { customer: { organizationId: orgId, status: 'active', OR: [{ customerType: null }, { customerType: { not: 'advance' } }] } },
         orderBy: { computedAt: 'desc' },
         select: { customerId: true, score: true, riskLevel: true },
       }),
       this.prisma.task.findMany({
-        where: { status: 'open', dueDate: { gte: today, lt: tomorrow }, customer: { organizationId: orgId } },
+        where: {
+          status: 'open',
+          taskType: { notIn: [...REFRESHED_DAILY_TASK_TYPES] },
+          dueDate: { gte: today, lt: tomorrow },
+          customer: { organizationId: orgId, OR: [{ customerType: null }, { customerType: { not: 'advance' } }] },
+        },
         select: {
           id: true, customerId: true, assignedTo: true, taskType: true, priorityReason: true,
           expectedAmount: true, expectedCurrency: true,
         },
       }),
-      this.prisma.debtAgingSummary.findMany({
-        where: { customer: { organizationId: orgId }, bucket_120_plus: { gt: 0 } },
-        select: { customerId: true, currencyCode: true, totalDue: true },
-      }),
+      this.agingService.report(user, { accountClass: 'customer' }),
     ]);
 
-    const debtors = new Set(balances.map((b) => b.customerId)).size;
+    const operationalBalances = await Promise.all(balances.map(async (balance) => {
+      const ledger = await this.prisma.operationalLedger.aggregate({
+        _sum: { amountSigned: true },
+        where: {
+          customerId: balance.customerId,
+          currencyCode: balance.currencyCode,
+          ...(balance.lastImportJob ? { createdAt: { gt: balance.lastImportJob.importedAt } } : {}),
+        },
+      });
+      return { ...balance, effectiveBalance: Number(balance.accountingBalance) + Number(ledger._sum.amountSigned ?? 0) };
+    }));
+    const debtorBalances = operationalBalances.filter((balance) => balance.effectiveBalance > 0.005);
+    const debtors = new Set(debtorBalances.map((b) => b.customerId)).size;
+    const debtorCustomerIds = new Set(debtorBalances
+      .filter((balance) => isActionableDebtorBalance(balance.effectiveBalance, balance.currencyCode))
+      .map((balance) => balance.customerId));
+
+    // Keep the manager dashboard aligned with Today Work: only customers with
+    // an operational debit balance, and at most one highest-priority task per
+    // customer. This prevents a promise and a risk task from showing the same
+    // account twice in the decision list.
+    const eligibleTodayTasks = todayTasks
+      .filter((task) => !!task.customerId && debtorCustomerIds.has(task.customerId))
+      .sort((a, b) =>
+        priorityOfTaskType(a.taskType) - priorityOfTaskType(b.taskType)
+        || Number(b.expectedAmount ?? 0) - Number(a.expectedAmount ?? 0),
+      );
+    const uniqueTodayTasks = [...new Map(
+      eligibleTodayTasks.map((task) => [task.customerId as string, task]),
+    ).values()];
 
     const debtByCurrency: Record<string, number> = {};
-    for (const b of balances) {
-      debtByCurrency[b.currencyCode] = (debtByCurrency[b.currencyCode] ?? 0) + Number(b.accountingBalance);
+    for (const b of debtorBalances) {
+      debtByCurrency[b.currencyCode] = (debtByCurrency[b.currencyCode] ?? 0) + b.effectiveBalance;
     }
 
     // أحدث درجة لكل عميل (computedAt تنازلي — الأول لكل عميل يفوز)
@@ -215,13 +669,13 @@ export class DashboardService {
     }
 
     const tasksToday = {
-      total: todayTasks.length,
-      assigned: todayTasks.filter((t) => t.assignedTo).length,
-      unassigned: todayTasks.filter((t) => !t.assignedTo).length,
+      total: uniqueTodayTasks.length,
+      assigned: uniqueTodayTasks.filter((t) => t.assignedTo).length,
+      unassigned: uniqueTodayTasks.filter((t) => !t.assignedTo).length,
     };
 
     const byType = new Map<string, number>();
-    for (const t of todayTasks) byType.set(t.taskType, (byType.get(t.taskType) ?? 0) + 1);
+    for (const t of uniqueTodayTasks) byType.set(t.taskType, (byType.get(t.taskType) ?? 0) + 1);
     const topReasons = [...byType.entries()]
       .map(([taskType, count]) => ({ taskType, count }))
       .sort((a, b) => b.count - a.count)
@@ -229,15 +683,47 @@ export class DashboardService {
 
     const debt120TotalByCurrency: Record<string, number> = {};
     const debt120Customers = new Set<string>();
-    for (const a of aging) {
-      debt120Customers.add(a.customerId);
-      debt120TotalByCurrency[a.currencyCode] = (debt120TotalByCurrency[a.currencyCode] ?? 0) + Number(a.totalDue);
+    for (const a of agingReport.customers) {
+      const amount120 = Number(a.buckets.bucket_120_plus ?? 0);
+      if (amount120 <= 0.005) continue;
+      debt120Customers.add(String(a.customerId));
+      debt120TotalByCurrency[a.currency] = (debt120TotalByCurrency[a.currency] ?? 0) + amount120;
     }
     const debt120Plus = { count: debt120Customers.size, totalByCurrency: debt120TotalByCurrency };
+
+    const concentrationByCurrency: Record<string, {
+      totalDebt: number;
+      top10Debt: number;
+      percentage: number;
+      topCustomers: Array<{ customerId: string; customerName: string; customerCode: string | null; amount: number }>;
+    }> = {};
+    const agingByCurrency = new Map<string, typeof agingReport.customers>();
+    for (const row of agingReport.customers) {
+      agingByCurrency.set(row.currency, [...(agingByCurrency.get(row.currency) ?? []), row]);
+    }
+    for (const [currency, rows] of agingByCurrency) {
+      const ranked = [...rows].sort((a, b) => Number(b.totalDue) - Number(a.totalDue));
+      const totalDebt = ranked.reduce((sum, row) => sum + Number(row.totalDue), 0);
+      const top = ranked.slice(0, 10);
+      const top10Debt = top.reduce((sum, row) => sum + Number(row.totalDue), 0);
+      concentrationByCurrency[currency] = {
+        totalDebt,
+        top10Debt,
+        percentage: totalDebt > 0 ? (top10Debt / totalDebt) * 100 : 0,
+        topCustomers: top.map((row) => ({
+          customerId: String(row.customerId),
+          customerName: String(row.customerName),
+          customerCode: row.customerCode == null ? null : String(row.customerCode),
+          amount: Number(row.totalDue),
+        })),
+      };
+    }
 
     const highRisk = await this.prisma.customer.findMany({
       where: {
         organizationId: orgId,
+        status: 'active',
+        OR: [{ customerType: null }, { customerType: { not: 'advance' } }],
         scores: { some: { riskLevel: { in: ['high', 'critical'] } } },
       },
       select: {
@@ -258,7 +744,7 @@ export class DashboardService {
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
 
-    const customerIds = [...new Set(todayTasks.map((t) => t.customerId).filter((x): x is string => !!x))];
+    const customerIds = uniqueTodayTasks.map((task) => task.customerId as string);
     const customers = customerIds.length > 0
       ? await this.prisma.customer.findMany({
           where: { id: { in: customerIds } },
@@ -266,7 +752,7 @@ export class DashboardService {
         })
       : [];
     const nameMap = new Map(customers.map((c) => [c.id, c]));
-    const topPriorityTasks = todayTasks
+    const topPriorityTasks = uniqueTodayTasks
       .map((t) => ({
         taskId: t.id,
         customerId: t.customerId ?? '',
@@ -285,35 +771,90 @@ export class DashboardService {
     // Collector performance today: today's collections grouped by collector + currency.
     // Amounts stay separated by currency (no cross-currency summing), consistent with the rest
     // of this service. Uses only existing Collection/Collector data — no schema changes.
-    const today0 = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
-    const tomorrow0 = new Date(today0.getTime() + 86_400_000);
+    const today0 = today;
+    const tomorrow0 = tomorrow;
     const collectionsByCollector = await this.prisma.collection.groupBy({
       by: ['collectorId', 'currencyCode'],
       where: {
-        status: { not: 'reversed' },
+        status: 'recorded',
         collectedAt: { gte: today0, lt: tomorrow0 },
         collector: { user: { organizationId: orgId } },
       },
       _sum: { amount: true },
       _count: true,
     });
-    const perfCollectorIds = [...new Set(collectionsByCollector.map((c) => c.collectorId))];
-    const perfCollectors = perfCollectorIds.length
-      ? await this.prisma.collector.findMany({
-          where: { id: { in: perfCollectorIds } },
-          include: { user: { select: { fullName: true } } },
-        })
-      : [];
-    const perfNameMap = new Map(perfCollectors.map((c) => [c.id, c.user.fullName]));
-    const collectorPerformanceToday = collectionsByCollector
-      .map((c) => ({
-        collectorId: c.collectorId,
-        collectorName: perfNameMap.get(c.collectorId) ?? c.collectorId,
-        currency: c.currencyCode,
-        amount: Number(c._sum.amount ?? 0),
-        count: c._count,
-      }))
-      .sort((a, b) => b.amount - a.amount);
+    const [oracleReceiptAudits, perfCollectors, localFinalReceipts] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        where: {
+          action: 'oracle_test_request_created',
+          entityTable: 'IAS20261',
+          createdAt: { gte: today0, lt: tomorrow0 },
+          user: { organizationId: orgId },
+        },
+        select: {
+          id: true, entityId: true, newValue: true, createdAt: true,
+          user: {
+            select: {
+              fullName: true,
+              collector: { select: { id: true, active: true, oracleCollectorNo: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.collector.findMany({
+        where: { active: true, user: { organizationId: orgId } },
+        select: { id: true, oracleCollectorNo: true, user: { select: { fullName: true } } },
+      }),
+      this.prisma.collection.findMany({
+        where: { status: 'recorded', customer: { organizationId: orgId }, collectedAt: { gte: today0, lt: tomorrow0 },
+          ...(user.permissions.includes('customers.read_all') ? {} : { collector: { userId: user.id } }) },
+        select: { id: true, customerId: true, currencyCode: true, amount: true, collectedAt: true, status: true,
+          referenceNumber: true, receiptNumber: true, customer: { select: { externalCustomerCode: true } } },
+      }),
+    ]);
+    const collectorById = new Map(perfCollectors.map((collector) => [collector.id, collector]));
+    const collectorByNo = new Map(perfCollectors
+      .filter((collector) => collector.oracleCollectorNo !== null)
+      .map((collector) => [String(collector.oracleCollectorNo), collector]));
+    const performance = new Map<string, {
+      collectorId: string; collectorName: string; currency: string; amount: number; count: number;
+    }>();
+    const addPerformance = (collectorId: string, collectorName: string, currency: string, amount: number, count = 1) => {
+      const key = `${collectorId}|${currency}`;
+      const current = performance.get(key);
+      performance.set(key, {
+        collectorId, collectorName, currency,
+        amount: (current?.amount ?? 0) + amount,
+        count: (current?.count ?? 0) + count,
+      });
+    };
+    for (const collection of collectionsByCollector) {
+      const collector = collectorById.get(collection.collectorId);
+      addPerformance(
+        collection.collectorId,
+        collector?.user.fullName ?? collection.collectorId,
+        collection.currencyCode,
+        Number(collection._sum.amount ?? 0),
+        collection._count,
+      );
+    }
+    const directReceipts = await oracleReceiptActivity(this.prisma, user, todayDate);
+    const receiptStates = reconcileReceiptRequests(oracleReceiptAudits as any[],[...directReceipts,...recordedLocalReceiptFinals(localFinalReceipts)],
+      await this.oracleRequests?.receiptStatuses?.().catch(()=>[]) ?? []);
+    const stateByAudit = new Map(receiptStates.map(request=>[request.auditId,request]));
+    for (const receipt of directReceipts) {
+      addPerformance(receipt.collector.id, receipt.collector.user.fullName, receipt.currencyCode, receipt.amount);
+    }
+    for (const row of oracleReceiptAudits) {
+      const request = stateByAudit.get(row.id);
+      if (!request || !countableReceiptRequest(request)) continue;
+      if (request?.kind !== 'receipt' || request.amount === null || !request.currencyCode) continue;
+      const collector = request.collectorNo ? collectorByNo.get(String(request.collectorNo))
+        : row.user?.collector?.active ? collectorById.get(row.user.collector.id) : null;
+      if (!collector) continue;
+      addPerformance(collector.id, collector.user.fullName, request.currencyCode, request.amount);
+    }
+    const collectorPerformanceToday = [...performance.values()].sort((a, b) => b.amount - a.amount);
 
     return {
       customers: { total: totalCustomers, active: activeCustomers, debtors },
@@ -322,6 +863,7 @@ export class DashboardService {
       tasksToday,
       topReasons,
       debt120Plus,
+      concentrationByCurrency,
       highRiskCustomers,
       topPriorityTasks,
       collectorPerformanceToday,
@@ -344,7 +886,8 @@ export class DashboardService {
       collectorId = own.id;
     }
 
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const today = startOfOrgDay(orgDateOnly());
+    const tomorrow = startOfNextOrgDay(orgDateOnly());
     const weekAgo = new Date(today.getTime() - 6 * 86_400_000);
 
     const [assignedCount, assignedCustomerIds] = await Promise.all([
@@ -379,7 +922,7 @@ export class DashboardService {
           by: ['currencyCode'],
           where: {
             collectorId, status: { not: 'reversed' },
-            collectedAt: { gte: today },
+            collectedAt: { gte: today, lt: tomorrow },
           },
           _sum: { amount: true }, _count: true,
         }),

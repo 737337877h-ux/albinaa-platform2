@@ -1,22 +1,25 @@
 import {
-  BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException,
+  BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { orgDateOnly } from '../common/org-time';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RiskRefreshService } from '../risk/risk-refresh.service';
 import { CreatePromiseDto } from './dto/create-promise.dto';
 import { PromiseStatusDto } from './dto/promise-status.dto';
 import { QueryPromisesDto } from './dto/query-promises.dto';
 import { UpdatePromiseDto } from './dto/update-promise.dto';
+import { PromiseSettlementService } from './promise-settlement.service';
 
 /**
  * حالات الوعد (القائمة الغنية المعتمدة — تغطي Pending/Fulfilled/Broken/Cancelled):
  * upcoming → due_today → fulfilled | partially_fulfilled | unfulfilled | postponed | cancelled_approved
  */
-const OPEN_STATUSES = ['upcoming', 'due_today'];
+const OPEN_STATUSES = ['upcoming', 'due_today', 'partially_fulfilled'];
 /** الحالات النهائية المعتمدة في مراجعة M5: partially_fulfilled ليست نهائية. */
 const FINAL_STATUSES = ['fulfilled', 'unfulfilled', 'cancelled_approved'];
 
@@ -50,6 +53,8 @@ export class PromisesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly riskRefresh?: RiskRefreshService,
+    @Optional() private readonly settlement?: PromiseSettlementService,
   ) {}
 
   private async collectorOf(user: AuthUser) {
@@ -131,6 +136,11 @@ export class PromisesService {
 
     // البند ثالثًا: الوعد + مهمته في Transaction واحدة — لا وعد بلا مهمة أبدًا
     const promise = await this.prisma.$transaction(async (tx) => {
+      const today = new Date(`${orgDateOnly()}T00:00:00.000Z`);
+      await tx.task.updateMany({
+        where: { customerId: dto.customerId, assignedTo: collectorId, status: 'open', dueDate: { lte: today } },
+        data: { status: 'done' },
+      });
       const created = await tx.paymentPromise.create({
         data: {
           customerId: dto.customerId,
@@ -370,6 +380,9 @@ export class PromisesService {
       },
       req,
     });
+    if (dto.status === 'unfulfilled') {
+      await this.riskRefresh?.trigger(actor, [before.customerId], 'promise_broken', req);
+    }
     return updated;
   }
 
@@ -379,7 +392,9 @@ export class PromisesService {
    * قاعدة معتمدة من المتطلبات الأصلية §12.
    */
   async sweepOverdue(orgId: string) {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    // Only approved, uniquely attributable receipts may resolve a promise before escalation.
+    await this.settlement?.reconcileForOrganization(orgId, { dryRun: false, automatic: true });
+    const today = new Date(`${orgDateOnly()}T00:00:00.000Z`);
     const overdue = await this.prisma.paymentPromise.findMany({
       where: {
         customer: { organizationId: orgId },
@@ -390,6 +405,7 @@ export class PromisesService {
     });
     // --- تسجيل تشخيصي مؤقت: يُزال بعد تحديد السبب الحقيقي لـ 500 ---
     this.logger.debug(`[sweepOverdue] بدء — ${overdue.length} وعدًا متأخرًا للمنشأة ${orgId}`);
+    let swept = 0;
     for (const p of overdue) {
       // العلاقتان إلزاميتان في المخطط (FK غير قابل للإفراغ). لا نُخفي غيابهما
       // بتخطٍّ صامت — هذا فساد بيانات حقيقي يستحق الظهور فورًا وبوضوح.
@@ -399,11 +415,14 @@ export class PromisesService {
           + `إلزاميان في المخطط (collectorId=${p.collectorId}, customerId=${p.customerId})`,
         );
       }
-      await this.prisma.$transaction(async (tx) => {
-        await tx.paymentPromise.update({
-          where: { id: p.id },
-          data: { status: 'unfulfilled', statusReason: 'انقضى تاريخ الاستحقاق دون تحصيل مناسب (تلقائي)' },
+      const escalated = await this.prisma.$transaction(async (tx) => {
+        const transition = await tx.paymentPromise.updateMany({
+          where: { id: p.id, status: { in: OPEN_STATUSES }, dueDate: { lt: today } },
+          data: { status: 'unfulfilled', missedDueDate: p.missedDueDate ?? p.dueDate,
+            statusReason: 'انقضى تاريخ الاستحقاق دون تحصيل مناسب (تلقائي)' } as any,
         });
+        // A receipt reconciliation or another scheduler may have resolved it meanwhile.
+        if (transition.count !== 1) return false;
         await tx.task.updateMany({
           where: { sourcePromiseId: p.id, status: 'open' },
           data: { status: 'escalated' },
@@ -420,7 +439,10 @@ export class PromisesService {
             sourcePromiseId: p.id,
           },
         });
+        return true;
       });
+      if (!escalated) continue;
+      swept += 1;
       await this.notifications.notifyUser(p.collector.userId, 'promise_overdue', {
         promiseId: p.id, customerId: p.customerId, customerName: p.customer.name,
         amount: Number(p.expectedAmount), currency: p.currencyCode,
@@ -435,7 +457,14 @@ export class PromisesService {
       },
       data: { status: 'due_today' },
     });
-    this.logger.log(`[sweepOverdue] org=${orgId} — تم مسح ${overdue.length} وعدًا متأخرًا`);
-    return { swept: overdue.length };
+    if (overdue.length) {
+      await this.riskRefresh?.triggerSystem(
+        orgId,
+        overdue.map((promise) => promise.customerId),
+        'promise_broken',
+      );
+    }
+    this.logger.log(`[sweepOverdue] org=${orgId} — تم مسح ${swept} وعدًا متأخرًا`);
+    return { swept };
   }
 }

@@ -20,7 +20,11 @@ export async function login(username: string, password: string): Promise<LoginRe
   const client = await getClient();
   const { data } = await client.post<LoginResponse>('/auth/login', { username, password });
   await setTokens(data.accessToken, data.refreshToken);
-  return data;
+  // The generic web login response intentionally contains only public identity
+  // fields. Hydrate the mobile identity from /auth/me so offline data ownership,
+  // assignment scope and permissions are never based on missing fields.
+  const user = await getMe();
+  return { ...data, user };
 }
 
 export async function refreshToken(token: string): Promise<LoginResponse> {

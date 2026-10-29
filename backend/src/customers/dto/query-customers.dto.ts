@@ -1,8 +1,16 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 
 export class QueryCustomersDto {
+  @ApiPropertyOptional({
+    description: 'نوع سجل المديونية: العملاء العاديون أو حسابات السلف على الغير',
+    enum: ['customer', 'advance'],
+    default: 'customer',
+  })
+  @IsOptional() @IsIn(['customer', 'advance'])
+  accountClass?: 'customer' | 'advance';
+
   @ApiPropertyOptional({ description: 'بحث: الاسم (بعد التطبيع) أو كود العميل أو الهاتف' })
   @IsOptional() @IsString() @MaxLength(200)
   search?: string;
@@ -10,6 +18,10 @@ export class QueryCustomersDto {
   @ApiPropertyOptional({ description: 'تصفية حسب حالة الرصيد', enum: ['debtor', 'creditor', 'zero'] })
   @IsOptional() @IsIn(['debtor', 'creditor', 'zero'])
   balanceState?: 'debtor' | 'creditor' | 'zero';
+
+  @ApiPropertyOptional({ description: 'استبعاد الحسابات التي لا تملك أي رصيد غير صفري', default: false })
+  @IsOptional() @Transform(({ value }) => value === true || value === 'true') @IsBoolean()
+  excludeZero?: boolean;
 
   @ApiPropertyOptional({ description: 'عملة التصفية/الترتيب بالرصيد (إلزامية مع sortBy=balance)' })
   @IsOptional() @IsString() @MaxLength(3)
@@ -20,8 +32,12 @@ export class QueryCustomersDto {
   region?: string;
 
   @ApiPropertyOptional({ description: 'تصفية حسب المحصل الحالي' })
-  @IsOptional() @IsUUID()
+  @IsOptional() @ValidateIf((_, value) => value !== 'unassigned') @IsUUID()
   collectorId?: string;
+
+  @ApiPropertyOptional({ description: 'العملاء المنشؤون منذ هذا التاريخ (YYYY-MM-DD)' })
+  @IsOptional() @IsDateString()
+  createdSince?: string;
 
   @ApiPropertyOptional({ description: 'تصفية حسب الفرع' })
   @IsOptional() @IsUUID()

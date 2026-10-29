@@ -113,6 +113,15 @@ describe('Import Engine — Milestone 3 (e2e)', () => {
                      'customersUpdated','transactionsNew','transactionsDuplicate','durationMs']) {
       expect(res.body[k]).toBeDefined();
     }
+    const importedCustomer = await prisma.customer.findFirstOrThrow({
+      where: { externalCustomerCode: '90001' },
+    });
+    expect(await prisma.customerScore.count({ where: { customerId: importedCustomer.id } })).toBe(1);
+    const riskAudit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'risk_recalculated' }, orderBy: { createdAt: 'desc' },
+    });
+    expect((riskAudit.newValue as any).source).toBe('import_completed');
+    expect((riskAudit.newValue as any).targetedCustomerIds).toContain(importedCustomer.id);
   });
 
   // ===== السيناريو 5: العملات المتعددة =====
@@ -215,6 +224,14 @@ describe('Import Engine — Milestone 3 (e2e)', () => {
       where: { customer: { externalCustomerCode: '90001' }, currencyCode: 'YER' },
     });
     expect(Number(b?.accountingBalance)).toBe(12000);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { action: 'import_executed', entityId: firstJobId },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(audit).not.toBeNull();
+    expect((audit?.newValue as any)?.forcedDuplicateImport).toBe(true);
+    expect((audit?.newValue as any)?.previousImportJobId).toEqual(expect.any(String));
   });
 
   it('Snapshot جديد أُنشئ لكل استيراد (تاريخ أرصدة كامل)', async () => {
@@ -236,5 +253,80 @@ describe('Import Engine — Milestone 3 (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(report.body.transactionsDuplicate).toBe(7);
+  });
+
+  it('يتراجع عن أحدث دفعة أولًا ويحفظ سجلاتها دون حذف', async () => {
+    const reverseKey = `reverse-import-${firstJobId}`;
+    const res = await request(app.getHttpServer())
+      .post(`/imports/${firstJobId}/reverse`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', reverseKey)
+      .send({ reason: 'اختبار التراجع الآمن للدفعة المكررة' })
+      .expect(200);
+    expect(res.body.status).toBe('reversed');
+
+    // نفس المفتاح يعيد النتيجة نفسها ولا ينشئ عكسًا ثانيًا.
+    await request(app.getHttpServer())
+      .post(`/imports/${firstJobId}/reverse`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', reverseKey)
+      .send({ reason: 'اختبار التراجع الآمن للدفعة المكررة' })
+      .expect(200);
+
+    const job = await prisma.importJob.findUniqueOrThrow({ where: { id: firstJobId } });
+    expect(job.status).toBe('reversed');
+    expect(job.reversalReason).toContain('اختبار التراجع');
+    const audit = await prisma.auditLog.count({
+      where: { entityId: firstJobId, action: 'import_reversed' },
+    });
+    expect(audit).toBe(1);
+  });
+
+  it('يتراجع بعد ذلك عن الدفعة الأصلية ويؤرشف العملاء ويعكس الحركات', async () => {
+    const latest = await prisma.importJob.findFirstOrThrow({
+      where: { status: 'completed', fileName: { contains: 'fixture' } },
+      orderBy: { importedAt: 'desc' },
+    });
+    await request(app.getHttpServer())
+      .post(`/imports/${latest.id}/reverse`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', `reverse-import-${latest.id}`)
+      .send({ reason: 'اختبار استعادة الحالة قبل أول استيراد' })
+      .expect(200);
+
+    expect(await prisma.importedTransaction.count({
+      where: { importJobId: latest.id, reversedAt: null },
+    })).toBe(0);
+    expect(await prisma.importedTransaction.count({
+      where: { importJobId: latest.id, reversedAt: { not: null } },
+    })).toBe(7);
+    expect(await prisma.customerBalance.count({
+      where: { customer: { externalCustomerCode: { startsWith: '900' } } },
+    })).toBe(0);
+    expect(await prisma.customer.count({
+      where: { externalCustomerCode: { startsWith: '900' }, status: 'import_reversed' },
+    })).toBe(3);
+  });
+
+  it('يمكن إعادة استيراد الملف بعد التراجع دون فقد الحركات التاريخية', async () => {
+    const uploaded = await request(app.getHttpServer())
+      .post('/imports/upload')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', FIXTURE)
+      .expect(201);
+    expect(uploaded.body.previouslyImported).toBeNull();
+
+    const executed = await request(app.getHttpServer())
+      .post(`/imports/${uploaded.body.jobId}/execute`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({})
+      .expect(200);
+    expect(executed.body.transactionsNew).toBe(7);
+    expect(await prisma.importedTransaction.count({
+      where: { customer: { externalCustomerCode: { startsWith: '900' } } },
+    })).toBe(14); // 7 تاريخية معكوسة + 7 فعالة جديدة
+    expect(await prisma.customer.count({
+      where: { externalCustomerCode: { startsWith: '900' }, status: 'active' },
+    })).toBe(3);
   });
 });

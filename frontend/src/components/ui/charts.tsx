@@ -26,16 +26,22 @@ export interface HBarItem {
   tone?: BarTone;
 }
 
+export function barGeometry(values: number[], value: number) {
+  const finite = values.filter(Number.isFinite);
+  const min = Math.min(0, ...finite), max = Math.max(0, ...finite);
+  const range = max - min || 1, amount = Number.isFinite(value) ? value : 0;
+  return {zero: -min / range * 100, left: (Math.min(0, amount) - min) / range * 100, width: Math.abs(amount) / range * 100};
+}
+
 /** Horizontal bar list: label + proportional bar + value, optionally clickable. */
 export function HBarChart({ items, emptyText }: { items: HBarItem[]; emptyText?: string }) {
-  const max = Math.max(1, ...items.map((i) => Math.abs(i.value)));
   if (items.length === 0) {
     return <p className="px-1 py-2 text-xs text-concrete-500">{emptyText ?? 'لا بيانات'}</p>;
   }
   return (
     <div className="space-y-2">
       {items.map((item) => {
-        const pct = Math.max(2, Math.round((Math.abs(item.value) / max) * 100));
+        const geometry = barGeometry(items.map(i => i.value), item.value);
         const row = (
           <div className="space-y-1">
             <div className="flex items-center justify-between gap-2 text-xs">
@@ -44,10 +50,11 @@ export function HBarChart({ items, emptyText }: { items: HBarItem[]; emptyText?:
                 {item.valueLabel ?? item.value}
               </span>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-concrete-100 dark:bg-white/10">
+            <div dir="ltr" aria-hidden="true" className="relative h-2 w-full overflow-hidden rounded-full bg-concrete-100 dark:bg-white/10">
+              <span className="absolute inset-y-0 border-l border-ink-mid" style={{left: `${geometry.zero}%`}} />
               <div
-                className={cn('h-full rounded-full', BAR_TONES[item.tone ?? 'pine'])}
-                style={{ width: `${pct}%` }}
+                className={cn('absolute h-full rounded-full', BAR_TONES[item.tone ?? 'pine'])}
+                style={{ left: `${geometry.left}%`, width: `${geometry.width}%` }}
               />
             </div>
           </div>

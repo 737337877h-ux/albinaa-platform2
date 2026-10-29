@@ -74,6 +74,23 @@ class DetectTest(unittest.TestCase):
         self.assertIn('كود مكرر', msgs)
         self.assertIn('كود عميل ناقص', msgs)
 
+    def test_master_contacts_collector_and_advance_type(self):
+        p = self.path('master_contacts.xlsx')
+        make_xlsx(p, [
+            ['رقم العميل', 'اسم العميل', 'رقم الحساب التحليلي', 'الهاتف', 'واتساب',
+             'المنطقة', 'العنوان', 'نوع الحساب', 'المحصل'],
+            ['20001', 'سلفة اختبار', '20001', '+967-700-000-000', '+967-711-111-111',
+             'صنعاء', 'شارع الاختبار', 'سلفة على الغير', 'collector.username'],
+        ])
+        rows, _ = read_table(p)
+        self.assertEqual(detect_profile(rows), PROFILE_MASTER)
+        parsed = parse_profile(rows, PROFILE_MASTER)['customers'][0]
+        self.assertEqual(parsed['accountNumber'], '20001')
+        self.assertEqual(parsed['phone'], '+967-700-000-000')
+        self.assertEqual(parsed['whatsapp'], '+967-711-111-111')
+        self.assertEqual(parsed['customerType'], 'advance')
+        self.assertEqual(parsed['collector'], 'collector.username')
+
     def test_balance_tsv_cp1256(self):
         p = self.path('balance.xls')
         make_tsv(p, [

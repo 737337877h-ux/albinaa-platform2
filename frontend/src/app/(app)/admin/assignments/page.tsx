@@ -42,6 +42,20 @@ interface BulkResult {
   targetCollector: string;
 }
 
+interface SmartPlan {
+  selected: number; matched: number; missing: number; unchanged: number; executed?: number;
+  changes: { customerId: string; customerName: string; region: string | null; collectorId: string; collectorName: string }[];
+  distribution: { collectorId: string; collectorName: string; currentCustomers: number; currentTasks: number; planned: number; projectedCustomers: number }[];
+}
+
+interface AssignmentChangeRequest {
+  id: string; reason: string; status: string; createdAt: string;
+  customer: { id: string; name: string; externalCustomerCode: string | null };
+  requester: { id: string; fullName: string };
+  currentCollector: { id: string; user: { fullName: string } } | null;
+  requestedCollector: { id: string; user: { fullName: string } } | null;
+}
+
 function useDebounced<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -70,6 +84,8 @@ export default function BulkAssignmentPage() {
   const [targetCollectorId, setTargetCollectorId] = useState('');
   const [reason, setReason] = useState('');
   const [preview, setPreview] = useState<BulkResult | null>(null);
+  const [smartPreview, setSmartPreview] = useState<SmartPlan | null>(null);
+  const [requestTargets, setRequestTargets] = useState<Record<string, string>>({});
 
   const customersQuery = useQuery<CustomersResponse>({
     queryKey: ['bulk-assign-customers', debouncedSearch, region, collectorId, balanceState, currency, status, page],
@@ -127,6 +143,44 @@ export default function BulkAssignmentPage() {
     onError: (err: Error) => toast(err.message, 'err'),
   });
 
+  const changeRequestsQuery = useQuery<AssignmentChangeRequest[]>({
+    queryKey: ['assignment-change-requests', 'pending'],
+    queryFn: () => api<AssignmentChangeRequest[]>('/assignments/change-requests?status=pending'),
+    enabled: canTransfer,
+  });
+
+  const reviewRequestMut = useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) =>
+      api(`/assignments/change-requests/${id}/review`, {
+        method: 'PATCH',
+        body: JSON.stringify({ decision, collectorId: decision === 'approved' ? requestTargets[id] || undefined : undefined }),
+      }),
+    onSuccess: () => {
+      toast('تمت معالجة طلب تغيير الإسناد', 'ok');
+      qc.invalidateQueries({ queryKey: ['assignment-change-requests'] });
+      qc.invalidateQueries({ queryKey: ['bulk-assign-customers'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+  const smartPreviewMut = useMutation({
+    mutationFn: () => api<SmartPlan>('/assignments/smart/preview', {
+      method: 'POST', body: JSON.stringify({ customerIds: Array.from(selected), reason: reason || undefined }),
+    }),
+    onSuccess: (data) => { setSmartPreview(data); setPreview(null); },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+  const smartExecuteMut = useMutation({
+    mutationFn: () => api<SmartPlan>('/assignments/smart', {
+      method: 'POST', body: JSON.stringify({ customerIds: Array.from(selected), reason: reason || undefined }),
+    }),
+    onSuccess: (data) => {
+      setSmartPreview(data); setSelected(new Set());
+      toast(`تم توزيع ${data.executed ?? data.changes.length} حسابًا حسب الحمل والمنطقة`, 'ok');
+      qc.invalidateQueries({ queryKey: ['bulk-assign-customers'] });
+    },
+    onError: (err: Error) => toast(err.message, 'err'),
+  });
+
   const activeFilters = [region, collectorId, balanceState, currency, status].filter(Boolean).length;
 
   const toggleOne = (id: string) => {
@@ -137,6 +191,7 @@ export default function BulkAssignmentPage() {
       return next;
     });
     setPreview(null);
+    setSmartPreview(null);
   };
 
   const pageIds = useMemo(() => customersQuery.data?.items.map((c) => c.id) ?? [], [customersQuery.data]);
@@ -150,6 +205,7 @@ export default function BulkAssignmentPage() {
       return next;
     });
     setPreview(null);
+    setSmartPreview(null);
   };
 
   const canRun = selected.size > 0 && !!targetCollectorId;
@@ -165,6 +221,54 @@ export default function BulkAssignmentPage() {
   return (
     <div className="space-y-5">
       <PageHeader title="الإسناد الجماعي" />
+
+      <Card>
+        <div className="border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+          <h2 className="font-display text-base font-semibold">طلبات تغيير الإسناد</h2>
+          <p className="mt-1 text-xs text-concrete-500">طلبات المحصلين المعلقة؛ لا يتغير الإسناد إلا بعد الاعتماد.</p>
+        </div>
+        <DataState
+          isLoading={changeRequestsQuery.isLoading}
+          isError={changeRequestsQuery.isError}
+          error={changeRequestsQuery.error}
+          onRetry={() => changeRequestsQuery.refetch()}
+          isEmpty={!changeRequestsQuery.data?.length}
+          emptyTitle="لا توجد طلبات تغيير إسناد معلقة"
+          skeletonClassName="h-28"
+        >
+          <div className="divide-y divide-concrete-100 dark:divide-white/10">
+            {(changeRequestsQuery.data ?? []).map((request) => {
+              const selectedCollector = requestTargets[request.id] ?? request.requestedCollector?.id ?? '';
+              return (
+                <div key={request.id} className="grid gap-3 p-4 lg:grid-cols-[1fr_240px_auto] lg:items-center">
+                  <div>
+                    <p className="font-semibold">{request.customer.name}</p>
+                    <p className="mt-1 text-xs text-concrete-500">
+                      {request.customer.externalCustomerCode || 'بلا كود'} • مقدم الطلب: {request.requester.fullName}
+                    </p>
+                    <p className="mt-2 text-sm text-concrete-700 dark:text-concrete-300">السبب: {request.reason}</p>
+                    <p className="mt-1 text-xs text-concrete-500">المحصل الحالي: {request.currentCollector?.user.fullName ?? 'غير مسند'}</p>
+                  </div>
+                  <Select
+                    value={selectedCollector}
+                    onChange={(e) => setRequestTargets((prev) => ({ ...prev, [request.id]: e.target.value }))}
+                    aria-label={`المحصل الجديد للعميل ${request.customer.name}`}
+                  >
+                    <option value="">اختر المحصل الجديد...</option>
+                    {(collectorsQuery.data ?? []).map((collector) => (
+                      <option key={collector.id} value={collector.id}>{collector.name}</option>
+                    ))}
+                  </Select>
+                  <div className="flex gap-2">
+                    <Button disabled={!selectedCollector} loading={reviewRequestMut.isPending} onClick={() => reviewRequestMut.mutate({ id: request.id, decision: 'approved' })}>اعتماد</Button>
+                    <Button variant="secondary" disabled={reviewRequestMut.isPending} onClick={() => reviewRequestMut.mutate({ id: request.id, decision: 'rejected' })}>رفض</Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </DataState>
+      </Card>
 
       <Card>
         <div className="border-b border-concrete-100 px-4 py-3 dark:border-white/10">
@@ -220,6 +324,7 @@ export default function BulkAssignmentPage() {
                   onChange={(e) => { setCollectorId(e.target.value); setPage(1); }}
                 >
                   <option value="">الكل</option>
+                  <option value="unassigned">غير مسند</option>
                   {(collectorsQuery.data ?? []).map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
@@ -363,13 +468,28 @@ export default function BulkAssignmentPage() {
             <Field label="السبب" hint="اختياري">
               <Input
                 value={reason}
-                onChange={(e) => { setReason(e.target.value); setPreview(null); }}
+                onChange={(e) => { setReason(e.target.value); setPreview(null); setSmartPreview(null); }}
                 placeholder="سبب الإسناد/النقل"
               />
             </Field>
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              disabled={selected.size === 0}
+              loading={smartPreviewMut.isPending}
+              onClick={() => smartPreviewMut.mutate()}
+            >
+              معاينة التوزيع الذكي
+            </Button>
+            <Button
+              disabled={!smartPreview || selected.size === 0}
+              loading={smartExecuteMut.isPending}
+              onClick={() => smartExecuteMut.mutate()}
+            >
+              تنفيذ التوزيع الذكي
+            </Button>
             <Button
               variant="secondary"
               disabled={!canRun}
@@ -395,6 +515,23 @@ export default function BulkAssignmentPage() {
               <Stat label="إسنادات جديدة" value={preview.assignmentsCreated} />
               <Stat label="مهام حُدّثت" value={preview.tasksUpdated} />
               <Stat label="تم تجاوزها" value={preview.skipped} />
+            </div>
+          )}
+          {smartPreview && (
+            <div className="space-y-3 rounded-lg border border-gold-300 bg-gold-50/40 p-3 dark:border-gold-700 dark:bg-gold-900/10">
+              <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                <Stat label="المحددون" value={smartPreview.selected} />
+                <Stat label="سيتم نقلهم/إسنادهم" value={smartPreview.changes.length} />
+                <Stat label="دون تغيير" value={smartPreview.unchanged} />
+                <Stat label="غير موجود" value={smartPreview.missing} />
+              </div>
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {smartPreview.distribution.map((row) => <div key={row.collectorId} className="rounded-lg bg-white p-3 text-xs dark:bg-iron-800">
+                  <p className="font-semibold">{row.collectorName}</p>
+                  <p className="mt-1 text-concrete-500">الحالي: {row.currentCustomers} حساب • {row.currentTasks} مهمة</p>
+                  <p className="mt-1 font-semibold text-pine-700 dark:text-pine-200">المقترح: +{row.planned} • الإجمالي المتوقع {row.projectedCustomers}</p>
+                </div>)}
+              </div>
             </div>
           )}
         </div>

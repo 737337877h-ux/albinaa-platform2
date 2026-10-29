@@ -5,8 +5,10 @@ import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
+import { orgDateOnly } from '../common/org-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateFollowupDto } from './dto/create-followup.dto';
+import { CreateContactEventDto } from './dto/create-contact-event.dto';
 import { QueryFollowupsDto } from './dto/query-followups.dto';
 import { UpdateFollowupDto } from './dto/update-followup.dto';
 
@@ -16,6 +18,15 @@ export class FollowupsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
   ) {}
+
+  private isPaidResult(name: string): boolean {
+    const normalized = name
+      .trim()
+      .toLowerCase()
+      .replace(/[\u064b-\u065f\u0670]/g, '')
+      .replace(/\s+/g, ' ');
+    return normalized === 'تم السداد' || normalized === 'سدد بالكامل';
+  }
 
   /** نطاق الرؤية: بلا customers.read_all → متابعات عملائه المسندين فقط. */
   private async scope(user: AuthUser): Promise<Prisma.FollowupWhereInput> {
@@ -62,22 +73,62 @@ export class FollowupsService {
     ]);
     if (!type) throw new BadRequestException('نوع المتابعة غير موجود أو معطل');
     if (!result) throw new BadRequestException('نتيجة المتابعة غير موجودة أو معطلة');
+    if (!this.isPaidResult(result.name) && !dto.nextFollowupDate) {
+      throw new BadRequestException('موعد المتابعة القادمة مطلوب لكل نتيجة عدا "تم السداد"');
+    }
 
-    const followup = await this.prisma.followup.create({
-      data: {
-        customerId: dto.customerId,
-        userId: actor.id,
-        typeId: dto.typeId,
-        resultId: dto.resultId,
-        followupAt: dto.followupAt ? new Date(dto.followupAt) : new Date(),
-        notes: dto.notes,
-        nextFollowupDate: dto.nextFollowupDate ? new Date(dto.nextFollowupDate) : null,
-        expectedAmount: dto.expectedAmount,
-        expectedCurrency: dto.expectedCurrency,
-        visitLat: dto.visitLat,
-        visitLng: dto.visitLng,
-      },
-      include: { type: true, result: true },
+    const ownCollector = await this.prisma.collector.findUnique({ where: { userId: actor.id } });
+    const currentAssignment = await this.prisma.customerAssignment.findFirst({
+      where: { customerId: dto.customerId, effectiveTo: null },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    const collectorId = ownCollector?.id ?? currentAssignment?.collectorId ?? null;
+    const today = new Date(`${orgDateOnly()}T00:00:00.000Z`);
+    const nextFollowupDate = dto.nextFollowupDate ? new Date(dto.nextFollowupDate) : null;
+
+    const followup = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.followup.create({
+        data: {
+          customerId: dto.customerId,
+          userId: actor.id,
+          typeId: dto.typeId,
+          resultId: dto.resultId,
+          followupAt: dto.followupAt ? new Date(dto.followupAt) : new Date(),
+          notes: dto.notes,
+          nextFollowupDate,
+          expectedAmount: dto.expectedAmount,
+          expectedCurrency: dto.expectedCurrency,
+          visitLat: dto.visitLat,
+          visitLng: dto.visitLng,
+        },
+        include: { type: true, result: true },
+      });
+      await tx.task.updateMany({
+        where: {
+          customerId: dto.customerId, status: 'open', dueDate: { lte: today },
+          ...(collectorId ? { assignedTo: collectorId } : {}),
+        },
+        data: { status: 'done' },
+      });
+      if (!this.isPaidResult(result.name) && nextFollowupDate) {
+        const duplicate = await tx.task.findFirst({
+          where: {
+            customerId: dto.customerId, assignedTo: collectorId, status: 'open',
+            taskType: 'followup_due', dueDate: nextFollowupDate,
+          },
+        });
+        if (!duplicate) {
+          await tx.task.create({
+            data: {
+              customerId: dto.customerId, assignedTo: collectorId, createdBy: actor.id,
+              taskType: 'followup_due', dueDate: nextFollowupDate,
+              priorityReason: `موعد المتابعة القادم — ${result.name}`,
+              expectedAmount: dto.expectedAmount, expectedCurrency: dto.expectedCurrency,
+            },
+          });
+        }
+      }
+      return created;
     });
 
     await this.audit.log({
@@ -87,11 +138,48 @@ export class FollowupsService {
     return followup;
   }
 
+  async createContactEvent(actor: AuthUser, dto: CreateContactEventDto, req?: Request) {
+    await this.assertCustomerInScope(actor, dto.customerId);
+    const typeName = dto.channel === 'whatsapp' ? 'رسالة واتساب' : 'رسالة نصية';
+    const resultName = 'تم فتح تطبيق الإرسال';
+    const followup = await this.prisma.$transaction(async (tx) => {
+      const type = await tx.followupType.upsert({
+        where: { organizationId_name: { organizationId: actor.organizationId, name: typeName } },
+        update: { active: true },
+        create: { organizationId: actor.organizationId, name: typeName },
+      });
+      const result = await tx.followupResult.upsert({
+        where: { organizationId_name: { organizationId: actor.organizationId, name: resultName } },
+        update: { active: true },
+        create: { organizationId: actor.organizationId, name: resultName },
+      });
+      return tx.followup.create({
+        data: {
+          customerId: dto.customerId,
+          userId: actor.id,
+          typeId: type.id,
+          resultId: result.id,
+          notes: `${typeName}${dto.templateId ? ` — القالب: ${dto.templateId}` : ''}\n${dto.message}`,
+        },
+        include: { type: true, result: true },
+      });
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'contact_app_opened',
+      entityTable: 'followups',
+      entityId: followup.id,
+      newValue: { customerId: dto.customerId, channel: dto.channel, templateId: dto.templateId ?? null },
+      req,
+    });
+    return followup;
+  }
+
   async findAll(user: AuthUser, q: QueryFollowupsDto) {
     const page = q.page ?? 1;
     const limit = q.limit ?? 25;
     const where = await this.scope(user);
-    if (q.customerId) (where.customer as any) = { ...(where.customer as any), id: q.customerId };
+    if (q.customerId) where.customerId = q.customerId;
     if (q.collectorUserId) where.userId = q.collectorUserId;
     if (q.fromDate || q.toDate) {
       where.followupAt = {};

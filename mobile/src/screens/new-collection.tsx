@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createCollection, fetchCollectionMethods, fetchCurrencies } from '../api/endpoints';
-import { enqueueMutation } from '../db/database';
+import { enqueueMutation, getReferenceOptions, recordCollectionOffline, saveGpsPoint } from '../db/database';
 import { getCurrentPosition } from '../utils/gps';
 import { apiErrorMessage } from '../utils/errors';
-import { useSync } from '../store/sync-context';
 import CustomerPicker from '../components/customer-picker';
+import { colors, radius, shadow } from '../theme';
 
 export default function NewCollectionScreen({ route, navigation }: any) {
   const presetCustomerId = route.params?.customerId || '';
@@ -18,16 +18,21 @@ export default function NewCollectionScreen({ route, navigation }: any) {
   const [customerId, setCustomerId] = useState(presetCustomerId);
   const [customerName, setCustomerName] = useState(presetCustomerName);
   const queryClient = useQueryClient();
-  const { triggerSync } = useSync();
 
   const methodsQuery = useQuery({
     queryKey: ['collection-methods'],
-    queryFn: () => fetchCollectionMethods().then((r) => r.data || []),
+    queryFn: async () => {
+      try { return (await fetchCollectionMethods()).data || []; }
+      catch { return getReferenceOptions('collectionMethods'); }
+    },
   });
 
   const currenciesQuery = useQuery({
     queryKey: ['currencies'],
-    queryFn: () => fetchCurrencies().then((r) => r.data || []),
+    queryFn: async () => {
+      try { return (await fetchCurrencies()).data || []; }
+      catch { return getReferenceOptions('currencies'); }
+    },
   });
 
   const mutation = useMutation({
@@ -45,30 +50,50 @@ export default function NewCollectionScreen({ route, navigation }: any) {
         notes: notes || undefined,
         collectedAt: new Date().toISOString(),
       };
-      try {
-        const pos = await getCurrentPosition();
-        Object.assign(payload, { gpsLatitude: pos.latitude, gpsLongitude: pos.longitude, gpsAccuracy: pos.accuracy });
-      } catch { /* GPS optional */ }
+      const positionPromise = Promise.race([
+        getCurrentPosition().catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_200)),
+      ]);
 
       try {
-        return await createCollection(payload);
+        const result = await createCollection(payload);
+        if (result.data?.id) {
+          positionPromise.then((position) => {
+            if (position) return saveGpsPoint({ ...position, entityTable: 'collections', entityId: result.data.id });
+          }).catch(() => undefined);
+        }
+        return result;
       } catch (err: any) {
         if (!err?.response) {
           const opId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
           await enqueueMutation(opId, 'POST', '/collections', payload);
+          positionPromise.then((position) => {
+            if (position) return saveGpsPoint({ ...position, entityTable: 'collections', entityId: `local:${opId}` });
+          }).catch(() => undefined);
           return { data: { id: opId, offline: true } };
         }
         throw err;
       }
     },
-    onSuccess: (res: any) => {
+    onSuccess: async (res: any) => {
       const collectionId = res?.data?.id || res?.id || '';
+      if (collectionId && !res?.data?.offline) {
+        await recordCollectionOffline({
+          id: collectionId,
+          customerId,
+          customerName,
+          amount: Number(amount),
+          currencyCode: currency,
+          methodName: (methodsQuery.data || []).find((item: any) => item.id === methodId)?.name,
+          notes: notes || undefined,
+          collectedAt: res?.data?.collectedAt || new Date().toISOString(),
+        });
+      }
       queryClient.invalidateQueries({ queryKey: ['customer-details'] });
       queryClient.invalidateQueries({ queryKey: ['customer-timeline'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['collections'] });
       queryClient.invalidateQueries({ queryKey: ['sync'] });
-      triggerSync();
       Alert.alert('تم', res?.data?.offline ? 'تم حفظ التحصيل محليًا وسيُزامَن لاحقًا' : 'تم تسجيل التحصيل', [
         ...(collectionId && !res?.data?.offline
           ? [{ text: 'رفع سند', onPress: () => navigation.replace('UploadReceipt', { collectionId }) }]
@@ -84,7 +109,8 @@ export default function NewCollectionScreen({ route, navigation }: any) {
   const methods = methodsQuery.data || [];
 
   return (
-    <ScrollView style={styles.container}>
+    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <CustomerPicker
         selectedId={customerId}
         selectedName={customerName}
@@ -105,7 +131,7 @@ export default function NewCollectionScreen({ route, navigation }: any) {
 
       <Text style={styles.label}>طريقة الدفع</Text>
       {methodsQuery.isLoading ? (
-        <ActivityIndicator color="#1a73e8" />
+        <ActivityIndicator color={colors.goldDark} />
       ) : methods.length === 0 ? (
         <Text style={styles.warn}>تعذر تحميل طرق الدفع من الخادم</Text>
       ) : (
@@ -129,20 +155,23 @@ export default function NewCollectionScreen({ route, navigation }: any) {
         <Text style={styles.buttonText}>{mutation.isPending ? 'جارٍ الحفظ...' : 'تسجيل التحصيل'}</Text>
       </TouchableOpacity>
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f4f8', padding: 16 },
-  label: { fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 16 },
-  input: { backgroundColor: '#fff', borderRadius: 10, padding: 14, fontSize: 16, color: '#333', marginBottom: 8 },
+  screen: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, backgroundColor: colors.background },
+  content: { padding: 16, paddingBottom: 48 },
+  label: { fontSize: 15, fontWeight: '800', color: colors.ink, marginBottom: 8, marginTop: 18, textAlign: 'right' },
+  input: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 14, fontSize: 16, color: colors.ink, marginBottom: 8, borderWidth: 1, borderColor: colors.line, textAlign: 'right' },
   row: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  btn: { padding: 12, borderRadius: 10, backgroundColor: '#fff', alignItems: 'center', borderWidth: 1, borderColor: '#ddd', minWidth: 60 },
-  btnActiveGreen: { backgroundColor: '#ea4335', borderColor: '#ea4335' },
-  btnText: { color: '#333' },
-  btnTextActive: { color: '#fff' },
-  textarea: { backgroundColor: '#fff', borderRadius: 10, padding: 14, fontSize: 16, color: '#333', textAlignVertical: 'top', minHeight: 80 },
-  button: { backgroundColor: '#ea4335', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 24, marginBottom: 40 },
-  buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
-  warn: { color: '#b45309', backgroundColor: '#fff7ed', padding: 12, borderRadius: 8, marginBottom: 8 },
+  btn: { padding: 12, borderRadius: radius.md, backgroundColor: colors.surface, alignItems: 'center', borderWidth: 1, borderColor: colors.line, minWidth: 60 },
+  btnActiveGreen: { backgroundColor: colors.gold, borderColor: colors.goldDark },
+  btnText: { color: colors.ink, fontWeight: '700' },
+  btnTextActive: { color: colors.primary, fontWeight: '900' },
+  textarea: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 14, fontSize: 16, color: colors.ink, textAlignVertical: 'top', minHeight: 90, borderWidth: 1, borderColor: colors.line, textAlign: 'right' },
+  button: { backgroundColor: colors.gold, borderRadius: radius.md, padding: 16, alignItems: 'center', marginTop: 26, ...shadow },
+  buttonText: { color: colors.primary, fontSize: 17, fontWeight: '900' },
+  warn: { color: colors.warning, backgroundColor: colors.goldSoft, padding: 12, borderRadius: radius.sm, marginBottom: 8 },
 });

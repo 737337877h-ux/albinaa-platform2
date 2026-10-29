@@ -39,6 +39,9 @@ interface PromiseItem {
   status: PromiseStatus;
   statusReason: string | null;
   fulfilledAmount: number | null;
+  settlementDate?: string | null;
+  settledLate?: boolean;
+  missedDueDate?: string | null;
   notes: string | null;
   customer: { id: string; name: string; externalCustomerCode: string | null };
   collector: { user: { fullName: string } } | null;
@@ -53,6 +56,7 @@ interface PromisesResponse {
 }
 
 interface CustomerSearchItem {
+  customerType?: string | null;
   id: string;
   name: string;
   externalCustomerCode: string | null;
@@ -358,9 +362,17 @@ export default function PromisesPage() {
                       <TD className="tnum text-sm">{fmtMoney(p.expectedAmount)}</TD>
                       <TD className="text-xs">{CCY_AR[p.currencyCode] ?? p.currencyCode}</TD>
                       <TD>
-                        <Badge tone={statusTone(p.status)}>
-                          {PROMISE_STATUS_AR[p.status] ?? p.status}
+                        <Badge tone={p.status === 'fulfilled' && p.settledLate ? 'hazard' : statusTone(p.status)}>
+                          {p.status === 'fulfilled' && p.settledLate
+                            ? 'تم السداد بعد الموعد'
+                            : PROMISE_STATUS_AR[p.status] ?? p.status}
                         </Badge>
+                        {p.settlementDate && <p className="mt-1 text-xs text-concrete-500">
+                          تاريخ السداد: {fmtDate(p.settlementDate)}
+                        </p>}
+                        {p.missedDueDate && <p className="mt-1 text-xs text-concrete-500">
+                          سبق تسجيل الوعد كغير منفذ عند استحقاق {fmtDate(p.missedDueDate)}
+                        </p>}
                       </TD>
                       <TD className="tnum text-sm">{fmtMoney(remaining > 0 ? remaining : 0)}</TD>
                       <TD className="text-sm">{p.collector?.user?.fullName ?? '—'}</TD>
@@ -472,8 +484,10 @@ function CreateDialog({
     }
     let cancelled = false;
     setCustSearching(true);
-    api<{ items: CustomerSearchItem[] }>(`/customers?search=${encodeURIComponent(debouncedCust)}&limit=10`)
-      .then((res) => { if (!cancelled) setCustResults(res.items); })
+    Promise.all(['customer', 'advance'].map((accountClass) =>
+      api<{ items: CustomerSearchItem[] }>(`/customers?accountClass=${accountClass}&search=${encodeURIComponent(debouncedCust)}&limit=10`)
+    ))
+      .then((responses) => { if (!cancelled) setCustResults(responses.flatMap((res) => res.items)); })
       .catch(() => { if (!cancelled) setCustResults([]); })
       .finally(() => { if (!cancelled) setCustSearching(false); });
     return () => { cancelled = true; };
@@ -491,11 +505,12 @@ function CreateDialog({
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* اختيار العميل */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-concrete-700 dark:text-concrete-200">العميل *</label>
+          <label className="text-sm font-medium text-concrete-700 dark:text-concrete-200">العميل أو حساب السلف *</label>
           {selectedCust ? (
             <div className="flex items-center justify-between rounded-lg border border-concrete-200 bg-concrete-50 px-3 py-2 dark:border-white/10 dark:bg-iron-700">
               <div>
                 <span className="text-sm font-medium">{selectedCust.name}</span>
+                <span className="mr-2 text-xs">{selectedCust.customerType === 'advance' ? 'سلف' : 'عميل'}</span>
                 {selectedCust.externalCustomerCode && (
                   <span className="mr-2 text-xs text-concrete-500" dir="ltr">{selectedCust.externalCustomerCode}</span>
                 )}
@@ -513,7 +528,7 @@ function CreateDialog({
               <Input
                 value={custSearch}
                 onChange={(e) => setCustSearch(e.target.value)}
-                placeholder="ابحث عن العميل بالاسم أو الكود…"
+                placeholder="ابحث عن العميل أو السلف بالاسم أو الكود…"
               />
               {custSearching && <p className="text-xs text-concrete-400">جارٍ البحث…</p>}
               {custResults.length > 0 && (
@@ -526,6 +541,7 @@ function CreateDialog({
                       className="w-full px-3 py-2 text-right text-sm hover:bg-pine-50 dark:hover:bg-white/5"
                     >
                       <span className="font-medium">{c.name}</span>
+                      <span className="mr-2 text-xs">{c.customerType === 'advance' ? 'سلف' : 'عميل'}</span>
                       {c.externalCustomerCode && (
                         <span className="mr-2 text-xs text-concrete-500" dir="ltr">{c.externalCustomerCode}</span>
                       )}

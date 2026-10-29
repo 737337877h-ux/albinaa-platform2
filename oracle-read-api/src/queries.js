@@ -1,0 +1,681 @@
+'use strict';
+
+function warehouseExists(schema) {
+  return `SELECT 1 AS FOUND FROM ${schema}.WAREHOUSE_DETAILS WHERE W_CODE = :warehouseCode AND ROWNUM = 1`;
+}
+
+function currencies(schema) {
+  return `SELECT CUR_NO, CUR_CODE, CUR_NAME, CUR_E_NAME, CUR_RATE, L_F, STOCK_CUR,
+       MIN_CUR_RATE, MAX_CUR_RATE, CUR_FRC_NO,
+       TO_CHAR(NVL(UP_DATE, AD_DATE), 'YYYY-MM-DD HH24:MI:SS') AS RATE_UPDATED_AT
+FROM ${schema}.EX_RATE
+ORDER BY CUR_NO`;
+}
+
+function warehouses(schema) {
+  return `SELECT TO_CHAR(W_CODE) AS WAREHOUSE_CODE, W_NAME AS NAME_AR, W_E_NAME AS NAME_EN,
+       LOCATION AS LOCATION_TEXT, TEL_NO AS PHONE, NVL(INACTIVE, 0) AS INACTIVE,
+       WH_KEEPER AS KEEPER_NAME, TO_CHAR(WHG_CODE) AS GROUP_CODE, W_TYPE AS WAREHOUSE_TYPE,
+       NVL(NO_SALE, 0) AS NO_SALE, NVL(CHK_AVL_QTY, 0) AS CHECK_AVAILABLE_QUANTITY,
+       TO_CHAR(CONN_BRN_NO) AS BRANCH_CODE
+FROM ${schema}.WAREHOUSE_DETAILS
+WHERE NVL(INACTIVE, 0) = 0
+ORDER BY W_CODE`;
+}
+
+function normalizeSmartSearch(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed]/g, '')
+    .replace(/[إأآٱا]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه')
+    .replace(/ؤ/g, 'و').replace(/ئ/g, 'ي').replace(/ـ/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function itemSearch(search) {
+  const terms = [...new Set(normalizeSmartSearch(search).split(' ').filter(Boolean))].slice(0, 8);
+  if (terms.length === 0) return { clause: '1 = 1', binds: {} };
+  const binds = Object.fromEntries(terms.map((term, index) => [`search${index}`, `%${term.toUpperCase()}%`]));
+  return {
+    clause: terms.map((_, index) => `(UPPER(I_CODE) LIKE :search${index}
+      OR UPPER(I_NAME) LIKE :search${index} OR UPPER(NVL(BARCODE, '')) LIKE :search${index})`).join('\n    AND '),
+    binds,
+  };
+}
+
+function items(schema, search, limit) {
+  const smartSearch = itemSearch(search);
+  return {
+    count: `SELECT COUNT(DISTINCT I_CODE) AS TOTAL
+FROM ${schema}.ITEM_DETAILS
+WHERE NVL(INACTIVE, 0) = 0
+  AND ${smartSearch.clause}`,
+    rows: `SELECT * FROM (
+  SELECT I_CODE AS ITEM_CODE, MAX(I_NAME) AS NAME_AR, MAX(I_E_NAME) AS NAME_EN,
+         TO_CHAR(MAX(G_CODE)) AS GROUP_CODE, MAX(PRIMARY_COST) AS PRIMARY_COST,
+         MAX(I_CWTAVG) AS WEIGHTED_AVERAGE_COST, MAX(NVL(SERVICE_ITM, 0)) AS SERVICE_ITEM,
+         TO_CHAR(MAX(AD_DATE), 'YYYY-MM-DD HH24:MI:SS') AS SOURCE_UPDATED_AT,
+         COUNT(*) AS UNIT_COUNT
+  FROM ${schema}.ITEM_DETAILS
+  WHERE NVL(INACTIVE, 0) = 0
+    AND ${smartSearch.clause}
+  GROUP BY I_CODE
+  ORDER BY I_CODE
+) WHERE ROWNUM <= :rowLimit`,
+    binds: {
+      ...smartSearch.binds,
+      rowLimit: limit,
+    },
+  };
+}
+
+function item(schema) {
+  return {
+    details: `SELECT I_CODE AS ITEM_CODE, MAX(I_NAME) AS NAME_AR, MAX(I_E_NAME) AS NAME_EN,
+       TO_CHAR(MAX(G_CODE)) AS GROUP_CODE, MAX(PRIMARY_COST) AS PRIMARY_COST,
+       MAX(I_CWTAVG) AS WEIGHTED_AVERAGE_COST, MAX(NVL(INACTIVE, 0)) AS INACTIVE,
+       MAX(NVL(SERVICE_ITM, 0)) AS SERVICE_ITEM,
+       TO_CHAR(MAX(AD_DATE), 'YYYY-MM-DD HH24:MI:SS') AS SOURCE_UPDATED_AT
+FROM ${schema}.ITEM_DETAILS WHERE I_CODE = :itemCode GROUP BY I_CODE`,
+    units: `SELECT ITM_UNT AS UNIT_NAME, P_SIZE AS PACKAGE_SIZE, NVL(MAIN_UNIT, 0) AS MAIN_UNIT,
+       NVL(SALE_UNIT, 0) AS SALE_UNIT, NVL(PUR_UNIT, 0) AS PURCHASE_UNIT,
+       NVL(STOCK_UNIT, 0) AS STOCK_UNIT, NVL(NO_SALE, 0) AS NO_SALE,
+       BARCODE, LVL_UNIT AS UNIT_LEVEL, NVL(USE_SERIALNO, 0) AS USES_SERIAL_NUMBER,
+       NVL(INACTIVE, 0) AS INACTIVE
+FROM ${schema}.ITEM_DETAILS WHERE I_CODE = :itemCode ORDER BY LVL_UNIT, ITM_UNT`,
+    stock: `SELECT S.ITM_UNT AS UNIT_NAME, D.P_SIZE AS PACKAGE_SIZE, TO_CHAR(S.W_CODE) AS WAREHOUSE_CODE,
+       NVL(S.AVL_QTY, 0) AS AVAILABLE_QUANTITY, S.I_PRICE AS SALE_PRICE, W.W_NAME AS WAREHOUSE_NAME,
+       TO_CHAR(W.CONN_BRN_NO) AS BRANCH_CODE, NVL(W.INACTIVE, 0) AS WAREHOUSE_INACTIVE
+FROM ${schema}.IAS_V_ITM_AVLQTY S
+LEFT JOIN ${schema}.ITEM_DETAILS D ON D.I_CODE = S.I_CODE AND D.ITM_UNT = S.ITM_UNT
+LEFT JOIN ${schema}.WAREHOUSE_DETAILS W ON W.W_CODE = S.W_CODE
+WHERE S.I_CODE = :itemCode ORDER BY S.W_CODE, S.ITM_UNT`,
+    movements: `SELECT * FROM (
+  SELECT TO_CHAR(DOC_SER, 'FM99999999999999999999999999999999999999') AS DOCUMENT_SERIAL,
+       TO_CHAR(DOC_SEQUENCE) AS DOCUMENT_SEQUENCE, TO_CHAR(DOC_NO) AS DOCUMENT_NUMBER,
+       TO_CHAR(DOC_TYPE) AS DOCUMENT_TYPE, TO_CHAR(I_DATE, 'YYYY-MM-DD') AS MOVEMENT_DATE,
+       ITM_UNT AS UNIT_NAME, I_QTY AS ITEM_QUANTITY, P_QTY AS PRIMARY_QUANTITY,
+       I_COST AS ITEM_COST, STK_COST AS STOCK_COST, A_CY AS CURRENCY_CODE,
+       IN_OUT, TO_CHAR(W_CODE) AS WAREHOUSE_CODE, A_DESC AS DESCRIPTION
+  FROM ${schema}.ITEM_MOVEMENT
+  WHERE I_CODE = :itemCode
+  ORDER BY I_DATE DESC, DOC_SEQUENCE DESC
+) WHERE ROWNUM <= 100`,
+  };
+}
+
+function itemLabels(schema, itemCodes) {
+  const uniqueItems = [...new Set(itemCodes.map((code) => code.trim()).filter(Boolean))];
+  if (uniqueItems.length === 0) return null;
+  if (uniqueItems.length > 200) throw new Error('At most 200 itemCodes are allowed');
+  const binds = Object.fromEntries(uniqueItems.map((code, index) => [`item${index}`, code]));
+  return {
+    sql: `SELECT I_CODE AS ITEM_CODE, MAX(I_NAME) AS NAME_AR
+FROM ${schema}.ITEM_DETAILS
+WHERE I_CODE IN (${uniqueItems.map((_, index) => `:item${index}`).join(', ')})
+GROUP BY I_CODE`,
+    binds,
+  };
+}
+
+function stock(schema) {
+  return {
+    itemExists: `SELECT 1 AS FOUND FROM ${schema}.ITEM_DETAILS
+WHERE I_CODE = :itemCode AND ROWNUM = 1`,
+    unit: `SELECT I_CODE AS ITEM_CODE, ITM_UNT AS UNIT_CODE, P_SIZE AS PACKAGE_SIZE
+FROM ${schema}.ITEM_DETAILS
+WHERE I_CODE = :itemCode AND ITM_UNT = :unitCode AND ROWNUM = 1`,
+    available: `SELECT NVL(SUM(AVL_QTY), 0) AS AVAILABLE_QUANTITY
+FROM ${schema}.IAS_V_ITM_AVLQTY
+WHERE I_CODE = :itemCode AND W_CODE = :warehouseCode AND ITM_UNT = :unitCode`,
+  };
+}
+
+function transferEvidence(schema, itemCodes) {
+  const uniqueItems = [...new Set(itemCodes.map((code) => code.trim()).filter(Boolean))];
+  if (uniqueItems.length === 0) throw new Error('At least one itemCode is required');
+  if (uniqueItems.length > 200) throw new Error('At most 200 itemCodes are allowed');
+  const itemBinds = Object.fromEntries(uniqueItems.map((code, index) => [`item${index}`, code]));
+  const itemList = uniqueItems.map((_, index) => `:item${index}`).join(', ');
+  return {
+    source: `SELECT TO_CHAR(TR_SER, 'FM99999999999999999999') AS TRANSFER_SERIAL,
+       TO_CHAR(TR_NO, 'FM99999999999999999999') AS TRANSFER_DOCUMENT_NUMBER,
+       TO_CHAR(W_CODE) AS WAREHOUSE_CODE, TO_CHAR(T_W_CODE) AS DESTINATION_WAREHOUSE_CODE,
+       TR_POST, STK_PROCESSED, TO_CHAR(POST_DATE, 'YYYY-MM-DD HH24:MI:SS') AS POST_DATE
+FROM ${schema}.IAS_WHTRNS_MST
+WHERE TR_SER = :sourceTransferSerial
+  AND W_CODE = :sourceWarehouseCode
+  AND T_W_CODE = :destinationWarehouseCode`,
+    destinations: `SELECT TO_CHAR(TR_SER, 'FM99999999999999999999') AS TRANSFER_SERIAL,
+       TO_CHAR(F_TR_SER, 'FM99999999999999999999') AS SOURCE_TRANSFER_SERIAL,
+       TO_CHAR(W_CODE) AS WAREHOUSE_CODE
+FROM ${schema}.IAS_WHTRNS_MST
+WHERE F_TR_SER = :sourceTransferSerial
+  AND TR_SER <> :sourceTransferSerial
+  AND W_CODE = :destinationWarehouseCode`,
+    movements: `SELECT TO_CHAR(DOC_SER, 'FM99999999999999999999') AS DOCUMENT_SERIAL,
+       DOC_TYPE AS DOCUMENT_TYPE, I_CODE AS ITEM_CODE, TO_CHAR(W_CODE) AS WAREHOUSE_CODE
+FROM ${schema}.ITEM_MOVEMENT
+WHERE I_CODE IN (${itemList})
+  AND DOC_TYPE IN (7, 8)
+  AND (DOC_SER = :sourceTransferSerial OR DOC_SER IN (
+    SELECT TR_SER FROM ${schema}.IAS_WHTRNS_MST
+    WHERE F_TR_SER = :sourceTransferSerial AND TR_SER <> :sourceTransferSerial
+  ))`,
+    itemBinds,
+  };
+}
+
+function transferByOutRequest(schema) {
+  return `SELECT DISTINCT TO_CHAR(M.TR_NO, 'FM99999999999999999999') AS TRANSFER_DOCUMENT_NUMBER,
+       TO_CHAR(M.TR_SER, 'FM99999999999999999999') AS TRANSFER_SERIAL,
+       TO_CHAR(D.DOC_SER_REF, 'FM99999999999999999999') AS REQUEST_SERIAL,
+       TO_CHAR(M.W_CODE) AS WAREHOUSE_CODE, TO_CHAR(M.T_W_CODE) AS DESTINATION_WAREHOUSE_CODE,
+       TO_CHAR(M.F_TR_SER, 'FM99999999999999999999') AS SOURCE_TRANSFER_SERIAL,
+       M.TR_POST, M.STK_PROCESSED, TO_CHAR(M.POST_DATE, 'YYYY-MM-DD HH24:MI:SS') AS POST_DATE
+FROM ${schema}.IAS_WHTRNS_MST M
+JOIN ${schema}.IAS_WHTRNS_DTL D ON D.TR_SER = M.TR_SER
+WHERE D.DOC_TYPE_REF = 31 AND D.DOC_SER_REF = :outReqSer
+ORDER BY TRANSFER_SERIAL`;
+}
+
+function compatibility(schema) {
+  const required = {
+    WAREHOUSE_DETAILS: ['W_CODE'],
+    ITEM_DETAILS: ['I_CODE', 'ITM_UNT', 'P_SIZE'],
+    IAS_V_ITM_AVLQTY: ['I_CODE', 'W_CODE', 'ITM_UNT', 'AVL_QTY'],
+    IAS_WHTRNS_MST: ['TR_NO', 'TR_SER', 'W_CODE', 'T_W_CODE', 'F_TR_SER', 'TR_POST', 'STK_PROCESSED', 'POST_DATE'],
+    ITEM_MOVEMENT: ['DOC_SER', 'DOC_TYPE', 'I_CODE', 'W_CODE'],
+    CUSTOMER_CURR: ['C_CODE', 'A_CY', 'INACTIVE'],
+    ACCOUNT_CURR: ['A_CODE', 'A_CY', 'INACTIVE'],
+  };
+  const tables = Object.keys(required);
+  const tableBinds = Object.fromEntries(tables.map((table, index) => [`table${index}`, table]));
+  return {
+    sql: `SELECT TABLE_NAME, COLUMN_NAME FROM ALL_TAB_COLUMNS
+WHERE OWNER = :owner AND TABLE_NAME IN (${tables.map((_, index) => `:table${index}`).join(', ')})`,
+    binds: { owner: schema, ...tableBinds },
+    required,
+  };
+}
+
+function customerOrdersMetadata(schema) {
+  const tables = ['SALES_ORDER', 'ORDER_DETAIL'];
+  return {
+    sql: `SELECT TABLE_NAME,COLUMN_ID,COLUMN_NAME,DATA_TYPE,DATA_LENGTH,DATA_PRECISION,
+       DATA_SCALE,NULLABLE
+FROM ALL_TAB_COLUMNS
+WHERE OWNER=:owner AND TABLE_NAME IN (:masterTable,:detailTable)
+ORDER BY TABLE_NAME,COLUMN_ID`,
+    binds: { owner: schema, masterTable: tables[0], detailTable: tables[1] },
+  };
+}
+
+function customerOrdersProfile(schema) {
+  return `SELECT TO_CHAR(BILL_DOC_TYPE) AS BILL_DOCUMENT_TYPE,
+       COUNT(*) AS ORDER_COUNT,
+       SUM(CASE WHEN C_CODE IS NULL THEN 1 ELSE 0 END) AS WITHOUT_CUSTOMER_CODE,
+       SUM(CASE WHEN C_CODE IS NOT NULL THEN 1 ELSE 0 END) AS WITH_CUSTOMER_CODE,
+       SUM(CASE WHEN TRIM(C_NAME) IS NULL THEN 1 ELSE 0 END) AS WITHOUT_CUSTOMER_NAME,
+       MIN(ORDER_DATE) AS FIRST_ORDER_DATE,
+       MAX(ORDER_DATE) AS LAST_ORDER_DATE
+FROM ${schema}.SALES_ORDER
+WHERE NVL(INACTIVE,0)=0
+GROUP BY BILL_DOC_TYPE
+ORDER BY BILL_DOC_TYPE`;
+}
+
+function customerOrders(schema, {
+  kind = 'all', afterSerial = null, exactSerial = null, limit = 200, search = null,
+} = {}) {
+  const documentType = kind === 'cash' ? 1 : kind === 'credit' ? 4 : null;
+  const normalizedSearch = search?.trim().toUpperCase() || null;
+  return {
+    sql: `SELECT * FROM (
+  SELECT TO_CHAR(M.SO_TYPE) AS SALES_ORDER_TYPE,
+       TO_CHAR(M.ORDER_NO) AS ORDER_NO,
+       TO_CHAR(M.ORDER_SER,'FM99999999999999999999999999999999999999') AS ORDER_SERIAL,
+       TO_CHAR(M.ORDER_DATE,'YYYY-MM-DD') AS ORDER_DATE,
+       M.ORDER_CUR AS CURRENCY_CODE,M.CUR_RATE AS EXCHANGE_RATE,
+       TO_CHAR(M.C_CODE) AS CUSTOMER_CODE,M.C_NAME AS CUSTOMER_NAME,
+       COALESCE(M.C_MOBILE,TO_CHAR(M.MOBILE_NO)) AS CUSTOMER_MOBILE,M.C_ADDRESS AS CUSTOMER_ADDRESS,
+       M.A_DESC AS DESCRIPTION,TO_CHAR(M.W_CODE) AS WAREHOUSE_CODE,
+       TO_CHAR(M.BILL_DOC_TYPE) AS BILL_DOCUMENT_TYPE,M.ORDER_AMT AS ORDER_AMOUNT,
+       NVL(M.APPROVED,0) AS APPROVED,NVL(M.PROCESED,0) AS PROCESSED,
+       NVL(M.INACTIVE,0) AS INACTIVE,TO_CHAR(M.AD_DATE,'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
+       TO_CHAR(NVL(M.UP_DATE,M.AD_DATE),'YYYY-MM-DD HH24:MI:SS') AS UPDATED_AT,
+       TO_CHAR(M.CMP_NO) AS COMPANY_NO,TO_CHAR(M.BRN_NO) AS BRANCH_NO,
+       TO_CHAR(M.BRN_YEAR) AS BRANCH_YEAR,TO_CHAR(M.BRN_USR) AS BRANCH_USER
+  FROM ${schema}.SALES_ORDER M
+  WHERE NVL(M.INACTIVE,0)=0
+    AND (:documentType IS NULL OR M.BILL_DOC_TYPE=:documentType)
+    AND (:exactSerial IS NULL OR M.ORDER_SER=TO_NUMBER(:exactSerial))
+    AND (:afterSerial IS NULL OR M.ORDER_SER>TO_NUMBER(:afterSerial))
+    AND (:search IS NULL OR UPPER(TO_CHAR(M.ORDER_NO)) LIKE :searchPattern
+         OR UPPER(TO_CHAR(M.C_CODE)) LIKE :searchPattern OR UPPER(NVL(M.C_NAME,'')) LIKE :searchPattern)
+  ORDER BY M.ORDER_SER
+) WHERE ROWNUM<=:rowLimit`,
+    binds: {
+      documentType,
+      exactSerial,
+      afterSerial,
+      search: normalizedSearch,
+      searchPattern: normalizedSearch ? `%${normalizedSearch}%` : null,
+      rowLimit: limit,
+    },
+  };
+}
+
+function customerOrderDetails(schema, orderSerials) {
+  const uniqueSerials = [...new Set(orderSerials.map(String))];
+  if (uniqueSerials.length === 0) return null;
+  if (uniqueSerials.length > 200) throw new Error('At most 200 customer-order serials are allowed');
+  if (uniqueSerials.some((serial) => !/^\d{1,38}$/.test(serial))) throw new Error('Invalid customer-order serial');
+  const binds = Object.fromEntries(uniqueSerials.map((serial, index) => [`serial${index}`, serial]));
+  return {
+    sql: `SELECT TO_CHAR(D.ORDER_SER,'FM99999999999999999999999999999999999999') AS ORDER_SERIAL,
+       D.RCRD_NO AS LINE_NO,D.I_CODE AS ITEM_CODE,
+       COALESCE(I.I_NAME,D.ITEM_DESC,D.I_CODE) AS ITEM_NAME,D.ITM_UNT AS UNIT_CODE,
+       D.I_QTY AS QUANTITY,D.P_SIZE AS PACKAGE_SIZE,D.P_QTY AS PACKAGE_QUANTITY,
+       D.I_PRICE AS UNIT_PRICE,TO_CHAR(D.W_CODE) AS WAREHOUSE_CODE,
+       D.VAT_AMT AS VAT_AMOUNT,D.OTHR_AMT AS OTHER_AMOUNT,
+       NVL(D.CANCELED,0) AS CANCELED,NVL(D.EXTERNAL_POST,0) AS EXTERNAL_POST
+FROM ${schema}.ORDER_DETAIL D
+LEFT JOIN ${schema}.ITEM_DETAILS I ON I.I_CODE=D.I_CODE AND I.ITM_UNT=D.ITM_UNT
+WHERE D.ORDER_SER IN (${uniqueSerials.map((_, index) => `TO_NUMBER(:serial${index})`).join(', ')})
+ORDER BY D.ORDER_SER,D.RCRD_NO`,
+    binds,
+  };
+}
+
+function transferDraftReadiness(schema) {
+  const required = {
+    IAS_OUT_REQUEST_MST: [
+      'OUT_REQ_TYPE', 'OUT_REQ_NO', 'OUT_REQ_SER', 'OUT_REQ_DATE', 'W_CODE', 'F_W_CODE',
+      'REQ_SIDE', 'DOC_DESC', 'PROCESSED', 'INACTIVE', 'APPROVED', 'AD_U_ID', 'AD_DATE',
+      'EXTERNAL_POST', 'DOC_SER_EXTRNL', 'CMP_NO', 'BRN_NO', 'BRN_YEAR', 'BRN_USR',
+      'AD_TRMNL_NM', 'USE_REQ_MORE_ONCE',
+    ],
+    IAS_OUT_REQUEST_DTL: [
+      'OUT_REQ_TYPE', 'OUT_REQ_NO', 'OUT_REQ_SER', 'I_CODE', 'ITM_UNT', 'I_QTY',
+      'P_SIZE', 'P_QTY', 'W_CODE', 'RCRD_NO', 'EXTERNAL_POST', 'USE_ATTCH',
+      'DOC_SEQUENCE', 'AVL_QTY', 'F_AVL_QTY', 'F_W_CODE', 'CMP_NO', 'BRN_NO',
+      'BRN_YEAR', 'BRN_USR', 'RESERVED',
+    ],
+    S_APPRVD_MOV: [
+      'LVL_NO', 'DOC_TYP', 'DOC_SER', 'DOC_NO', 'DOC_JV_TYP', 'DOC_DATE', 'DOC_AMT',
+      'APPRVD', 'ORDR_NO', 'CMP_NO', 'BRN_NO', 'BRN_YEAR', 'BRN_USR',
+    ],
+  };
+  const tables = Object.keys(required);
+  const tableBinds = Object.fromEntries(tables.map((table, index) => [`table${index}`, table]));
+  return {
+    required,
+    columns: `SELECT TABLE_NAME,COLUMN_ID,COLUMN_NAME,DATA_TYPE,DATA_LENGTH,DATA_PRECISION,
+       DATA_SCALE,NULLABLE,DATA_DEFAULT
+FROM ALL_TAB_COLUMNS
+WHERE OWNER=:owner AND TABLE_NAME IN (${tables.map((_, index) => `:table${index}`).join(', ')})
+ORDER BY TABLE_NAME,COLUMN_ID`,
+    columnBinds: { owner: schema, ...tableBinds },
+    objects: `SELECT OBJECT_NAME,OBJECT_TYPE,STATUS
+FROM ALL_OBJECTS
+WHERE OWNER=:owner
+  AND OBJECT_NAME IN ('IAS_OUT_REQUEST_MST','IAS_OUT_REQUEST_DTL','S_APPRVD_MOV','IAS_DOC_SEQ_OTHR')
+ORDER BY OBJECT_NAME,OBJECT_TYPE`,
+    objectBinds: { owner: schema },
+  };
+}
+
+function requestCatalog(schema, prioritizedAccountCodes = []) {
+  const branchFilter = '(CONN_BRN_NO IS NULL OR CONN_BRN_NO = :branchNo)';
+  const uniquePrioritizedAccountCodes = [...new Set(prioritizedAccountCodes.map(String))];
+  if (uniquePrioritizedAccountCodes.some((code) => !/^\d{1,30}$/.test(code))) {
+    throw new Error('Invalid prioritized account code');
+  }
+  const analyticalProjection = `SELECT D.AC_CODE AS ACCOUNT_CODE, TO_CHAR(D.AC_CODE_DTL) AS CODE,
+         D.AC_CODE_DTL_L_NM AS NAME_AR, D.AC_CODE_DTL_F_NM AS NAME_EN,
+         D.GRP_CODE AS ANALYTICAL_TYPE
+  FROM ${schema}.GLS_ACCNT_DTL D
+  WHERE ${branchFilter.replaceAll('CONN_BRN_NO', 'D.CONN_BRN_NO')}`;
+  const prioritizedAnalyticalAccounts = uniquePrioritizedAccountCodes.length === 0 ? '' : `
+  UNION ALL
+  ${analyticalProjection}
+    AND D.AC_CODE IN (${uniquePrioritizedAccountCodes.map((code) => `'${code}'`).join(', ')})`;
+  return {
+    cashboxes: `SELECT DISTINCT TO_CHAR(H.CASH_NO) AS CODE, H.CASH_NAME AS NAME_AR,
+       H.CASH_E_NAME AS NAME_EN, H.A_CODE AS ACCOUNT_CODE,
+       NVL(P.PYMNT, 0) AS PAYMENT_ALLOWED, NVL(P.RCVD, 0) AS RECEIPT_ALLOWED
+FROM ${schema}.PRIV_CASH P
+JOIN ${schema}.CASH_IN_HAND H ON H.CASH_NO = P.CASH_NO
+WHERE P.U_ID = :oracleUserId AND P.CASH_TYPE = 1
+  AND NVL(H.INACTIVE, 0) = 0 AND ${branchFilter.replaceAll('CONN_BRN_NO', 'H.CONN_BRN_NO')}
+ORDER BY H.CASH_NO`,
+    banks: `SELECT DISTINCT TO_CHAR(B.BANK_NO) AS CODE, B.BANK_NAME AS NAME_AR,
+       B.BANK_E_NAME AS NAME_EN, B.A_CODE AS ACCOUNT_CODE,
+       NVL(P.PYMNT, 0) AS PAYMENT_ALLOWED, NVL(P.RCVD, 0) AS RECEIPT_ALLOWED
+FROM ${schema}.PRIV_CASH P
+JOIN ${schema}.CASH_AT_BANK B ON B.BANK_NO = P.CASH_NO
+WHERE P.U_ID = :oracleUserId AND P.CASH_TYPE = 2
+  AND NVL(B.INACTIVE, 0) = 0 AND ${branchFilter.replaceAll('CONN_BRN_NO', 'B.CONN_BRN_NO')}
+ORDER BY B.BANK_NO`,
+    collectors: `SELECT DISTINCT TO_CHAR(C.COL_NO) AS CODE, C.COL_NAME AS NAME_AR,
+       C.COL_E_NAME AS NAME_EN, C.COL_A_CODE AS ACCOUNT_CODE,
+       C.AC_CODE_DTL AS ANALYTICAL_ACCOUNT_CODE, C.AC_DTL_TYP AS ANALYTICAL_TYPE,
+       C.COMM_PER AS COMMISSION_PERCENT
+FROM ${schema}.IAS_V_USR_COLLECTOR_PRV P
+JOIN ${schema}.COLLERCTOR C ON C.COL_NO = P.COL_NO
+WHERE P.U_ID = :oracleUserId AND NVL(C.INACTIVE, 0) = 0
+ORDER BY C.COL_NO`,
+    customers: `SELECT TO_CHAR(C.C_CODE) AS CODE, C.C_A_NAME AS NAME_AR, C.C_E_NAME AS NAME_EN,
+       COALESCE(C.C_MOBILE, C.C_PHONE) AS PHONE,
+       TO_CHAR(C.C_A_CODE) AS MASTER_ACCOUNT_CODE,
+       TO_CHAR(C.COL_NO) AS COLLECTOR_CODE, L.COL_NAME AS COLLECTOR_NAME,
+       L.COMM_PER AS COMMISSION_PERCENT
+FROM ${schema}.CUSTOMER C
+LEFT JOIN ${schema}.COLLERCTOR L ON L.COL_NO = C.COL_NO AND NVL(L.INACTIVE, 0) = 0
+WHERE NVL(C.INACTIVE, 0) = 0 AND ${branchFilter.replaceAll('CONN_BRN_NO', 'C.CONN_BRN_NO')}
+ORDER BY C.C_A_NAME, C.C_CODE`,
+    customerCurrencies: `SELECT TO_CHAR(C.C_CODE) AS CODE, C.A_CY AS CURRENCY_CODE
+FROM ${schema}.CUSTOMER_CURR C
+WHERE NVL(C.INACTIVE, 0) = 0
+ORDER BY C.C_CODE, C.A_CY`,
+    accountCurrencies: `SELECT TO_CHAR(C.A_CODE) AS ACCOUNT_CODE, C.A_CY AS CURRENCY_CODE
+FROM ${schema}.ACCOUNT_CURR C
+WHERE NVL(C.INACTIVE, 0) = 0
+ORDER BY C.A_CODE, C.A_CY`,
+    vendors: `SELECT TO_CHAR(V.V_CODE) AS CODE, V.V_A_NAME AS NAME_AR, V.V_E_NAME AS NAME_EN,
+       COALESCE(V.V_MOBILE, V.V_PHONE) AS PHONE,
+       TO_CHAR(V.V_A_CODE) AS MASTER_ACCOUNT_CODE
+FROM ${schema}.V_DETAILS V
+WHERE NVL(V.INACTIVE, 0) = 0 AND ${branchFilter.replaceAll('CONN_BRN_NO', 'V.CONN_BRN_NO')}
+ORDER BY V.V_A_NAME, V.V_CODE`,
+    employees: `SELECT TO_CHAR(E.EMP_NO) AS CODE, E.EMP_L_NM AS NAME_AR, E.EMP_F_NM AS NAME_EN,
+       COALESCE(E.MOBILE_NO, E.TEL_NO) AS PHONE,
+       E.AC_CODE AS MASTER_ACCOUNT_CODE
+FROM ${schema}.S_EMP E
+WHERE NVL(E.INACTIVE, 0) = 0 AND (E.BRN_NO IS NULL OR E.BRN_NO = :branchNo)
+ORDER BY E.EMP_L_NM, E.EMP_NO`,
+    accounts: `SELECT A.A_CODE AS CODE, A.A_NAME AS NAME_AR,
+       A.A_GROUPING AS GROUPING_CODE, A.CLASS_NO AS CLASS_NO,
+       A.AC_DTL_TYP AS ANALYTICAL_TYPE
+FROM ${schema}.ACCOUNT A
+ORDER BY A.A_CODE`,
+    analyticalAccounts: `SELECT DISTINCT ACCOUNT_CODE, CODE, NAME_AR, NAME_EN, ANALYTICAL_TYPE
+FROM (
+  SELECT * FROM (
+    ${analyticalProjection}
+    ORDER BY D.AC_CODE, D.AC_CODE_DTL
+  ) WHERE ROWNUM <= 5000${prioritizedAnalyticalAccounts}
+)`,
+  };
+}
+
+function advanceAccounts(schema) {
+  return `SELECT D.AC_CODE AS ACCOUNT_CODE,
+       TO_CHAR(D.AC_CODE_DTL) AS CODE,
+       D.AC_CODE_DTL_L_NM AS NAME_AR,
+       D.AC_CODE_DTL_F_NM AS NAME_EN,
+       D.AC_DTL_TYP AS ANALYTICAL_TYPE,
+       B.A_CY AS CURRENCY_CODE,
+       SUM(NVL(B.AMT, 0)) AS AMOUNT_LOCAL,
+       SUM(NVL(B.AMT_F, 0)) AS AMOUNT_FOREIGN
+FROM ${schema}.GLS_ACCNT_DTL D
+LEFT JOIN ${schema}.GLS_V_AC_DTL_CCPJACTV_BLNC B
+  ON B.A_CODE = D.AC_CODE
+ AND B.AC_CODE_DTL = D.AC_CODE_DTL
+ AND B.AC_DTL_TYP = D.AC_DTL_TYP
+WHERE D.AC_CODE IN ('113101001', '113101002')
+  AND NVL(D.INACTV, 0) = 0
+GROUP BY D.AC_CODE, D.AC_CODE_DTL, D.AC_CODE_DTL_L_NM,
+         D.AC_CODE_DTL_F_NM, D.AC_DTL_TYP, B.A_CY
+ORDER BY D.AC_CODE, D.AC_CODE_DTL, B.A_CY`;
+}
+
+function createdRequests(schema) {
+  const approvalJoin = (serialColumn, documentType, documentTypeFilter = `X.DOC_TYP = ${documentType}`) => `LEFT JOIN (
+  SELECT X.*,
+         ROW_NUMBER() OVER (
+           PARTITION BY X.DOC_SER, X.DOC_TYP
+           ORDER BY X.LVL_NO DESC, X.ORDR_NO DESC
+         ) AS APPROVAL_ROW_NO
+  FROM ${schema}.S_APPRVD_MOV X
+  WHERE ${documentTypeFilter}
+) A ON A.DOC_SER = M.${serialColumn}
+   AND A.DOC_TYP = ${documentType}
+   AND A.APPROVAL_ROW_NO = 1`;
+  const projection = (kind, numberColumn, serialColumn, descriptionColumn, approvedColumn = 'APPROVED') => `
+       '${kind}' AS REQUEST_KIND,
+       TO_CHAR(M.${numberColumn}) AS REQUEST_NO,
+       TO_CHAR(M.${serialColumn}, 'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       M.${descriptionColumn} AS DESCRIPTION,
+       NVL(M.${approvedColumn}, 0) AS MASTER_APPROVED,
+       NVL(M.INACTIVE, 0) AS INACTIVE,
+       TO_CHAR(M.AD_DATE, 'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
+       A.LVL_NO AS APPROVAL_LEVEL,
+       A.APPRVD AS APPROVAL_CODE,
+       TO_CHAR(A.APPRVD_U_ID) AS APPROVAL_USER_ID,
+       TO_CHAR(A.APPRVD_DATE, 'YYYY-MM-DD HH24:MI:SS') AS APPROVAL_DATE,
+       A.APPRVD_DESC AS APPROVAL_DESCRIPTION`;
+  const limited = (body) => `SELECT * FROM (${body}) WHERE ROWNUM <= :rowLimit`;
+  return {
+    purchases: limited(`SELECT ${projection('purchase', 'PR_NO', 'PR_SER', 'PR_DESC')}
+FROM ${schema}.P_REQUEST M
+${approvalJoin('PR_SER', 40)}
+WHERE M.SIDE_REQ = 'منصة البناء الراقي'
+ORDER BY M.AD_DATE DESC`),
+    vouchers: limited(`SELECT
+       CASE WHEN M.VOUCHER_TYPE = 1 THEN 'receipt' ELSE 'payment' END AS REQUEST_KIND,
+       TO_CHAR(M.VOUCHER_NO) AS REQUEST_NO,
+       TO_CHAR(M.V_SER, 'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       M.A_DESC AS DESCRIPTION,
+       TO_CHAR(M.COL_NO) AS COLLECTOR_NO,
+       (SELECT MAX(TO_CHAR(D.AC_CODE_DTL))
+          FROM ${schema}.IAS_RQ_VCHR_DTL D
+         WHERE D.V_SER = M.V_SER
+           AND D.VOUCHER_TYPE = M.VOUCHER_TYPE
+           AND D.AC_DTL_TYP = 3) AS PLATFORM_CUSTOMER_CODE,
+       NVL(M.APPROVED, 0) AS MASTER_APPROVED,
+       NVL(M.INACTIVE, 0) AS INACTIVE,
+       TO_CHAR(M.AD_DATE, 'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
+       A.LVL_NO AS APPROVAL_LEVEL,
+       A.APPRVD AS APPROVAL_CODE,
+       TO_CHAR(A.APPRVD_U_ID) AS APPROVAL_USER_ID,
+       TO_CHAR(A.APPRVD_DATE, 'YYYY-MM-DD HH24:MI:SS') AS APPROVAL_DATE,
+       A.APPRVD_DESC AS APPROVAL_DESCRIPTION
+FROM ${schema}.IAS_RQ_VCHR_MST M
+${approvalJoin('V_SER', 'M.DOC_TYPE', 'X.DOC_TYP IN (92, 93)')}
+WHERE M.REQ_SIDE = 'منصة البناء الراقي' AND M.VOUCHER_TYPE IN (1, 2)
+ORDER BY M.AD_DATE DESC`),
+    journals: limited(`SELECT ${projection('journal', 'J_DOC_NO', 'J_SER', 'T_DESC')}
+FROM ${schema}.IAS_RQ_JRNL_MST M
+${approvalJoin('J_SER', 85, 'X.DOC_TYP = 85 AND X.DOC_JV_TYP = 1')}
+WHERE M.REQ_SIDE = 'منصة البناء الراقي'
+ORDER BY M.AD_DATE DESC`),
+    inventoryCounts: limited(`SELECT
+       'inventory_count' AS REQUEST_KIND,
+       TO_CHAR(M.INV_NO) AS REQUEST_NO,
+       TO_CHAR(M.INV_SER, 'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       M.INV_DESC AS DESCRIPTION,
+       CASE WHEN NVL(M.PROCESSED,0)=1 OR NVL(M.EXTERNAL_POST,0)=1 THEN 1 ELSE 0 END AS MASTER_APPROVED,
+       0 AS INACTIVE,
+       TO_CHAR(M.AD_DATE, 'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
+       NULL AS APPROVAL_LEVEL,NULL AS APPROVAL_CODE,NULL AS APPROVAL_USER_ID,
+       NULL AS APPROVAL_DATE,NULL AS APPROVAL_DESCRIPTION
+FROM ${schema}.MASTER_INV M
+WHERE M.REF_NO LIKE 'A______________'
+ORDER BY M.AD_DATE DESC`),
+    inventoryTransfers: limited(`SELECT ${projection('inventory_transfer', 'OUT_REQ_NO', 'OUT_REQ_SER', 'DOC_DESC')}
+FROM ${schema}.IAS_OUT_REQUEST_MST M
+${approvalJoin('OUT_REQ_SER', 31)}
+WHERE M.REQ_SIDE = 'منصة البناء الراقي'
+ORDER BY M.AD_DATE DESC`),
+  };
+}
+
+function inventoryCount(schema) {
+  return {
+    master: `SELECT TO_CHAR(M.INV_NO) AS INVENTORY_NUMBER,
+       TO_CHAR(M.INV_TYPE) AS INVENTORY_TYPE,
+       TO_CHAR(M.INV_SER, 'FM99999999999999999999999999999999999999') AS INVENTORY_SERIAL,
+       TO_CHAR(M.INV_DATE, 'YYYY-MM-DD') AS INVENTORY_DATE,
+       M.INV_DESC AS DESCRIPTION, NVL(M.ANNUAL, 0) AS ANNUAL,
+       NVL(M.PROCESSED, 0) AS PROCESSED, NVL(M.EXTERNAL_POST, 0) AS EXTERNAL_POST,
+       M.BRN_NO AS BRANCH_NUMBER, M.BRN_YEAR AS BRANCH_YEAR, M.CMP_NO AS COMPANY_NUMBER
+FROM ${schema}.MASTER_INV M
+WHERE M.INV_NO = :documentNo AND M.INV_TYPE = :inventoryType
+  AND M.BRN_NO = :branchNo AND M.BRN_YEAR = :branchYear AND ROWNUM <= 1`,
+    details: `SELECT * FROM (
+  SELECT D.RCRD_NO AS LINE_NUMBER, D.I_CODE AS ITEM_CODE,
+         (SELECT MAX(I.I_NAME) FROM ${schema}.ITEM_DETAILS I
+          WHERE I.I_CODE = D.I_CODE AND I.ITM_UNT = D.ITM_UNT) AS ITEM_NAME_AR,
+         (SELECT MAX(I.I_E_NAME) FROM ${schema}.ITEM_DETAILS I
+          WHERE I.I_CODE = D.I_CODE AND I.ITM_UNT = D.ITM_UNT) AS ITEM_NAME_EN,
+         D.ITM_UNT AS UNIT_CODE,
+         TO_CHAR(D.W_CODE) AS WAREHOUSE_CODE, D.I_QTY AS COUNTED_QUANTITY,
+         D.P_SIZE AS PACKAGE_SIZE, D.P_QTY AS PACKAGE_QUANTITY,
+         D.AVL_QTY AS AVAILABLE_QUANTITY, NVL(D.PROCESSED_ADJ, 0) AS PROCESSED_ADJUSTMENT
+  FROM ${schema}.DETAIL_INV D
+  WHERE D.INV_SER = :inventorySerial AND D.INV_TYPE = :inventoryType
+    AND D.BRN_NO = :branchNo AND D.BRN_YEAR = :branchYear
+  ORDER BY D.RCRD_NO
+) WHERE ROWNUM <= 500`,
+    type: `SELECT TO_CHAR(T.INV_TYPE) AS INVENTORY_TYPE, T.INV_NAME AS NAME_AR,
+       T.INV_E_NAME AS NAME_EN, NVL(P.ADD_FLAG, 0) AS ADD_ALLOWED,
+       NVL(P.VIEW_FLAG, 0) AS VIEW_ALLOWED
+FROM ${schema}.IAS_INV_TYPES T
+LEFT JOIN ${schema}.IAS_PRIV_INV_TYPE P
+  ON P.INV_TYPE = T.INV_TYPE AND P.U_ID = :oracleUserId
+WHERE T.INV_TYPE = :inventoryType AND ROWNUM <= 1`,
+  };
+}
+
+function purchaseRequest(schema) {
+  return {
+    master: `SELECT TO_CHAR(PR_TYPE) AS REQUEST_TYPE,TO_CHAR(PR_NO) AS REQUEST_NO,
+       TO_CHAR(PR_SER,'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       TO_CHAR(PR_DATE,'YYYY-MM-DD') AS REQUEST_DATE,PR_DESC AS DESCRIPTION,
+       SIDE_REQ AS REQUEST_SIDE,TO_CHAR(REQ_AVL_DATE,'YYYY-MM-DD') AS REQUIRED_DATE,
+       NVL(PR_SELECTED,0) AS SELECTED,NVL(APPROVED,0) AS APPROVED,NVL(INACTIVE,0) AS INACTIVE,
+       REF_NO AS REFERENCE_NO,TO_CHAR(AD_DATE,'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
+       CMP_NO AS COMPANY_NO,BRN_NO AS BRANCH_NO,BRN_YEAR AS BRANCH_YEAR,BRN_USR AS BRANCH_USER
+FROM ${schema}.P_REQUEST
+WHERE PR_SER=:requestSerial AND ROWNUM <= 1`,
+    details: `SELECT RCRD_NO AS LINE_NO,I_CODE AS ITEM_CODE,ITM_UNT AS UNIT_CODE,
+       I_QTY AS QUANTITY,P_SIZE AS PACKAGE_SIZE,P_QTY AS PACKAGE_QUANTITY,
+       TO_CHAR(W_CODE) AS WAREHOUSE_CODE,DOC_SEQUENCE
+FROM ${schema}.P_REQUEST_DETAIL
+WHERE PR_SER=:requestSerial
+ORDER BY RCRD_NO`,
+    approval: `SELECT LVL_NO AS APPROVAL_LEVEL,DOC_TYP AS DOCUMENT_TYPE,
+       TO_CHAR(DOC_SER,'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       TO_CHAR(DOC_NO) AS REQUEST_NO,NVL(APPRVD,0) AS APPROVED,ORDR_NO AS ORDER_NO,
+       TO_CHAR(DOC_DATE,'YYYY-MM-DD') AS DOCUMENT_DATE,
+       TO_CHAR(AD_DATE,'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT
+FROM ${schema}.S_APPRVD_MOV
+WHERE DOC_SER=:requestSerial AND DOC_TYP=40
+ORDER BY ORDR_NO,LVL_NO`,
+  };
+}
+
+function voucherRequest(schema, voucherType = 1) {
+  if (![1, 2].includes(voucherType)) throw new Error('Invalid voucher type');
+  const documentType = voucherType === 1 ? 92 : 93;
+  return {
+    master: `SELECT TO_CHAR(VOUCHER_TYPE) AS VOUCHER_TYPE,
+       TO_CHAR(VOUCHER_PAY_TYPE) AS PAYMENT_TYPE,TO_CHAR(VOUCHER_NO) AS REQUEST_NO,
+       TO_CHAR(CASH_NO) AS CASH_OR_BANK_NO,A_CY AS CURRENCY_CODE,
+       TO_CHAR(V_SER,'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       TO_CHAR(VOUCHER_DATE,'YYYY-MM-DD') AS REQUEST_DATE,CASH_AMT AS LOCAL_AMOUNT,
+       CASH_AMTF AS FOREIGN_AMOUNT,EX_RATE AS EXCHANGE_RATE,REF_NO AS REFERENCE_NO,
+       A_DESC AS DESCRIPTION,TO_CHAR(COL_NO) AS COLLECTOR_NO,COMM_PER AS COMMISSION_PERCENT,
+       NVL(PROCESED,0) AS PROCESSED,NVL(APPROVED,0) AS APPROVED,NVL(INACTIVE,0) AS INACTIVE,
+       REQ_SIDE AS REQUEST_SIDE,DOC_TYPE AS DOCUMENT_TYPE,
+       TO_CHAR(AD_DATE,'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
+       CMP_NO AS COMPANY_NO,BRN_NO AS BRANCH_NO,BRN_YEAR AS BRANCH_YEAR,BRN_USR AS BRANCH_USER
+FROM ${schema}.IAS_RQ_VCHR_MST
+WHERE V_SER=:requestSerial AND VOUCHER_TYPE=${voucherType} AND DOC_TYPE=${documentType} AND ROWNUM <= 1`,
+    details: `SELECT RCRD_NO AS LINE_NO,A_CODE AS ACCOUNT_CODE,
+       TO_CHAR(AC_CODE_DTL) AS ANALYTICAL_ACCOUNT_CODE,AC_DTL_TYP AS ANALYTICAL_TYPE,
+       A_CY AS CURRENCY_CODE,AC_DESC AS DESCRIPTION,AC_AMT AS LOCAL_AMOUNT,
+       AC_AMTF AS FOREIGN_AMOUNT,EX_RATE AS EXCHANGE_RATE,NOTE_NO AS NOTICE_NO,
+       REF_NO AS REFERENCE_NO,DOC_SEQUENCE
+FROM ${schema}.IAS_RQ_VCHR_DTL
+WHERE V_SER=:requestSerial AND VOUCHER_TYPE=${voucherType}
+ORDER BY RCRD_NO`,
+    approval: `SELECT LVL_NO AS APPROVAL_LEVEL,DOC_TYP AS DOCUMENT_TYPE,
+       TO_CHAR(DOC_SER,'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       TO_CHAR(DOC_NO) AS REQUEST_NO,NVL(APPRVD,0) AS APPROVED,ORDR_NO AS ORDER_NO,
+       TO_CHAR(APPRVD_U_ID) AS APPROVAL_USER_ID,
+       TO_CHAR(APPRVD_DATE,'YYYY-MM-DD HH24:MI:SS') AS APPROVAL_DATE,
+       TO_CHAR(DOC_DATE,'YYYY-MM-DD') AS DOCUMENT_DATE,
+       TO_CHAR(AD_DATE,'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT
+FROM ${schema}.S_APPRVD_MOV
+WHERE DOC_SER=:requestSerial AND DOC_TYP=${documentType}
+ORDER BY ORDR_NO,LVL_NO`,
+  };
+}
+
+function journalRequest(schema) {
+  return {
+    master: `SELECT TO_CHAR(JV_TYPE) AS JOURNAL_TYPE,TO_CHAR(J_DOC_NO) AS REQUEST_NO,
+       TO_CHAR(J_SER,'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       TO_CHAR(J_DATE,'YYYY-MM-DD') AS REQUEST_DATE,BATCH_VAL AS BATCH_VALUE,
+       REF_NO AS REFERENCE_NO,T_DESC AS DESCRIPTION,NVL(PROCESED,0) AS PROCESSED,
+       NVL(APPROVED,0) AS APPROVED,NVL(INACTIVE,0) AS INACTIVE,REQ_SIDE AS REQUEST_SIDE,
+       DOC_TYPE AS DOCUMENT_TYPE,TO_CHAR(AD_DATE,'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
+       CMP_NO AS COMPANY_NO,BRN_NO AS BRANCH_NO,BRN_YEAR AS BRANCH_YEAR,BRN_USR AS BRANCH_USER
+FROM ${schema}.IAS_RQ_JRNL_MST
+WHERE J_SER=:requestSerial AND JV_TYPE=1 AND DOC_TYPE=85 AND ROWNUM <= 1`,
+    details: `SELECT RCRD_NO AS LINE_NO,A_CODE AS ACCOUNT_CODE,
+       TO_CHAR(AC_CODE_DTL) AS ANALYTICAL_ACCOUNT_CODE,AC_DTL_TYP AS ANALYTICAL_TYPE,
+       A_CY AS CURRENCY_CODE,J_DESC AS DESCRIPTION,J_AMT AS LOCAL_AMOUNT,
+       J_AMT_F AS FOREIGN_AMOUNT,AC_RATE AS EXCHANGE_RATE,REF_NO AS REFERENCE_NO,DOC_SEQUENCE
+FROM ${schema}.IAS_RQ_JRNL_DTL
+WHERE J_SER=:requestSerial AND JV_TYPE=1
+ORDER BY RCRD_NO`,
+    approval: `SELECT LVL_NO AS APPROVAL_LEVEL,DOC_TYP AS DOCUMENT_TYPE,
+       TO_CHAR(DOC_SER,'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       TO_CHAR(DOC_NO) AS REQUEST_NO,NVL(APPRVD,0) AS APPROVED,ORDR_NO AS ORDER_NO,
+       TO_CHAR(APPRVD_U_ID) AS APPROVAL_USER_ID,
+       TO_CHAR(APPRVD_DATE,'YYYY-MM-DD HH24:MI:SS') AS APPROVAL_DATE,
+       TO_CHAR(DOC_DATE,'YYYY-MM-DD') AS DOCUMENT_DATE,
+       TO_CHAR(AD_DATE,'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT
+FROM ${schema}.S_APPRVD_MOV
+WHERE DOC_SER=:requestSerial AND DOC_TYP=85 AND DOC_JV_TYP=1
+ORDER BY ORDR_NO,LVL_NO`,
+  };
+}
+
+function inventoryTransferRequest(schema) {
+  return {
+    master: `SELECT TO_CHAR(OUT_REQ_TYPE) AS REQUEST_TYPE,TO_CHAR(OUT_REQ_NO) AS REQUEST_NO,
+       TO_CHAR(OUT_REQ_SER,'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       TO_CHAR(OUT_REQ_DATE,'YYYY-MM-DD') AS REQUEST_DATE,TO_CHAR(F_W_CODE) AS SOURCE_WAREHOUSE_CODE,
+       TO_CHAR(W_CODE) AS DESTINATION_WAREHOUSE_CODE,REQ_SIDE AS REQUEST_SIDE,DOC_DESC AS DESCRIPTION,
+       NVL(PROCESSED,0) AS PROCESSED,NVL(APPROVED,0) AS APPROVED,NVL(INACTIVE,0) AS INACTIVE,
+       DOC_SER_EXTRNL AS EXTERNAL_REFERENCE,TO_CHAR(AD_DATE,'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
+       CMP_NO AS COMPANY_NO,BRN_NO AS BRANCH_NO,BRN_YEAR AS BRANCH_YEAR,BRN_USR AS BRANCH_USER
+FROM ${schema}.IAS_OUT_REQUEST_MST
+WHERE OUT_REQ_SER=:requestSerial AND ROWNUM <= 1`,
+    details: `SELECT RCRD_NO AS LINE_NO,I_CODE AS ITEM_CODE,ITM_UNT AS UNIT_CODE,
+       I_QTY AS QUANTITY,P_SIZE AS PACKAGE_SIZE,P_QTY AS PACKAGE_QUANTITY,
+       TO_CHAR(F_W_CODE) AS SOURCE_WAREHOUSE_CODE,TO_CHAR(W_CODE) AS DESTINATION_WAREHOUSE_CODE,
+       F_AVL_QTY AS SOURCE_AVAILABLE,AVL_QTY AS DESTINATION_AVAILABLE,DOC_SEQUENCE,
+       NVL(EXTERNAL_POST,0) AS EXTERNAL_POST,NVL(RESERVED,0) AS RESERVED
+FROM ${schema}.IAS_OUT_REQUEST_DTL
+WHERE OUT_REQ_SER=:requestSerial
+ORDER BY RCRD_NO`,
+    approval: `SELECT LVL_NO AS APPROVAL_LEVEL,DOC_TYP AS DOCUMENT_TYPE,
+       TO_CHAR(DOC_SER,'FM99999999999999999999999999999999999999') AS REQUEST_SERIAL,
+       TO_CHAR(DOC_NO) AS REQUEST_NO,NVL(APPRVD,0) AS APPROVED,ORDR_NO AS ORDER_NO,
+       TO_CHAR(APPRVD_U_ID) AS APPROVAL_USER_ID,
+       TO_CHAR(APPRVD_DATE,'YYYY-MM-DD HH24:MI:SS') AS APPROVAL_DATE,
+       TO_CHAR(DOC_DATE,'YYYY-MM-DD') AS DOCUMENT_DATE,
+       TO_CHAR(AD_DATE,'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT
+FROM ${schema}.S_APPRVD_MOV
+WHERE DOC_TYP=31 AND DOC_SER=:requestSerial
+ORDER BY ORDR_NO,LVL_NO`,
+  };
+}
+
+module.exports = { advanceAccounts, compatibility, createdRequests, currencies, customerOrderDetails, customerOrders, customerOrdersMetadata, customerOrdersProfile, inventoryCount, inventoryTransferRequest, item, itemLabels, items, journalRequest, purchaseRequest, requestCatalog, stock, transferByOutRequest, transferDraftReadiness, transferEvidence, voucherRequest, warehouseExists, warehouses };

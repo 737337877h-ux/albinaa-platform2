@@ -1,4 +1,4 @@
-import { contactLinks, normalizePhone } from './contact';
+import { contactLinks, normalizePhone, uniqueContactNumbers } from './contact';
 
 describe('normalizePhone', () => {
   it.each([
@@ -21,7 +21,33 @@ describe('contactLinks', () => {
     expect(contactLinks('777123456')).toEqual({
       tel: 'tel:+967777123456',
       sms: 'sms:+967777123456',
+      smsWindows: 'sms:+967777123456',
       whatsapp: 'https://wa.me/967777123456',
+      whatsappWindows: 'whatsapp://send?phone=967777123456',
     });
+  });
+
+  it('adds an encoded message when provided', () => {
+    expect(contactLinks('777123456', 'مرحبًا يا عميل')?.sms)
+      .toBe(`sms:+967777123456?body=${encodeURIComponent('مرحبًا يا عميل')}`);
+    expect(contactLinks('777123456', 'مرحبًا يا عميل')?.smsWindows)
+      .toBe('sms:+967777123456');
+    expect(contactLinks('777123456', 'مرحبًا يا عميل')?.whatsapp)
+      .toBe(`https://wa.me/967777123456?text=${encodeURIComponent('مرحبًا يا عميل')}`);
+    expect(contactLinks('777123456', 'مرحبًا يا عميل')?.whatsappWindows)
+      .toBe(`whatsapp://send?phone=967777123456&text=${encodeURIComponent('مرحبًا يا عميل')}`);
+  });
+});
+
+describe('uniqueContactNumbers', () => {
+  it('keeps every valid customer number and removes normalized duplicates', () => {
+    expect(uniqueContactNumbers([
+      { label: 'الأساسي', value: '777123456' },
+      { label: 'الإضافي', value: '733123456' },
+      { label: 'واتساب', value: '+967 777 123 456' },
+    ])).toEqual([
+      { label: 'الأساسي', value: '777123456', normalized: '967777123456' },
+      { label: 'الإضافي', value: '733123456', normalized: '967733123456' },
+    ]);
   });
 });

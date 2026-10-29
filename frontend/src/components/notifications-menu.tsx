@@ -1,4 +1,5 @@
 'use client';
+import {describeNotification} from '@/lib/notification-presentation';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
@@ -6,21 +7,11 @@ import { Bell } from 'lucide-react';
 import { api, tokenStore } from '@/lib/api';
 import { fmtDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { notificationHref } from '@/lib/notification-target';
 
 interface NotificationItem {
   id: string; kind: string; readAt: string | null; createdAt: string;
   payload: Record<string, unknown>;
-}
-
-function describe(n: NotificationItem): string {
-  const p = n.payload ?? {};
-  switch (n.kind) {
-    case 'promise_due': return `تذكير: وعد سداد من ${p.customerName ?? 'عميل'}`;
-    case 'promise_overdue': return `وعد متأخر من ${p.customerName ?? 'عميل'}`;
-    case 'collection_created': return `تحصيل جديد من ${p.customerName ?? ''}`;
-    case 'customer_transferred': return `نُقل إليك العميل ${p.customerName ?? ''}`;
-    default: return n.kind;
-  }
 }
 
 export function NotificationsMenu() {
@@ -30,7 +21,7 @@ export function NotificationsMenu() {
   const { data } = useQuery({
     queryKey: ['notifications-preview'],
     queryFn: () => api<{ unread: number; items: NotificationItem[] }>('/notifications?limit=6'),
-    refetchInterval: 60_000,
+    refetchInterval: 5_000,
     enabled: typeof window !== 'undefined' && !!tokenStore.access,
   });
 
@@ -72,14 +63,14 @@ export function NotificationsMenu() {
               {data.items.map((n) => (
                 <li key={n.id}>
                   <Link
-                    href="/notifications"
+                    href={notificationHref(n)}
                     onClick={() => setOpen(false)}
                     className={cn(
                       'block px-4 py-2.5 text-sm hover:bg-concrete-50 dark:hover:bg-white/5',
                       !n.readAt && 'bg-pine-50/50 dark:bg-pine-900/20',
                     )}
                   >
-                    <p className={cn(!n.readAt && 'font-medium')}>{describe(n)}</p>
+                    <p className={cn(!n.readAt && 'font-medium')}>{describeNotification(n).title}</p>
                     <p className="mt-0.5 text-xs text-concrete-400">{fmtDateTime(n.createdAt)}</p>
                   </Link>
                 </li>

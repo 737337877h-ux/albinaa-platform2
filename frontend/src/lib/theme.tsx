@@ -10,12 +10,13 @@ function apply(theme: Theme) {
   const dark = theme === 'dark'
     || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.classList.toggle('dark', dark);
+  document.documentElement.classList.toggle('light', !dark);
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>('system');
+  const [theme, setThemeState] = useState<Theme>('dark');
   useEffect(() => {
-    const saved = (localStorage.getItem('albinaa.theme') as Theme) ?? 'system';
+    const saved = (localStorage.getItem('albinaa.theme') as Theme) ?? 'dark';
     setThemeState(saved);
     apply(saved);
     const mq = window.matchMedia('(prefers-color-scheme: dark)');

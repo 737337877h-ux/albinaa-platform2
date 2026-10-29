@@ -1,3 +1,4 @@
+import { LegacyCollectionsTestModule } from './legacy-collections-test.module';
 /**
  * اختبارات E2E — تصحيحات مراجعة Dashboard (Milestone 6):
  * 1) GET /tasks/today لا يُلقي 403/404 لحساب إداري بلا سجل محصل شخصي —
@@ -29,7 +30,7 @@ describe('Dashboard Review Fixes (e2e)', () => {
   let collectorId: string;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule, LegacyCollectionsTestModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new GlobalExceptionFilter());
@@ -94,6 +95,8 @@ describe('Dashboard Review Fixes (e2e)', () => {
         await prisma.$executeRawUnsafe(`ALTER TABLE collections DISABLE TRIGGER trg_collections_no_delete`);
         await prisma.collection.deleteMany({ where: { collectorId: { in: adminCollectorIds } } });
         await prisma.$executeRawUnsafe(`ALTER TABLE collections ENABLE TRIGGER trg_collections_no_delete`);
+        await prisma.task.deleteMany({ where: { assignedTo: { in: adminCollectorIds } } });
+        await prisma.collectorTarget.deleteMany({ where: { collectorId: { in: adminCollectorIds } } });
         await prisma.customerAssignment.deleteMany({ where: { collectorId: { in: adminCollectorIds } } });
       }
       await prisma.collector.deleteMany({ where: { userId: adminUserId } });
@@ -157,7 +160,7 @@ describe('Dashboard Review Fixes (e2e)', () => {
   describe('فلتر تحصيلات fromDate/toDate (حدود اليوم بتوقيت المنشأة)', () => {
     it('تحصيل مُسجَّل الآن يظهر فعليًا عند فلترة fromDate=toDate=اليوم', async () => {
       const created = await request(app.getHttpServer())
-        .post('/collections').set('Authorization', `Bearer ${adminToken}`)
+        .post('/__test/legacy-collections').set('Authorization', `Bearer ${adminToken}`)
         .send({
           customerId, collectorId, currencyCode: 'YER', amount: 42, methodId,
           notes: `اختبار حدود اليوم ${uniq}`,

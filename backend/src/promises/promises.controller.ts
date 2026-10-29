@@ -11,13 +11,24 @@ import { CreatePromiseDto } from './dto/create-promise.dto';
 import { PromiseStatusDto } from './dto/promise-status.dto';
 import { QueryPromisesDto } from './dto/query-promises.dto';
 import { UpdatePromiseDto } from './dto/update-promise.dto';
+import { PromiseReminderScheduler } from './promise-reminder.scheduler';
 import { PromisesService } from './promises.service';
 
 @ApiTags('Payment Promises')
 @ApiBearerAuth('access-token')
 @Controller('payment-promises')
 export class PromisesController {
-  constructor(private readonly promises: PromisesService) {}
+  constructor(
+    private readonly promises: PromisesService,
+    private readonly reminders: PromiseReminderScheduler,
+  ) {}
+
+  @Post('reminders/run')
+  @RequirePermissions('settings.manage')
+  @ApiOperation({ summary: 'تشغيل فحص التذكيرات الداخلية الآن — يمنع تكرار تذكير الوعد في اليوم نفسه' })
+  runReminders(@CurrentUser() user: AuthUser) {
+    return this.reminders.runForOrganization(user.organizationId);
+  }
 
   @Idempotent()
   @Post()

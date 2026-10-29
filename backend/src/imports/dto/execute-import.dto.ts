@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsOptional } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ExecuteImportDto {
   @ApiPropertyOptional({
@@ -9,4 +9,8 @@ export class ExecuteImportDto {
   @IsOptional()
   @IsBoolean()
   force?: boolean;
+
+  @ApiPropertyOptional({ description: 'سبب تجاوز قفل فترة محاسبية — يتطلب periods.override' })
+  @IsOptional() @IsString() @MaxLength(500)
+  accountingOverrideReason?: string;
 }

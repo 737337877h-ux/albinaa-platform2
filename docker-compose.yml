@@ -40,6 +40,9 @@ services:
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
       CORS_ORIGINS: http://localhost:3001
       ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-ChangeMe!2026}
+      TZ: Asia/Aden
+      RISK_AUTO_RECALCULATE_ENABLED: ${RISK_AUTO_RECALCULATE_ENABLED:-true}
+      RISK_RECALCULATE_HOUR: ${RISK_RECALCULATE_HOUR:-2}
     volumes:
       - albinaa_uploads:/data/uploads
     ports:

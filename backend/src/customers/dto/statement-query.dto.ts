@@ -1,8 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDateString, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class StatementQueryDto {
+  @ApiPropertyOptional({ enum: ['platform', 'oracle_archive'], default: 'platform' })
+  @IsOptional() @IsIn(['platform', 'oracle_archive'])
+  source?: 'platform' | 'oracle_archive';
+
   @ApiProperty({ description: 'العملة (كشف الحساب دائمًا لعملة واحدة)', example: 'YER' })
   @IsString() @MaxLength(3)
   currency!: string;
@@ -22,4 +26,8 @@ export class StatementQueryDto {
   @ApiPropertyOptional({ default: 50, maximum: 200 })
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200)
   limit?: number;
+
+  @ApiPropertyOptional({ enum: ['classic', 'branded'], default: 'branded', description: 'قالب تصدير PDF' })
+  @IsOptional() @IsIn(['classic', 'branded'])
+  template?: 'classic' | 'branded';
 }

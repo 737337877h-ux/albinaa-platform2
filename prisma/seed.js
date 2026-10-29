@@ -6,7 +6,15 @@
 // - الأدوار الخمسة من مستند المتطلبات + صلاحيات أساسية
 // تشغيل: npx prisma db seed   (idempotent — آمن لإعادة التشغيل)
 // ============================================================================
-const { PrismaClient } = require('@prisma/client');
+let PrismaClient;
+try {
+  ({ PrismaClient } = require('@prisma/client'));
+} catch (error) {
+  // The schema intentionally generates the client beside the backend package.
+  // Keep root-level `npm run db:seed` working in clean installations as well.
+  if (error?.code !== 'MODULE_NOT_FOUND') throw error;
+  ({ PrismaClient } = require('../backend/node_modules/.prisma/client'));
+}
 const crypto = require('crypto');
 
 const prisma = new PrismaClient();
@@ -20,6 +28,17 @@ function hashPassword(plain) {
 }
 
 async function main() {
+  const units = [
+    { code: 'TON', nameAr: 'طن', weightKg: 1000 },
+    { code: 'BAG50', nameAr: 'كيس 50كجم', weightKg: 50 },
+    { code: 'BAG25', nameAr: 'كيس 25كجم', weightKg: 25 },
+    { code: 'PCS', nameAr: 'حبة', weightKg: null },
+    { code: 'ROLL', nameAr: 'لفة', weightKg: null },
+  ];
+  for (const unit of units) {
+    await prisma.unit.upsert({ where: { code: unit.code }, update: {}, create: unit });
+  }
+
   // ------------------------------------------------------------------ العملات
   const currencies = [
     { code: 'YER', sourceCode: 'YR', nameAr: 'ريال يمني', decimals: 2 },
@@ -106,18 +125,70 @@ async function main() {
     ['tasks.manage', 'إدارة المهام'],
     ['imports.run', 'تنفيذ استيراد Excel'],
     ['imports.read', 'عرض سجل الاستيراد'],
+    ['imports.reverse', 'التراجع الآمن عن أحدث دفعة استيراد'],
     ['reconciliation.review', 'مراجعة واعتماد التسويات'],
     ['reports.read', 'عرض التقارير'],
     ['reports.export', 'تصدير التقارير'],
+    ['inventory.read', 'عرض الأصناف والمخزون في المنصة'],
     ['users.manage', 'إدارة المستخدمين والصلاحيات'],
     ['settings.manage', 'إدارة الإعدادات'],
     ['audit.read', 'عرض سجل التدقيق'],
+    ['mobile.delivery.customers.view_all_no_balance', 'عرض جميع العملاء ومواقعهم دون الأرصدة لمندوب التوصيل'],
     ['duplicates.review', 'مراجعة حالات تشابه العملاء'],
+    ['duplicates.merge', 'دمج العملاء المكررين والتراجع عن الدمج'],
     ['risk.read', 'عرض درجة المخاطر'],
     ['risk.recalculate', 'إعادة احتساب درجات المخاطر'],
     ['reservations.manage', 'إدارة حجوزات البضاعة'],
+    ['reservations.read', 'عرض حجوزات البضاعة'],
+    ['reservations.create', 'إنشاء حجوزات البضاعة'],
+    ['reservations.deliver', 'تسليم حجوزات البضاعة'],
+    ['reservations.cancel', 'إلغاء حجوزات البضاعة'],
+    ['reservations.extend', 'تمديد حجوزات البضاعة'],
+    ['credit.override', 'تجاوز سقف الائتمان بسبب موثق'],
+    ['finance.alerts.receive', 'استلام التنبيهات المالية الفورية'],
+    ['periods.manage', 'إدارة إقفال الفترات المحاسبية'],
+    ['periods.override', 'تجاوز فترة محاسبية مقفلة بسبب موثق'],
     ['analytical_accounts.manage', 'إدارة الحسابات التحليلية'],
     ['analytical_accounts.read', 'عرض الحسابات التحليلية'],
+    ['inventory_transfers.read', 'عرض طلبات التحويل المخزني'],
+    ['inventory_transfers.create', 'إنشاء وإرسال طلبات التحويل المخزني'],
+    ['inventory_transfers.approve', 'اعتماد أو رفض طلبات التحويل المخزني'],
+    ['inventory_transfers.dry_run', 'تنفيذ فحص Oracle للقراءة فقط'],
+    ['oracle_test_requests.purchase.read', 'عرض طلبات الشراء التجريبية وحالة اعتمادها'],
+    ['oracle_test_requests.purchase.create', 'إنشاء طلبات شراء تجريبية'],
+    ['oracle_test_requests.receipt.read', 'عرض طلبات سندات القبض التجريبية وحالة اعتمادها'],
+    ['oracle_test_requests.receipt.create', 'إنشاء طلبات سندات قبض تجريبية'],
+    ['oracle_test_requests.payment.read', 'عرض طلبات سندات الصرف التجريبية وحالة اعتمادها'],
+    ['oracle_test_requests.payment.create', 'إنشاء طلبات سندات صرف تجريبية'],
+    ['oracle_test_requests.journal.read', 'عرض طلبات القيود اليومية التجريبية وحالة اعتمادها'],
+    ['oracle_test_requests.journal.create', 'إنشاء طلبات قيود يومية تجريبية'],
+    ['oracle_test_requests.inventory_count.read', 'عرض مستندات الجرد التجريبية من IAS20191'],
+    ['oracle_test_requests.inventory_count.dry_run', 'تشغيل فحص الجرد التجريبي دون معالجة أو ترحيل'],
+    ['oracle_test_requests.inventory_count.create', 'إنشاء مسودة جرد متعددة الأصناف في IAS20191'],
+    ['mobile.dashboard.view', 'تطبيق الهاتف: عرض الصفحة الرئيسية'],
+    ['mobile.tasks.view', 'تطبيق الهاتف: عرض المهام'],
+    ['mobile.tasks.create', 'تطبيق الهاتف: إنشاء مهمة'],
+    ['mobile.customers.view', 'تطبيق الهاتف: عرض العملاء'],
+    ['mobile.advances.view', 'تطبيق الهاتف: عرض السلف'],
+    ['mobile.collections.view', 'تطبيق الهاتف: عرض التحصيلات'],
+    ['mobile.collections.create', 'تطبيق الهاتف: تسجيل تحصيل'],
+    ['mobile.followups.view', 'تطبيق الهاتف: عرض المتابعات'],
+    ['mobile.followups.create', 'تطبيق الهاتف: تسجيل متابعة'],
+    ['mobile.promises.view', 'تطبيق الهاتف: عرض وعود السداد'],
+    ['mobile.promises.create', 'تطبيق الهاتف: تسجيل وعد سداد'],
+    ['mobile.reservations.view', 'تطبيق الهاتف: عرض حجوزات البضاعة'],
+    ['mobile.reservations.create', 'تطبيق الهاتف: إضافة حجز بضاعة'],
+    ['mobile.inventory.view', 'تطبيق الهاتف: عرض الأصناف والمخزون'],
+    ['mobile.inventory.cost.view', 'تطبيق الهاتف: عرض التكلفة للمخزون والأصناف'],
+    ['mobile.inventory_count.create', 'تطبيق الهاتف: إنشاء مسودة جرد في IAS20191'],
+    ['mobile.receipts.view', 'تطبيق الهاتف: معاينة صور الإيصالات'],
+    ['mobile.receipts.upload', 'تطبيق الهاتف: رفع صورة إيصال'],
+    ['mobile.location.view', 'تطبيق الهاتف: عرض الموقع'],
+    ['mobile.location.update', 'تطبيق الهاتف: تحديث الموقع'],
+    ['mobile.financial_adjustments.request', 'تطبيق الهاتف: طلب خصم أو تصفية'],
+    ['mobile.assignment_change.request', 'تطبيق الهاتف: طلب تغيير الإسناد'],
+    ['mobile.notifications.view', 'تطبيق الهاتف: عرض الإشعارات'],
+    ['mobile.messages.view', 'تطبيق الهاتف: استخدام قوالب الرسائل'],
   ];
   for (const [code, descriptionAr] of permissions) {
     await prisma.permission.upsert({ where: { code }, update: { descriptionAr }, create: { code, descriptionAr } });
@@ -130,17 +201,36 @@ async function main() {
     'مدير النظام': allPerms.map((p) => p.code), // كل الصلاحيات
     'مدير المديونية': [
       'customers.read', 'customers.read_all', 'customers.transfer', 'balances.read', 'followups.create',
-      'promises.create', 'tasks.manage', 'reports.read', 'reports.export', 'duplicates.review',
-      'risk.read', 'risk.recalculate', 'reservations.manage',
+      'promises.create', 'tasks.manage', 'reports.read', 'reports.export', 'duplicates.review', 'duplicates.merge',
+      'inventory.read',
+      'risk.read', 'risk.recalculate', 'reservations.manage', 'reservations.read',
+      'reservations.create', 'reservations.deliver', 'reservations.cancel', 'reservations.extend',
+      'credit.override',
+      'finance.alerts.receive',
+      'periods.manage',
       'analytical_accounts.manage', 'analytical_accounts.read',
+      'mobile.dashboard.view', 'mobile.tasks.view', 'mobile.customers.view', 'mobile.advances.view',
+      'mobile.collections.view', 'mobile.followups.view', 'mobile.promises.view',
+      'mobile.reservations.view', 'mobile.inventory.view', 'mobile.receipts.view',
+      'mobile.location.view', 'mobile.notifications.view',
     ],
     'المحصل': [
       'customers.read', 'balances.read', 'followups.create', 'promises.create',
-      'collections.create', 'tasks.manage',
+      'collections.create', 'tasks.manage', 'reservations.read', 'reservations.create',
+      'reservations.deliver', 'reservations.extend',
+      'mobile.dashboard.view', 'mobile.tasks.view', 'mobile.customers.view', 'mobile.advances.view',
+      'mobile.tasks.create',
+      'mobile.collections.view', 'mobile.collections.create', 'mobile.followups.view', 'mobile.followups.create',
+      'mobile.promises.view', 'mobile.promises.create', 'mobile.reservations.view', 'mobile.reservations.create',
+      'mobile.receipts.view', 'mobile.receipts.upload', 'mobile.location.view', 'mobile.location.update',
+      'mobile.financial_adjustments.request', 'mobile.assignment_change.request',
+      'mobile.notifications.view', 'mobile.messages.view',
     ],
     'المحاسب': [
-      'customers.read', 'customers.read_all', 'balances.read', 'collections.approve', 'imports.run',
-      'imports.read', 'reconciliation.review', 'reports.read', 'reports.export', 'risk.read',
+      'customers.read', 'customers.read_all', 'customers.transfer', 'balances.read', 'collections.approve', 'imports.run',
+      'imports.read', 'imports.reverse', 'reconciliation.review', 'reports.read', 'reports.export', 'risk.read',
+      'inventory.read',
+      'reservations.read',
     ],
     'أمين الصندوق': ['cash.receive', 'collections.approve', 'balances.read'],
   };
@@ -180,7 +270,7 @@ async function main() {
     create: { userId: admin.id, roleId: adminRole.id },
   });
 
-  console.log('✅ Seed اكتمل: 3 عملات، 9 أنواع مستندات، 5 أدوار، 20 صلاحية، منشأة + فرع + admin');
+  console.log(`✅ Seed اكتمل: 3 عملات، 9 أنواع مستندات، 5 أدوار، ${permissions.length} صلاحية، منشأة + فرع + admin`);
   console.log('⚠️  غيّر كلمة مرور admin فور أول دخول (ADMIN_INITIAL_PASSWORD في .env)');
 }
 

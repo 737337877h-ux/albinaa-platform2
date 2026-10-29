@@ -9,7 +9,8 @@ describe('DataState', () => {
         <div>محتوى</div>
       </DataState>,
     );
-    expect(container.querySelector('.animate-pulse')).toBeInTheDocument();
+    expect(container.firstChild).toHaveClass('rounded-lg');
+    expect((container.firstChild as HTMLElement).className).toContain('skeleton-shimmer');
     expect(screen.queryByText('محتوى')).not.toBeInTheDocument();
   });
 

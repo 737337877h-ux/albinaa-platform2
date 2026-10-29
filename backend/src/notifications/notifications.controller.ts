@@ -1,14 +1,27 @@
-import { Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
+import { PushTokenDto, RemovePushTokenDto } from './dto/push-token.dto';
 
 @ApiTags('Notifications')
 @ApiBearerAuth('access-token')
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly notifications: NotificationsService) {}
+
+  @Post('push-tokens')
+  @ApiOperation({ summary: 'تسجيل جهاز المستخدم لاستقبال إشعارات الهاتف' })
+  registerPushToken(@CurrentUser() user: AuthUser, @Body() body: PushTokenDto) {
+    return this.notifications.registerPushToken(user, body);
+  }
+
+  @Delete('push-tokens')
+  @ApiOperation({ summary: 'إلغاء تسجيل جهاز المستخدم من إشعارات الهاتف' })
+  unregisterPushToken(@CurrentUser() user: AuthUser, @Body() body: RemovePushTokenDto) {
+    return this.notifications.unregisterPushToken(user, body.token);
+  }
 
   @Get()
   @ApiQuery({ name: 'unreadOnly', required: false })
@@ -20,16 +33,17 @@ export class NotificationsController {
     @Query('unreadOnly') unreadOnly?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('application') application?: string,
   ) {
     return this.notifications.listMine(
-      user, unreadOnly === 'true', Number(page ?? 1), Number(limit ?? 25),
+      user, unreadOnly === 'true', Number(page ?? 1), Number(limit ?? 25), application,
     );
   }
 
   @Patch('read-all')
   @ApiOperation({ summary: 'تحديد كل إشعاراتي كمقروءة' })
-  readAll(@CurrentUser() user: AuthUser) {
-    return this.notifications.markAllRead(user);
+  readAll(@CurrentUser() user: AuthUser, @Query('application') application?:string) {
+    return this.notifications.markAllRead(user, application);
   }
 
   @Patch(':id/read')

@@ -42,7 +42,7 @@ psql -h "${DB_HOST}" -U "${DB_USER}" -d postgres -c "DROP DATABASE IF EXISTS ${D
 psql -h "${DB_HOST}" -U "${DB_USER}" -d postgres -c "CREATE DATABASE ${DB_NAME};"
 
 echo "[$(date -Iseconds)] Restoring from backup..."
-gunzip -c "${BACKUP_FILE}" | psql -h "${DB_HOST}" -U "${DB_USER}" -d "${DB_NAME}" --quiet 2>&1
+gunzip -c "${BACKUP_FILE}" | pg_restore -h "${DB_HOST}" -U "${DB_USER}" -d "${DB_NAME}" --no-owner --no-privileges --exit-on-error 2>&1
 
 echo "[$(date -Iseconds)] Running migrations..."
 # Note: prisma migrate deploy should be run after restore

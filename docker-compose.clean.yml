@@ -1,0 +1,97 @@
+name: albinaa-clean
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: albinaa-clean-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: albinaa
+      POSTGRES_PASSWORD: ${STAGING_DB_PASSWORD}
+      POSTGRES_DB: albinaa_clean
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=ar --encoding=UTF8"
+    ports:
+      - "16545:5432"
+    volumes:
+      - ${ALBINAA_POSTGRES_PATH:-./data-clean/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U albinaa -d albinaa_clean"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: albinaa-clean-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      APP_VERSION: 1.3.0-clean-test
+      DATABASE_URL: postgresql://albinaa:${STAGING_DB_PASSWORD}@db:5432/albinaa_clean?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-900}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
+      CORS_ORIGINS: http://localhost:3003,http://192.168.1.5:3003
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD}
+      TZ: Asia/Aden
+      RISK_AUTO_RECALCULATE_ENABLED: ${RISK_AUTO_RECALCULATE_ENABLED:-true}
+      RISK_RECALCULATE_HOUR: ${RISK_RECALCULATE_HOUR:-2}
+      # Docker Desktop cannot reach a gateway bound to host loopback directly.
+      # Port 23018 is the loopback-restricted host bridge to the SELECT-only 3011 gateway.
+      ORACLE_READ_API_URL: http://host.docker.internal:23018
+      ORACLE_READ_API_KEY: ${ORACLE_READ_API_KEY}
+      ORACLE_READ_SCHEMA: ${ORACLE_READ_SCHEMA:-IAS20261}
+      ORACLE_SALES_ORDERS_ORGANIZATION_ID: ${ORACLE_SALES_ORDERS_ORGANIZATION_ID:-}
+      ORACLE_SALES_ORDERS_WRITE_ENABLED: ${ORACLE_SALES_ORDERS_WRITE_ENABLED:-false}
+      ORACLE_SALES_ORDERS_WRITE_API_URL: http://host.docker.internal:13014
+      ORACLE_SALES_ORDERS_WRITE_API_KEY: ${ORACLE_IAS20261_RECEIPT_WRITE_API_KEY:-disabled}
+      ORACLE_TEST_DIRECT_LOOKUPS_ENABLED: ${ORACLE_TEST_DIRECT_LOOKUPS_ENABLED:-false}
+      ORACLE_WRITE_ENABLED: ${ORACLE_WRITE_ENABLED:-false}
+      ORACLE_WRITE_API_URL: ${ORACLE_WRITE_API_URL:-}
+      ORACLE_WRITE_API_KEY: ${ORACLE_WRITE_API_KEY:-}
+      ORACLE_WRITE_SCHEMA: ${ORACLE_WRITE_SCHEMA:-IAS20191}
+      PUSH_ENABLED: ${PUSH_ENABLED:-true}
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
+    volumes:
+      - ./data-clean/uploads:/data/uploads
+    ports:
+      - "18002:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://backend:3000
+        NEXT_PUBLIC_APP_VERSION: 1.3.0-clean-test
+    container_name: albinaa-clean-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      NEXT_PUBLIC_API_URL: http://backend:3000
+      NEXT_PUBLIC_APP_VERSION: 1.3.0-clean-test
+    ports:
+      - "3003:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s

@@ -100,6 +100,7 @@ export interface ParsedMasterRow {
   region: string | null;
   address: string | null;
   customerType: string | null;
+  collector: string | null;
 }
 export interface ParsedBalanceRow {
   rowNumber: number;

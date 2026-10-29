@@ -8,6 +8,7 @@ import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { CreateFollowupDto } from './dto/create-followup.dto';
+import { CreateContactEventDto } from './dto/create-contact-event.dto';
 import { QueryFollowupsDto } from './dto/query-followups.dto';
 import { UpdateFollowupDto } from './dto/update-followup.dto';
 import { FollowupsService } from './followups.service';
@@ -24,6 +25,18 @@ export class FollowupsController {
   @ApiOperation({ summary: 'تسجيل متابعة — النتيجة إلزامية (قاعدة معتمدة)' })
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateFollowupDto, @Req() req: Request) {
     return this.followups.create(user, dto, req);
+  }
+
+  @Idempotent()
+  @Post('contact-event')
+  @RequirePermissions('followups.create')
+  @ApiOperation({ summary: 'تسجيل فتح واتساب أو الرسائل النصية كمتابعة قبل الانتقال إلى تطبيق الإرسال' })
+  createContactEvent(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreateContactEventDto,
+    @Req() req: Request,
+  ) {
+    return this.followups.createContactEvent(user, dto, req);
   }
 
   @Get()

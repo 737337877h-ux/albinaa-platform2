@@ -29,6 +29,20 @@ export class DashboardController {
     return this.dashboard.summary(user);
   }
 
+  @Get('debt-change-24h')
+  @RequirePermissions('customers.read', 'balances.read')
+  @ApiOperation({ summary: 'صافي تغير المديونية من حركات المنصة خلال آخر 24 ساعة ضمن نطاق المستخدم' })
+  debtChange24h(@CurrentUser() user: AuthUser) {
+    return this.dashboard.debtChangeLast24Hours(user);
+  }
+
+  @Get('nav-counts')
+  @RequirePermissions('customers.read')
+  @ApiOperation({ summary: 'عدادات الشريط الجانبي: مهام مفتوحة، متابعات ووعود مستحقة ضمن نطاق المستخدم' })
+  navCounts(@CurrentUser() user: AuthUser) {
+    return this.dashboard.navCounts(user);
+  }
+
   @Get('collector')
   @RequirePermissions('tasks.manage')
   @ApiQuery({ name: 'collectorId', required: false, description: 'للإشراف — افتراضي: المحصل الحالي' })

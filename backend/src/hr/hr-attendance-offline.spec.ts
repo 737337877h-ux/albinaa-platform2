@@ -1,0 +1,11 @@
+import {HrAttendanceService,qrSign} from './hr-attendance.service';
+describe('offline attendance',()=>{
+ const recordedAt=Date.now()-86400000,secret='test',u:any={id:'u',organizationId:'org'};
+ function fixture(){const tx:any={hrEmployee:{findFirst:jest.fn().mockResolvedValue({id:'e',workMode:'office',startTime:'08:00',endTime:'22:00',breakStartTime:'13:00',breakEndTime:'14:30',breakMinutes:90,workDays:[0,1,2,3,4,6]})},hrAttendance:{findFirst:jest.fn().mockResolvedValue(null),findUnique:jest.fn().mockResolvedValue(null),create:jest.fn().mockImplementation(({data})=>({...data,id:'r'}))},auditLog:{create:jest.fn()}};return {tx,s:new HrAttendanceService({$transaction:(fn:any)=>fn(tx)} as any,{get:()=>secret} as any)};}
+ const input:any={operationId:'op',employeeId:'e',action:'in',method:'qr',recordedAt,token:qrSign(secret,'org',new Date(recordedAt-1000))};
+ it('verifies the signed QR at capture time and preserves original time after a day offline',async()=>{const {s,tx}=fixture();const r=await s.punch(u,input);expect(r.checkIn.getTime()).toBe(recordedAt);expect(r.inEvidence.needsTimeReview).toBe(true);expect(tx.auditLog.create).toHaveBeenCalled();});
+ it('rejects a QR already expired at capture',async()=>{await expect(fixture().s.punch(u,{...input,token:qrSign(secret,'org',new Date(recordedAt-60000))})).rejects.toThrow();});
+ it('rejects future time and different employee',async()=>{await expect(fixture().s.punch(u,{...input,recordedAt:Date.now()+300000})).rejects.toThrow();await expect(fixture().s.punch(u,{...input,employeeId:'other'})).rejects.toThrow();});
+ it('replays an accepted operation without duplicating it or rechecking expired evidence',async()=>{const {s,tx}=fixture();tx.hrAttendance.findFirst.mockResolvedValue({employeeId:'e',inOperationId:'op',id:'r'});expect((await s.punch(u,{...input,token:'expired'})).id).toBe('r');expect(tx.hrAttendance.create).not.toHaveBeenCalled();});
+ it('rejects stale GPS relative to the original registration time',async()=>{const {s,tx}=fixture();tx.hrEmployee.findFirst.mockResolvedValue({id:'e',workMode:'field'});await expect(s.punch(u,{...input,method:'location',latitude:15,longitude:44,accuracy:10,capturedAt:recordedAt-300000})).rejects.toThrow();});
+});

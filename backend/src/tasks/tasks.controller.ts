@@ -25,6 +25,19 @@ export class TasksController {
     return this.tasks.today(user, collectorId);
   }
 
+  @Get('scheduled')
+  @RequirePermissions('tasks.manage')
+  @ApiQuery({ name: 'bucket', required: true, enum: ['today', 'overdue'] })
+  @ApiQuery({ name: 'collectorId', required: false })
+  @ApiOperation({ summary: 'المهام المجدولة اليوم أو المتأخرة، منفصلة عن توصيات قرار اليوم' })
+  scheduled(
+    @CurrentUser() user: AuthUser,
+    @Query('bucket') bucket: 'today' | 'overdue' = 'today',
+    @Query('collectorId') collectorId?: string,
+  ) {
+    return this.tasks.scheduled(user, bucket === 'overdue' ? 'overdue' : 'today', collectorId);
+  }
+
   @Get('by-customer/:id')
   @RequirePermissions('tasks.manage')
   @ApiOperation({ summary: 'مهام عميل مفتوحة (Customer360): النوع، الأولوية، السبب، المبلغ المتوقع، الإسناد' })
@@ -46,13 +59,15 @@ export class TasksController {
   @RequirePermissions('tasks.manage')
   @ApiQuery({ name: 'collectorId', required: false })
   @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'bucket', required: false, enum: ['today', 'overdue', 'upcoming', 'all'] })
   @ApiOperation({ summary: 'المهام المخزنة (المفتوحة افتراضيًا)' })
   list(
     @CurrentUser() user: AuthUser,
     @Query('collectorId') collectorId?: string,
     @Query('status') status?: string,
+    @Query('bucket') bucket?: 'today' | 'overdue' | 'upcoming' | 'all',
   ) {
-    return this.tasks.list(user, collectorId, status ?? 'open');
+    return this.tasks.list(user, collectorId, status ?? 'open', bucket ?? 'all');
   }
 
   @Post()

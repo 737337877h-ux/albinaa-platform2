@@ -3,6 +3,7 @@ node_modules/
 .env.local
 .env.development
 .env.prod
+.env.ias20191-test
 backend/.env
 frontend/.env
 frontend/.env.local
@@ -10,6 +11,10 @@ frontend/.env.local
 *.tsbuildinfo
 dist/
 uploads/
+data/
+data-clean/
+data-ias20191-test/
+mobile/assets/sounds/alraqi-notification-candidate.wav
 coverage/
 .next/
 out/
@@ -19,3 +24,24 @@ test-output-*.txt
 .eslintcache
 nginx/ssl/*.pem
 nginx/ssl/*.key
+mobile/.gradle-codex/
+mobile/artifacts/
+mobile/assets/previews/
+mobile/assets/fonts/package-tmp/
+tmp/
+
+# Local operations, private exports and build snapshots
+backups/
+outputs/
+output/
+output-*/
+.next*/
+*.dump
+*.sqlite
+*.db
+*.apk
+*.aab
+*.keystore
+*.jks
+.env.*
+!.env.example

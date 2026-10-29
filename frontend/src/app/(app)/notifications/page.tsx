@@ -1,15 +1,18 @@
 'use client';
+import {notificationHref} from '@/lib/notification-target';
+import {KIND_AR,describeNotification} from '@/lib/notification-presentation';
 import { useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BellOff, Check, CheckCheck } from 'lucide-react';
 import { api } from '@/lib/api';
-import { fmtDateTime, fmtMoney } from '@/lib/format';
+import { fmtDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/app-shell';
 import { DataState } from '@/components/ui/data-state';
 import { toast } from '@/components/ui/toast';
 import { Badge, Button, Card, Pagination } from '@/components/ui/primitives';
+import { isFinancialAdjustmentEvent } from '@/lib/financial-adjustment';
 
 /* ────────────────────────────── Types ────────────────────────────────── */
 
@@ -31,59 +34,6 @@ interface NotificationsResponse {
 }
 
 /* ────────────────────────────── Helpers ──────────────────────────────── */
-
-type KindTone = 'neutral' | 'pine' | 'hazard' | 'debt';
-
-const KIND_AR: Record<string, { label: string; tone: KindTone }> = {
-  promise_due: { label: 'وعد مستحق', tone: 'hazard' },
-  promise_overdue: { label: 'وعد متأخر', tone: 'debt' },
-  collection_created: { label: 'تحصيل جديد', tone: 'pine' },
-  customer_transferred: { label: 'نقل عميل', tone: 'neutral' },
-};
-
-function describe(n: NotificationItem): { title: string; text: string; href?: string } {
-  const p = n.payload ?? {};
-  const customerName = (p.customerName as string | undefined) ?? '';
-  const money =
-    p.amount != null && p.currency
-      ? `${fmtMoney(p.amount as number)} ${String(p.currency)}`
-      : null;
-  const customerHref =
-    typeof p.customerId === 'string' && p.customerId ? `/customers/${p.customerId}` : undefined;
-
-  switch (n.kind) {
-    case 'promise_due':
-      return {
-        title: 'تذكير بوعد سداد',
-        text: money
-          ? `وعد سداد من ${customerName || 'عميل'} بمبلغ ${money}${p.dueDate ? ` — يستحق ${fmtDateTime(p.dueDate as string)}` : ''}`
-          : `وعد سداد من ${customerName || 'عميل'} يستحق قريبًا`,
-        href: customerHref,
-      };
-    case 'promise_overdue':
-      return {
-        title: 'وعد سداد متأخر',
-        text: money
-          ? `تجاوز ${customerName || 'العميل'} موعد الوفاء بوعد بمبلغ ${money}${p.reason ? ` (${p.reason})` : ''}`
-          : `تجاوز ${customerName || 'العميل'} موعد الوفاء بوعد${p.reason ? ` (${p.reason})` : ''}`,
-        href: customerHref,
-      };
-    case 'collection_created':
-      return {
-        title: 'تحصيل جديد بانتظار الاستلام',
-        text: `سُجّل تحصيل من ${customerName || ''}${money ? ` بمبلغ ${money}` : ''}${p.method ? ` — ${p.method}` : ''}${p.collectorName ? ` بواسطة ${p.collectorName}` : ''}`,
-        href: customerHref,
-      };
-    case 'customer_transferred':
-      return {
-        title: 'نُقل إليك عميل',
-        text: `نُقل إليك العميل ${customerName || ''}${p.customerCode ? ` (${p.customerCode})` : ''}${p.reason ? ` — ${p.reason}` : ''}`,
-        href: customerHref,
-      };
-    default:
-      return { title: n.kind, text: '' };
-  }
-}
 
 /* ────────────────────────────── Page ─────────────────────────────────── */
 
@@ -170,10 +120,10 @@ export default function NotificationsPage() {
           <ul className="divide-y divide-concrete-100 dark:divide-white/10">
             {data?.items.map((n) => {
               const meta = KIND_AR[n.kind];
-              const desc = describe(n);
+              const desc = describeNotification(n);
               const unread = !n.readAt;
               return (
-                <li key={n.id} className={cn('flex items-start gap-3 px-4 py-3.5', unread && 'bg-pine-50/40 dark:bg-pine-900/15')}>
+                <li key={n.id} className={cn('relative flex cursor-pointer items-start gap-3 px-4 py-3.5 hover:bg-concrete-50 dark:hover:bg-white/5', unread && 'bg-pine-50/40 dark:bg-pine-900/15')}>
                   <span
                     aria-hidden
                     className={cn(
@@ -186,7 +136,7 @@ export default function NotificationsPage() {
                       {meta ? (
                         <Badge tone={meta.tone}>{meta.label}</Badge>
                       ) : (
-                        <Badge>{n.kind}</Badge>
+                        <Badge>إشعار</Badge>
                       )}
                       <p className={cn('text-sm', unread ? 'font-semibold text-iron-900 dark:text-concrete-100' : 'text-concrete-600 dark:text-concrete-400')}>
                         {desc.title}
@@ -195,14 +145,15 @@ export default function NotificationsPage() {
                     <p className="mt-1 text-sm text-concrete-600 dark:text-concrete-400">
                       {desc.text}
                     </p>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-concrete-400">
+                    <Link href={notificationHref(n)} onClick={() => { if (unread) readMut.mutate(n.id); }} className="absolute inset-0" aria-label={`فتح ${desc.title}`} />
+                    <div className="relative z-10 mt-1.5 flex flex-wrap items-center gap-2 text-xs text-concrete-400">
                       <span>{fmtDateTime(n.createdAt)}</span>
                       {desc.href && (
                         <Link
-                          href={desc.href}
+                          href={notificationHref(n)}
                           className="font-medium text-pine-700 hover:underline dark:text-pine-100"
                         >
-                          عرض العميل
+                          {isFinancialAdjustmentEvent(n.payload?.event) ? 'عرض الطلب وتفاصيله' : 'عرض العميل'}
                         </Link>
                       )}
                     </div>

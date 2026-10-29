@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Post, StreamableFile, UploadedFile, UseInterceptors,
+  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, StreamableFile, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -13,7 +13,12 @@ import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { GpsPointDto } from './dto/gps-point.dto';
 import { SyncRequestDto } from './dto/sync-request.dto';
 import { UploadReceiptDto } from './dto/upload-receipt.dto';
+import { UploadOracleRequestReceiptDto } from './dto/upload-oracle-request-receipt.dto';
+import { UpdateCustomerFieldDto } from './dto/update-customer-field.dto';
+import { DeviceHeartbeatDto } from './dto/device-heartbeat.dto';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { MobileService } from './mobile.service';
+import { OracleInventoryItemsQueryDto, OracleInventorySourceQueryDto } from '../oracle-inventory-sync/dto/oracle-inventory-query.dto';
 
 const ALLOWED_MIME_TYPES = [
   'image/jpeg',
@@ -91,6 +96,20 @@ export class MobileController {
     return this.mobile.uploadReceipt(user, file, dto);
   }
 
+  @Idempotent()
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
+  @Post('upload-request-receipt')
+  @ApiOperation({ summary: 'رفع صورة إيصال مرتبطة بطلب سند قبض أو صرف' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file', { storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024 } }))
+  uploadOracleRequestReceipt(
+    @CurrentUser() user: AuthUser,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadOracleRequestReceiptDto,
+  ) {
+    return this.mobile.uploadOracleRequestReceipt(user, file, dto);
+  }
+
   @Get('receipts/:id')
   @ApiOperation({ summary: 'تحميل صورة سند تحصيل' })
   downloadReceipt(
@@ -120,15 +139,73 @@ export class MobileController {
     return this.mobile.sync(user, dto.lastSyncToken);
   }
 
+  @Post('operations-sync')
+  @ApiOperation({ summary: 'مزامنة تطبيق العمليات دون أرصدة أو نشاط التحصيل' })
+  operationsSync(@CurrentUser() user: AuthUser, @Body() dto: SyncRequestDto) {
+    return this.mobile.sync(user, dto.lastSyncToken, true);
+  }
+
+  @Post('collection-sync')
+  @ApiOperation({ summary: 'مزامنة التحصيل دون المخزون والحجوزات' })
+  collectionSync(@CurrentUser() user: AuthUser, @Body() dto: SyncRequestDto) {
+    return this.mobile.sync(user, dto.lastSyncToken, false, true);
+  }
+
+  @Post('heartbeat')
+  @ApiOperation({ summary: 'تحديث حالة اتصال ومزامنة جهاز التطبيق' })
+  heartbeat(@CurrentUser() user: AuthUser, @Body() dto: DeviceHeartbeatDto) {
+    return this.mobile.deviceHeartbeat(user, dto);
+  }
+
+  @Get('devices')
+  @RequirePermissions('settings.manage')
+  @ApiOperation({ summary: 'لوحة مراقبة أجهزة التطبيق ضمن المؤسسة' })
+  devices(@CurrentUser() user: AuthUser) {
+    return this.mobile.deviceSessions(user);
+  }
+
   @Get('customers')
   @ApiOperation({ summary: 'قائمة العملاء المبسطة للجوال' })
   findCustomers(@CurrentUser() user: AuthUser) {
     return this.mobile.findCustomers(user);
   }
 
+  @Idempotent()
+  @Patch('customers/:id/field-update')
+  @ApiOperation({ summary: 'تحديث هاتف أو موقع عميل مسند من تطبيق الجوال' })
+  updateCustomerField(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCustomerFieldDto,
+  ) {
+    return this.mobile.updateCustomerField(user, id, dto);
+  }
+
   @Get('customers/:id')
   @ApiOperation({ summary: 'عرض عميل 360 مبسط للجوال' })
   findCustomer360(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.mobile.findCustomer360(user, id);
+  }
+
+  @Get('inventory/summary')
+  @ApiOperation({ summary: 'ملخص المخزون المنشور لتطبيق الجوال — قراءة فقط' })
+  inventorySummary(@CurrentUser() user: AuthUser, @Query() query: OracleInventorySourceQueryDto) {
+    return this.mobile.mobileInventorySummary(user, query);
+  }
+
+  @Get('inventory/items')
+  @ApiOperation({ summary: 'بحث أصناف المخزون المنشور لتطبيق الجوال — قراءة فقط' })
+  inventoryItems(@CurrentUser() user: AuthUser, @Query() query: OracleInventoryItemsQueryDto) {
+    return this.mobile.mobileInventoryItems(user, query);
+  }
+
+  @Get('inventory/items/:code')
+  @ApiOperation({ summary: 'تفاصيل ورصيد صنف منشور لتطبيق الجوال — قراءة فقط' })
+  inventoryItem(
+    @CurrentUser() user: AuthUser,
+    @Param('code') code: string,
+    @Query() query: OracleInventorySourceQueryDto,
+  ) {
+    return this.mobile.mobileInventoryItem(user, code, query);
   }
 }

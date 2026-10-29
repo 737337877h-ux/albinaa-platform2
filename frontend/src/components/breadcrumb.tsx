@@ -5,14 +5,29 @@ import { ChevronLeft } from 'lucide-react';
 
 /** تُعرَّف تسميات المسارات هنا مركزيًا مع إضافة كل صفحة جديدة. */
 const LABELS: Record<string, string> = {
+  hr: 'الموارد البشرية',
+  employees: 'الموظفون والرواتب',
+  payroll: 'كشف الموظف ومسودة الراتب',
+  requests: 'طلبات السلف والإجازات',
+  attendance: 'الحضور والانصراف',
   dashboard: 'لوحة التحكم',
   customers: 'العملاء',
+  'sales-order-drafts': 'مسودات طلبات العملاء',
+  advances: 'السلف',
   followups: 'المتابعات',
   promises: 'وعود السداد',
   collections: 'التحصيلات',
   imports: 'استيراد Excel',
+  reservations: 'حجوزات البضاعة',
+  inventory: 'المخزون',
+  'inventory-transfers': 'التحويلات المخزنية',
+  items: 'الأصناف',
   tasks: 'عمل اليوم',
   notifications: 'الإشعارات',
+  reconciliation: 'مطابقة الصندوق',
+  reports: 'التقارير',
+  aging: 'أعمار الديون',
+  kpi: 'مؤشرات التحصيل',
   admin: 'الإدارة',
   users: 'المستخدمين',
   roles: 'الأدوار والصلاحيات',
@@ -21,6 +36,8 @@ const LABELS: Record<string, string> = {
   currencies: 'العملات',
   settings: 'الإعدادات',
   audit: 'سجل العمليات',
+  'oracle-monitoring': 'مراقبة ربط Oracle',
+  exceptions: 'مراجعة الاستثناءات',
 };
 
 export function Breadcrumb() {

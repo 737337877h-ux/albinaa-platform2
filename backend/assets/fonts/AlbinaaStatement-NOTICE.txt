@@ -1,0 +1,5 @@
+Albinaa Statement Regular and Bold are merged derivatives of the bundled
+Noto Sans Arabic and Noto Sans font files. They remain under the SIL Open
+Font License in OFL.txt. Original copyright notices remain in the font metadata.
+The modified family is named Albinaa Statement, not Noto.
+Rebuild with scripts/build-statement-fonts.py using fontTools.merge.

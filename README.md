@@ -89,6 +89,13 @@ npx tsc --noEmit && npx expo-doctor && npx jest
 
 | المستند | الوصف |
 |---------|-------|
+| [تحديث الكود — أكتوبر 2026](./docs/PLATFORM_UPDATE_20261028_AR.md) | نطاق نسخة النشر، الملفات المستبعدة، والتحقق قبل الدمج |
+| [فهرس التوثيق](./docs/DOCUMENTATION_INDEX.md) | نقطة البداية لصاحب المشروع والمستخدمين والمطور المستقبلي |
+| [سجل ما تم إنجازه](./docs/PROJECT_WORK_LOG.md) | الحالة الفعلية، الاختبارات، وما تبقى قبل الإنتاج |
+| [دليل تطبيق الهاتف](./docs/user-guides/MOBILE_USER_GUIDE_AR.md) | استخدام التطبيق من الصفر مع لقطات شاشة |
+| [دليل مستخدمي النظام](./docs/user-guides/WEB_USER_GUIDE_AR.md) | تعليمات مدير النظام ومدير المديونية والمحاسب والمحصل والقراءة فقط |
+| [الدليل الشامل](./docs/ALBINAA_PLATFORM_HANDBOOK_AR.md) | مرجع مفهرس للميزات والسياسات والاستفادة القصوى |
+| [خط الأساس وUAT](./docs/PILOT_BASELINE_2026-08-13.md) | نسخة التشغيل التجريبي، نتائج الفحوص وروابط قوائم القبول والمطابقة |
 | [PROJECT_STATE.md](./PROJECT_STATE.md) | حالة المشروع الحالية |
 | [CHANGELOG.md](./CHANGELOG.md) | سجل التغييرات |
 | [RELEASE_NOTES_v1.2.1.md](./RELEASE_NOTES_v1.2.1.md) | ملاحظات إصدار v1.2.1 (Web Hotfix) |

@@ -149,13 +149,14 @@ COL_ALIASES = {
     'customer_name': ['اسم العميل', 'الاسم', 'الاسم بالعربي', 'اسم العميل/المورد',
                       'الاسم التجاري', 'اسم المورد'],
     'currency': ['العملة', 'عملة', 'رمز العملة', 'كود العملة'],
-    'account_number': ['رقم الحساب', 'رقم الحساب البنكي', 'الحساب البنكي', 'حساب'],
+    'account_number': ['رقم الحساب', 'رقم الحساب التحليلي', 'رقم الحساب البنكي', 'الحساب البنكي', 'حساب'],
     'phone': ['الهاتف', 'رقم الهاتف', 'الجوال', 'رقم الجوال', 'الهاتف / الجوال',
               'الموبايل', 'رقم الموبايل'],
     'whatsapp': ['واتساب', 'رقم واتساب', 'الواتس'],
     'address': ['العنوان', 'الموقع'],
     'region': ['المنطقة', 'المدينة', 'الحي', 'المحافظة'],
-    'customer_type': ['نوع العميل', 'التصنيف', 'قطاع العميل', 'القطاع'],
+    'customer_type': ['نوع العميل', 'نوع الحساب', 'التصنيف', 'قطاع العميل', 'القطاع'],
+    'collector': ['المحصل', 'اسم المحصل', 'كود المحصل', 'معرف المحصل', 'اسم مستخدم المحصل'],
     'balance': ['الرصيد', 'الرصيد الحالي', 'الرصيد المتبقي', 'المديونية',
                 'إجمالي الرصيد', 'الرصيد المدين', 'المبلغ المتبقي', 'صافي الرصيد'],
     'opening': ['الرصيد الافتتاحي', 'الرصيد الإفتتاحي', 'الرصيد السابق'],
@@ -163,8 +164,8 @@ COL_ALIASES = {
 }
 
 # ترتيب الأعمدة الجدولية المستخدم في التعرّف على الترويسة
-FLAT_FIELD_ORDER = ['customer_code', 'customer_name', 'currency', 'balance',
-                    'total', 'phone', 'address', 'region', 'customer_type']
+FLAT_FIELD_ORDER = ['customer_code', 'customer_name', 'account_number', 'currency', 'balance',
+                    'total', 'phone', 'whatsapp', 'address', 'region', 'customer_type', 'collector']
 
 # مطابقة بالاحتواء (بعد الفشل بالمطابقة التامة) — تسميات قوية لا تُلتبس
 SUBSTR_RULES = [
@@ -174,6 +175,7 @@ SUBSTR_RULES = [
     ('balance', ['الرصيد', 'المديونية']),
     ('total', ['الإجمالي', 'المجموع']),
     ('phone', ['الجوال', 'الهاتف', 'الموبايل']),
+    ('collector', ['اسم المحصل', 'كود المحصل', 'المحصل']),
 ]
 
 BUCKET_SUFFIX = re.compile(r'(يوم|يومًا|يوما|أيام|ايام|شهر|شهرًا|شهرا)\s*$')
@@ -414,6 +416,12 @@ def parse_customer_master(rows):
             errors.append((rownum, 'اسم عميل ناقص — الصف مستبعد', row))
             continue
         seen.add(code)
+        raw_customer_type = _cell(row, cmap.get('customer_type')).strip()
+        normalized_customer_type = (
+            'advance' if raw_customer_type.lower() in ['advance', 'سلفة', 'سلف', 'سلفة على الغير']
+            else 'customer' if raw_customer_type.lower() in ['customer', 'عميل', 'عملاء']
+            else raw_customer_type or None
+        )
         records.append({
             'rowNumber': rownum,
             'customerCode': code,
@@ -423,7 +431,8 @@ def parse_customer_master(rows):
             'whatsapp': _cell(row, cmap.get('whatsapp')) or None,
             'region': _cell(row, cmap.get('region')) or None,
             'address': _cell(row, cmap.get('address')) or None,
-            'customerType': _cell(row, cmap.get('customer_type')) or None,
+            'customerType': normalized_customer_type,
+            'collector': _cell(row, cmap.get('collector')) or None,
         })
     return _profile_result(PROFILE_MASTER, rows, header_idx, errors, records, skipped,
                            'customers')

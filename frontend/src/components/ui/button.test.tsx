@@ -11,7 +11,8 @@ describe('Button', () => {
   it('applies primary variant by default', () => {
     render(<Button>اختبار</Button>);
     const btn = screen.getByRole('button');
-    expect(btn.className).toContain('bg-pine-700');
+    expect(btn.className).toContain('from-brand');
+    expect(btn.className).toContain('to-brand-dim');
   });
 
   it('applies secondary variant', () => {

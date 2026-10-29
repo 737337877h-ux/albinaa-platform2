@@ -18,12 +18,35 @@ export async function cleanupTestCustomers(prisma: PrismaService) {
   await prisma.$executeRawUnsafe(`ALTER TABLE operational_ledger DISABLE TRIGGER trg_ledger_immutable`);
 
   try {
+    await prisma.customerAlias.deleteMany({
+      where: { OR: [{ customerId: { in: ids } }, { sourceCustomerId: { in: ids } }] },
+    });
+    await prisma.customerMerge.deleteMany({
+      where: { OR: [{ masterCustomerId: { in: ids } }, { sourceCustomerId: { in: ids } }] },
+    });
     await prisma.balanceSnapshot.deleteMany({ where: { customerId: { in: ids } } });
+    await prisma.agingSnapshot.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.importedTransaction.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customerBalance.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.potentialDuplicateCustomer.deleteMany({
       where: { OR: [{ customerAId: { in: ids } }, { customerBId: { in: ids } }] },
     });
+    const collectionIds = (await prisma.collection.findMany({
+      where: { customerId: { in: ids } }, select: { id: true },
+    })).map((collection) => collection.id);
+    if (collectionIds.length) {
+      const voucherIds = (await prisma.collectionHandoverItem.findMany({
+        where: { collectionId: { in: collectionIds } }, select: { voucherId: true },
+      })).map((item) => item.voucherId);
+      await prisma.collectionReversalRequest.deleteMany({ where: { collectionId: { in: collectionIds } } });
+      await prisma.cashHandover.deleteMany({ where: { collectionId: { in: collectionIds } } });
+      await prisma.collectionHandoverItem.deleteMany({ where: { collectionId: { in: collectionIds } } });
+      if (voucherIds.length) {
+        await prisma.collectionHandoverVoucher.deleteMany({
+          where: { id: { in: voucherIds }, items: { none: {} } },
+        });
+      }
+    }
     await prisma.collection.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.operationalLedger.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.followup.deleteMany({ where: { customerId: { in: ids } } });
@@ -42,6 +65,7 @@ export async function cleanupTestCustomers(prisma: PrismaService) {
     await prisma.balanceReconciliation.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customerAssignment.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customerCreditPolicy.deleteMany({ where: { customerId: { in: ids } } });
+    await prisma.customerCreditLimit.deleteMany({ where: { customerId: { in: ids } } });
     await prisma.customer.deleteMany({ where: { id: { in: ids } } });
     // لا نحذف كل import_jobs (قد تشير لها أرصدة عملاء حقيقيين في بيئة تطوير مشتركة) —
     // نحذف فقط الوظائف غير المرتبطة بأي بيانات بعد تنظيف عملاء الاختبار

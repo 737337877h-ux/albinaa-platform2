@@ -68,6 +68,8 @@ class FakePrisma {
   analyticalMovement = {
     findUnique: async ({ where }: any) =>
       this.movements.find((m) => m.lineHash === where.lineHash) ?? null,
+    findFirst: async ({ where }: any) =>
+      this.movements.find((m) => m.lineHash === where.lineHash && !m.reversedAt) ?? null,
     create: async ({ data }: any) => {
       const movement = { id: `mov-${this.nextId++}`, ...data };
       this.movements.push(movement);

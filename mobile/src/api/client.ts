@@ -4,10 +4,16 @@ import { getAccessToken, getRefreshToken, setTokens, clearTokens } from '../util
 
 let client: AxiosInstance | null = null;
 let isRefreshing = false;
-let pendingRequests: Array<(token: string) => void> = [];
+let pendingRequests: Array<{
+  resolve: (token: string) => void;
+  reject: (error: unknown) => void;
+}> = [];
 
 async function buildClient(): Promise<AxiosInstance> {
   const baseURL = await getBaseUrl();
+  // Let Axios use React Native's native XHR transport. The explicit Axios fetch
+  // adapter fails before sending POST requests on some Android builds even when
+  // the same LAN host passes the global fetch health probe.
   const c = axios.create({ baseURL, timeout: 15_000 });
 
   c.interceptors.request.use(async (config) => {
@@ -24,10 +30,11 @@ async function buildClient(): Promise<AxiosInstance> {
       req._retry = true;
 
       if (isRefreshing) {
-        return new Promise((resolve) => pendingRequests.push((token) => {
-          req.headers.Authorization = `Bearer ${token}`;
-          resolve(c(req));
-        }));
+        return new Promise<string>((resolve, reject) => pendingRequests.push({ resolve, reject }))
+          .then((token) => {
+            req.headers.Authorization = `Bearer ${token}`;
+            return c(req);
+          });
       }
 
       isRefreshing = true;
@@ -36,13 +43,17 @@ async function buildClient(): Promise<AxiosInstance> {
         if (!refreshToken) throw new Error('No refresh token');
         const { data } = await axios.post(`${baseURL}/auth/refresh`, { refreshToken });
         await setTokens(data.accessToken, data.refreshToken);
-        pendingRequests.forEach((cb) => cb(data.accessToken));
+        pendingRequests.forEach((pending) => pending.resolve(data.accessToken));
         pendingRequests = [];
         req.headers.Authorization = `Bearer ${data.accessToken}`;
         return c(req);
       } catch (refreshError) {
-        await clearTokens();
+        pendingRequests.forEach((pending) => pending.reject(refreshError));
         pendingRequests = [];
+        const status = (refreshError as any)?.response?.status;
+        // A disconnected LAN is not a logout. Clear credentials only when the
+        // server explicitly rejects the refresh token.
+        if ([400, 401, 403].includes(status)) await clearTokens();
         throw refreshError;
       } finally {
         isRefreshing = false;
@@ -63,6 +74,12 @@ export async function getClient(): Promise<AxiosInstance> {
  * يجب استدعاؤها من شاشة الإعدادات بعد حفظ عنوان جديد.
  */
 export async function resetClient(): Promise<AxiosInstance> {
+  // A logout or server/account switch must not inherit a refresh operation or
+  // rejected request queue from the previous session.
+  const resetError = new Error('HTTP session reset');
+  pendingRequests.forEach((pending) => pending.reject(resetError));
+  pendingRequests = [];
+  isRefreshing = false;
   client = await buildClient();
   return client;
 }

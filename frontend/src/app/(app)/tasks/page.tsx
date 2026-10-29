@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { CheckCircle2, Clock, AlertTriangle, ArrowUpCircle, TrendingUp, Phone } from 'lucide-react';
@@ -8,7 +8,7 @@ import { useCan } from '@/lib/auth';
 import { fmtDate, fmtMoney, CCY_AR, TASK_STATUS_AR, TASK_TYPE_AR } from '@/lib/format';
 import { PageHeader } from '@/components/app-shell';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
-import { Badge, Button, Card, Empty, Money, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, Empty, Money, Pagination, Skeleton } from '@/components/ui/primitives';
 import { Table, TRow, TD } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsPanel } from '@/components/ui/tabs';
 
@@ -36,6 +36,11 @@ interface TodayResponse {
     tasksToday: number;
     expectedByCurrency: Record<string, number>;
     totalBalanceByCurrency: Record<string, number>;
+    customerBalanceByCurrency?: Record<string, number>;
+    advanceBalanceByCurrency?: Record<string, number>;
+    portfolioCustomerDebtByCurrency?: Record<string, number>;
+    excludedCustomerDebtByCurrency?: Record<string, number>;
+    methodology?: { expected: string; balances: string };
   };
   items: TodayItem[];
 }
@@ -61,10 +66,21 @@ interface StoredTask {
 
 const PRIORITY_CONFIG: Record<number, { color: string; icon: typeof AlertTriangle; label: string }> = {
   1: { color: 'border-r-red-500 bg-red-50/50 dark:bg-red-900/10', icon: ArrowUpCircle, label: 'عاجل' },
+  1.5: { color: 'border-r-red-500 bg-red-50/50 dark:bg-red-900/10', icon: ArrowUpCircle, label: 'إنذار قانوني' },
   2: { color: 'border-r-amber-500 bg-amber-50/50 dark:bg-amber-900/10', icon: AlertTriangle, label: 'مهم' },
+  2.5: { color: 'border-r-amber-500 bg-amber-50/50 dark:bg-amber-900/10', icon: AlertTriangle, label: 'زيارة ميدانية' },
   3: { color: 'border-r-orange-400 bg-orange-50/30 dark:bg-orange-900/10', icon: Clock, label: 'متابعة متأخرة' },
   4: { color: 'border-r-blue-400 bg-blue-50/30 dark:bg-blue-900/10', icon: TrendingUp, label: 'رصيد مرتفع' },
+  4.5: { color: 'border-r-blue-400 bg-blue-50/30 dark:bg-blue-900/10', icon: Phone, label: 'مكالمة تحصيل' },
   5: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: TrendingUp, label: 'مخاطر' },
+  6: { color: 'border-r-orange-400 bg-orange-50/30 dark:bg-orange-900/10', icon: TrendingUp, label: 'مديونية كبيرة' },
+  6.5: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: AlertTriangle, label: 'رسالة تذكير' },
+  7: { color: 'border-r-red-500 bg-red-50/50 dark:bg-red-900/10', icon: ArrowUpCircle, label: 'متقادم +120' },
+  8: { color: 'border-r-orange-400 bg-orange-50/30 dark:bg-orange-900/10', icon: TrendingUp, label: 'دون متابعة' },
+  9: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: Phone, label: 'لا يرد' },
+  10: { color: 'border-r-amber-500 bg-amber-50/50 dark:bg-amber-900/10', icon: AlertTriangle, label: 'يحتاج زيارة' },
+  11: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: Clock, label: 'متابعة دورية' },
+  12: { color: 'border-r-concrete-300 bg-concrete-50/30 dark:bg-white/5', icon: Clock, label: 'عادية' },
 };
 
 const STATUS_BADGE: Record<string, string> = {
@@ -81,18 +97,28 @@ export default function TasksPage() {
   const [tab, setTab] = useState('today');
   const [taskFilter, setTaskFilter] = useState<string>('open');
   const [completeId, setCompleteId] = useState<string | null>(null);
+  const [todayPage, setTodayPage] = useState(1);
+  const [storedPage, setStoredPage] = useState(1);
+  const pageSize = 25;
 
   /* ──── Today Board ──── */
+  const boardBucket = tab === 'overdue' ? 'overdue' : 'today';
   const today = useQuery<TodayResponse>({
-    queryKey: ['tasks-today'],
+    queryKey: tab === 'today' ? ['tasks-followup-priorities'] : ['tasks-scheduled', boardBucket],
+    queryFn: () => api<TodayResponse>(tab === 'today' ? '/tasks/today' : `/tasks/scheduled?bucket=${boardBucket}`),
+    enabled: canManage && tab !== 'stored',
+  });
+  const followupPriorities = useQuery<TodayResponse>({
+    queryKey: ['tasks-followup-priorities'],
     queryFn: () => api<TodayResponse>('/tasks/today'),
     enabled: canManage,
   });
+  const neverFollowed = (followupPriorities.data?.items ?? []).filter((item) => !item.lastFollowupAt);
 
   /* ──── Stored Tasks ──── */
   const tasks = useQuery<StoredTask[]>({
     queryKey: ['tasks', taskFilter],
-    queryFn: () => api<StoredTask[]>(`/tasks?status=${taskFilter}`),
+    queryFn: () => api<StoredTask[]>(`/tasks?status=${taskFilter}&bucket=${taskFilter === 'open' ? 'upcoming' : 'all'}`),
     enabled: canManage && tab === 'stored',
     retry: false,
   });
@@ -108,6 +134,22 @@ export default function TasksPage() {
       t.priorityReason?.toLowerCase().includes(s)
     );
   }) ?? [];
+  const todayItems = today.data?.items ?? [];
+  const todayTotalPages = Math.max(1, Math.ceil(todayItems.length / pageSize));
+  const storedTotalPages = Math.max(1, Math.ceil(filteredTasks.length / pageSize));
+  const visibleTodayItems = todayItems.slice((todayPage - 1) * pageSize, todayPage * pageSize);
+  const visibleStoredTasks = filteredTasks.slice((storedPage - 1) * pageSize, storedPage * pageSize);
+
+  useEffect(() => { setTodayPage(1); }, [today.data?.date, tab]);
+  useEffect(() => { setStoredPage(1); }, [taskFilter, taskSearch]);
+
+  const goToPage = (target: 'today' | 'stored', nextPage: number) => {
+    if (target === 'today') setTodayPage(nextPage);
+    else setStoredPage(nextPage);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`${target}-tasks-table`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
 
   /* ──── Complete Task Mutation ──── */
   const completeMut = useMutation({
@@ -132,14 +174,27 @@ export default function TasksPage() {
     <div className="space-y-5">
       <PageHeader title="عمل اليوم" />
 
+      <Card className="border-r-4 border-r-hazard-500 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">عملاء مسندون لم تتم متابعتهم</h2>
+            <p className="mt-1 text-xs text-ink-mid">هذه قائمة تنبيه مستقلة ولا تُضاف إلى عداد مهام اليوم حتى لا تتكرر مئات المهام. تختفي حالة العميل بعد تسجيل أول متابعة له.</p>
+          </div>
+          <Badge tone={neverFollowed.length ? 'hazard' : 'pine'}>{followupPriorities.isLoading ? 'جارٍ الحساب…' : `${neverFollowed.length} عميل`}</Badge>
+        </div>
+        {neverFollowed.length > 0 && <details className="mt-3"><summary className="cursor-pointer text-sm font-semibold text-pine-700 dark:text-pine-100">عرض العملاء غير المتابعين</summary><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{neverFollowed.map((item) => <Link key={item.customerId} href={`/customers/${item.customerId}?tab=overview`} className="rounded-lg border border-line bg-surface-2 p-3 hover:border-pine-500"><strong className="block text-sm">{item.customerName}</strong><span className="mt-1 block text-xs text-ink-mid">{item.reason}</span></Link>)}</div></details>}
+      </Card>
+
       <Tabs value={tab} onChange={setTab}>
         <TabsList>
-          <TabsTrigger value="today" badge={s?.tasksToday}>عمل اليوم</TabsTrigger>
+          <TabsTrigger value="today" badge={followupPriorities.data?.summary.tasksToday}>عمل اليوم</TabsTrigger>
+          <TabsTrigger value="scheduled">المهام المجدولة اليوم</TabsTrigger>
+          <TabsTrigger value="overdue">متأخرة</TabsTrigger>
           <TabsTrigger value="stored">المهام المخزنة</TabsTrigger>
         </TabsList>
 
         {/* ──────────────── Today Board ──────────────── */}
-        <TabsPanel value="today">
+        <TabsPanel value={tab === 'stored' ? 'today' : tab}>
           <DataState
             isLoading={today.isLoading}
             isError={today.isError}
@@ -147,7 +202,7 @@ export default function TasksPage() {
             onRetry={() => today.refetch()}
             isFetching={today.isFetching}
             isEmpty={!today.data?.items?.length}
-            emptyTitle="لا توجد مهام اليوم"
+            emptyTitle={tab === 'overdue' ? 'لا توجد مهام متأخرة' : tab === 'scheduled' ? 'لا توجد مهام مجدولة اليوم' : 'لا توجد أولويات لعمل اليوم'}
             emptyHint={today.data?.isCollector === false ? 'أنت لا تعمل كمحصل حالياً' : undefined}
             skeletonClassName="h-64"
           >
@@ -157,14 +212,14 @@ export default function TasksPage() {
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   <SummaryCard
                     icon={<CheckCircle2 className="h-5 w-5 text-pine-600" />}
-                    label="مهام اليوم"
+                    label={tab === 'overdue' ? 'المهام المتأخرة' : tab === 'scheduled' ? 'المهام المجدولة اليوم' : 'أولويات عمل اليوم'}
                     value={String(s?.tasksToday ?? 0)}
                   />
                   {Object.entries(s?.expectedByCurrency ?? {}).map(([ccy, amt]) => (
                     <SummaryCard
                       key={ccy}
                       icon={<AlertTriangle className="h-5 w-5 text-amber-500" />}
-                      label={`المتوقع (${CCY_AR[ccy] ?? ccy})`}
+                      label={`هدف التحصيل — العملاء والسلف (${CCY_AR[ccy] ?? ccy})`}
                       value={<Money value={amt} currency={ccy} />}
                     />
                   ))}
@@ -172,14 +227,50 @@ export default function TasksPage() {
                     <SummaryCard
                       key={ccy}
                       icon={<TrendingUp className="h-5 w-5 text-blue-500" />}
-                      label={`إجمالي الأرصدة (${CCY_AR[ccy] ?? ccy})`}
+                      label={`إجمالي أرصدة العمل — العملاء والسلف (${CCY_AR[ccy] ?? ccy})`}
                       value={<Money value={amt} currency={ccy} />}
                     />
                   ))}
                 </div>
 
+                {s?.methodology && (
+                  <Card className="p-4 text-sm">
+                    <h3 className="font-semibold">كيف حُسبت المؤشرات؟</h3>
+                    <p className="mt-1 text-concrete-600 dark:text-concrete-300"><strong>هدف التحصيل:</strong> {s.methodology.expected}. هذا هدف تشغيلي مبني على الرصيد/التقادم، وليس تنبؤًا احتماليًا.</p>
+                    <p className="mt-1 text-concrete-600 dark:text-concrete-300"><strong>إجمالي أرصدة عمل اليوم:</strong> {s.methodology.balances}.</p>
+                    {Object.entries(s.portfolioCustomerDebtByCurrency ?? {}).map(([ccy, portfolio]) => {
+                      const listed = s.customerBalanceByCurrency?.[ccy] ?? 0;
+                      const difference = s.excludedCustomerDebtByCurrency?.[ccy] ?? 0;
+                      return (
+                        <p key={ccy} className="mt-1 text-concrete-600 dark:text-concrete-300">
+                          <strong>مطابقة {ccy}:</strong> لوحة التحكم {fmtMoney(portfolio)}، عمل اليوم {fmtMoney(listed)}، الفرق {fmtMoney(difference)}.
+                        </p>
+                      );
+                    })}
+                    {Object.entries(s.advanceBalanceByCurrency ?? {}).map(([ccy, advances]) => (
+                      <p key={`advance-${ccy}`} className="mt-1 text-concrete-600 dark:text-concrete-300">
+                        <strong>السلف على الغير {ccy}:</strong> {fmtMoney(advances)}، تظهر في قائمة العمل والمتابعة بصورة مستقلة ولا تدخل في بطاقة مديونية العملاء.
+                      </p>
+                    ))}
+                  </Card>
+                )}
+
+                <Card className="p-4 text-sm">
+                  <h3 className="font-semibold">نموذج أولوية المتابعة المعتمد</h3>
+                  <div className="mt-2 grid gap-2 text-concrete-600 sm:grid-cols-2 xl:grid-cols-4 dark:text-concrete-300">
+                    <p><strong>1.</strong> وعد متأخر أو مستحق اليوم.</p>
+                    <p><strong>2.</strong> متابعة متأخرة أو مخاطرة حرجة.</p>
+                    <p><strong>3.</strong> دين كبير مضى عليه 7 أيام أو متقادم +120.</p>
+                    <p><strong>4.</strong> رصيد مرتفع بلا متابعة، تكرار عدم الرد، أو زيارة.</p>
+                  </div>
+                </Card>
+
                 {/* Items */}
-                <Card>
+                <Card className="scroll-mt-24">
+                  <div id="today-tasks-table" className="scroll-mt-24 flex flex-wrap items-center justify-between gap-2 border-b border-concrete-100 px-4 py-3 text-xs text-concrete-500 dark:border-white/10">
+                    <span>عرض {(todayPage - 1) * pageSize + 1}–{Math.min(todayPage * pageSize, todayItems.length)} من {todayItems.length}</span>
+                    <span>الصفحة {todayPage} من {todayTotalPages}</span>
+                  </div>
                   <Table>
                     <thead>
                       <tr className="border-b border-concrete-100 text-right text-xs text-concrete-500 dark:border-white/10">
@@ -192,7 +283,7 @@ export default function TasksPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {today.data.items.map((item, i) => {
+                      {visibleTodayItems.map((item, i) => {
                         const pc = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG[5];
                         const Icon = pc.icon;
                         return (
@@ -257,6 +348,7 @@ export default function TasksPage() {
                       })}
                     </tbody>
                   </Table>
+                  <Pagination page={todayPage} totalPages={todayTotalPages} onPage={(page) => goToPage('today', page)} />
                 </Card>
 
                 {today.data.settings && (
@@ -271,9 +363,9 @@ export default function TasksPage() {
 
         {/* ──────────────── Stored Tasks ──────────────── */}
         <TabsPanel value="stored">
-          <Card>
+          <Card className="scroll-mt-24">
             {/* Filters bar */}
-            <div className="flex flex-wrap items-center gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
+            <div id="stored-tasks-table" className="scroll-mt-24 flex flex-wrap items-center gap-3 border-b border-concrete-100 px-4 py-3 dark:border-white/10">
               <div className="flex gap-1">
                 {['open', 'escalated', 'done'].map(s => (
                   <button
@@ -321,7 +413,7 @@ export default function TasksPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredTasks.map(t => (
+                  {visibleStoredTasks.map(t => (
                     <TRow key={t.id}>
                       <TD className="text-xs">
                         {TASK_TYPE_AR[t.taskType] ?? t.taskType}
@@ -341,8 +433,10 @@ export default function TasksPage() {
                           <p className="text-xs text-concrete-500" dir="ltr">{t.customer.externalCustomerCode}</p>
                         )}
                       </TD>
-                      <TD className="text-xs text-concrete-600 dark:text-concrete-400">
-                        {t.priorityReason ?? '—'}
+                      <TD className="max-w-[260px] text-xs leading-5 text-concrete-600 dark:text-concrete-400">
+                        <span className="line-clamp-3" title={t.priorityReason ?? ''}>
+                          {t.priorityReason ?? '—'}
+                        </span>
                       </TD>
                       <TD>
                         {t.expectedAmount != null && t.expectedCurrency ? (
@@ -374,6 +468,7 @@ export default function TasksPage() {
                   ))}
                 </tbody>
               </Table>
+              <Pagination page={storedPage} totalPages={storedTotalPages} onPage={(page) => goToPage('stored', page)} />
             </DataState>
           </Card>
         </TabsPanel>

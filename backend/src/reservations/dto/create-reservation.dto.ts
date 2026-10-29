@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsDateString, IsNumber, IsOptional, IsPositive, IsString, IsUUID, MaxLength,
+  IsDateString, IsIn, IsNumber, IsOptional, IsPositive, IsString, IsUUID, MaxLength,
 } from 'class-validator';
 
 export class CreateReservationDto {
@@ -8,28 +8,36 @@ export class CreateReservationDto {
   @IsUUID()
   customerId!: string;
 
-  @ApiProperty({ description: 'Item name/description (e.g. Iron rebar 12mm)' })
-  @IsString() @MaxLength(200)
-  itemName!: string;
+  @ApiProperty({ description: 'إجمالي الحجز بالطن، دون اشتراط صنف عند الإنشاء' })
+  @IsNumber() @IsPositive()
+  totalTons!: number;
+
+  @ApiPropertyOptional({ description: 'Legacy item description; not required for aggregate ton reservations' })
+  @IsOptional() @IsString() @MaxLength(200)
+  itemName?: string;
 
   @ApiPropertyOptional({ description: 'Item type/category' })
   @IsOptional() @IsString() @MaxLength(100)
   itemType?: string;
 
-  @ApiProperty({ description: 'Reserved quantity' })
-  @IsNumber() @IsPositive()
-  quantity!: number;
+  @ApiPropertyOptional({ description: 'Legacy reserved quantity' })
+  @IsOptional() @IsNumber() @IsPositive()
+  quantity?: number;
 
-  @ApiProperty({ description: 'Unit of measure (e.g. ton, piece)' })
-  @IsString() @MaxLength(50)
-  unit!: string;
+  @ApiPropertyOptional({ description: 'Normalized unit id. Preferred over legacy unit text.' })
+  @IsOptional() @IsUUID()
+  unitId?: string;
 
-  @ApiProperty({ description: 'Unit price' })
+  @ApiPropertyOptional({ description: 'Legacy unit text; resolved to an active normalized unit.' })
+  @IsOptional() @IsString() @MaxLength(50)
+  unit?: string;
+
+  @ApiProperty({ description: 'سعر الطن الواحد بعملة الحجز' })
   @IsNumber() @IsPositive()
   unitPrice!: number;
 
-  @ApiProperty({ description: 'Currency code (e.g. YER)' })
-  @IsString() @MaxLength(3)
+  @ApiProperty({ description: 'عملة سعر الحجز', enum: ['YER', 'SAR'] })
+  @IsString() @MaxLength(3) @IsIn(['YER', 'SAR'])
   currencyCode!: string;
 
   @ApiPropertyOptional()
@@ -43,6 +51,10 @@ export class CreateReservationDto {
   @ApiPropertyOptional()
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string;
+
+  @ApiPropertyOptional({ description: 'سبب تجاوز سقف الائتمان، ويتطلب صلاحية credit.override' })
+  @IsOptional() @IsString() @MaxLength(500)
+  overrideReason?: string;
 
   @ApiPropertyOptional()
   @IsOptional() @IsDateString()

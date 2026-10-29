@@ -1,8 +1,44 @@
 import * as SQLite from 'expo-sqlite';
 
 let db: SQLite.SQLiteDatabase;
+let dbOpening: Promise<SQLite.SQLiteDatabase> | null = null;
+let ownerTransition: Promise<void> | null = null;
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 11;
+
+const BUSINESS_TABLES = ['customers', 'tasks', 'followups', 'promises', 'collections', 'reservations'] as const;
+type BusinessTable = typeof BUSINESS_TABLES[number];
+
+async function hasColumn(
+  d: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+): Promise<boolean> {
+  const columns = await d.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+  return columns.some((item) => item.name === column);
+}
+
+async function addColumnIfMissing(
+  d: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  definition: string,
+): Promise<void> {
+  if (!(await hasColumn(d, table, column))) {
+    await d.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+const TABLE_COLUMNS: Record<BusinessTable, string[]> = {
+  customers: ['id', 'fullName', 'accountNumber', 'externalCustomerCode', 'customerType',
+    'phonePrimary', 'phoneSecondary', 'whatsapp', 'address', 'geoLat', 'geoLng',
+    'assignedCollectorName', 'balances', 'balanceHidden', 'accountGroupRole', 'groupBalances', 'childBalances'],
+  tasks: ['id', 'customerId', 'customerName', 'title', 'dueDate', 'priority', 'status'],
+  followups: ['id', 'customerId', 'customerName', 'typeName', 'resultName', 'notes', 'followupAt'],
+  promises: ['id', 'customerId', 'customerName', 'expectedAmount', 'currencyCode', 'dueDate', 'status', 'notes'],
+  collections: ['id', 'customerId', 'customerName', 'amount', 'currencyCode', 'methodName', 'notes', 'collectedAt', 'receiptAttachment', 'location'],
+  reservations: ['id', 'customerId', 'customerName', 'itemName', 'quantity', 'remainingQty', 'unitName', 'totalAmount', 'currencyCode', 'totalTons', 'averageTonPrice', 'reservedAt', 'expiresAt', 'status'],
+};
 
 const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => Promise<void>> = {
   2: async (d) => {
@@ -24,11 +60,108 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => Promise<void>> =
       PRAGMA user_version = 3;
     `);
   },
+  4: async (d) => {
+    await d.execAsync(`
+      ALTER TABLE mutation_queue ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
+      ALTER TABLE mutation_queue ADD COLUMN blockedAt TEXT;
+      CREATE INDEX IF NOT EXISTS idx_mutation_queue_status_retry
+        ON mutation_queue(status, nextRetryAt, id);
+      PRAGMA user_version = 4;
+    `);
+  },
+  5: async (d) => {
+    await d.execAsync(`
+      CREATE TABLE IF NOT EXISTS reference_options (
+        kind TEXT NOT NULL,
+        id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        code TEXT,
+        payload TEXT,
+        updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (kind, id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_reference_options_kind ON reference_options(kind, name);
+      PRAGMA user_version = 5;
+    `);
+  },
+  6: async (d) => {
+    await d.execAsync(`
+      ALTER TABLE customers ADD COLUMN accountNumber TEXT;
+      ALTER TABLE customers ADD COLUMN externalCustomerCode TEXT;
+      ALTER TABLE customers ADD COLUMN customerType TEXT;
+      ALTER TABLE customers ADD COLUMN phoneSecondary TEXT;
+      ALTER TABLE customers ADD COLUMN whatsapp TEXT;
+      ALTER TABLE customers ADD COLUMN geoLat REAL;
+      ALTER TABLE customers ADD COLUMN geoLng REAL;
+      CREATE INDEX IF NOT EXISTS idx_customers_type_name ON customers(customerType, fullName);
+      CREATE INDEX IF NOT EXISTS idx_customers_account ON customers(accountNumber);
+      PRAGMA user_version = 6;
+    `);
+  },
+  7: async (d) => {
+    await d.execAsync(`
+      CREATE TABLE IF NOT EXISTS reservations (
+        id TEXT PRIMARY KEY,
+        customerId TEXT,
+        customerName TEXT,
+        itemName TEXT,
+        quantity REAL,
+        remainingQty REAL,
+        unitName TEXT,
+        totalAmount REAL,
+        currencyCode TEXT,
+        totalTons REAL,
+        averageTonPrice REAL,
+        reservedAt TEXT,
+        expiresAt TEXT,
+        status TEXT,
+        updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_reservations_customer_status ON reservations(customerId, status);
+      PRAGMA user_version = 7;
+    `);
+  },
+  8: async (d) => {
+    await addColumnIfMissing(d, 'customers', 'assignedCollectorName', 'TEXT');
+    await d.execAsync(`
+      UPDATE mutation_queue
+      SET endpoint = REPLACE(endpoint, '/customers/', '/mobile/customers/') || '/field-update',
+          status = 'pending', retryCount = 0, lastError = NULL,
+          blockedAt = NULL, nextRetryAt = NULL
+      WHERE type = 'PATCH' AND endpoint LIKE '/customers/%';
+      PRAGMA user_version = 8;
+    `);
+  },
+  9: async (d) => {
+    // Self-heal databases that were marked as v8 by an older PRAGMA reader
+    // although CREATE TABLE IF NOT EXISTS could not add the new column.
+    await addColumnIfMissing(d, 'customers', 'assignedCollectorName', 'TEXT');
+    await d.execAsync(`
+      UPDATE mutation_queue
+      SET endpoint = REPLACE(endpoint, '/customers/', '/mobile/customers/') || '/field-update',
+          status = 'pending', retryCount = 0, lastError = NULL,
+          blockedAt = NULL, nextRetryAt = NULL
+      WHERE type = 'PATCH' AND endpoint LIKE '/customers/%';
+      PRAGMA user_version = 9;
+    `);
+  },
+  10: async (d) => {
+    await addColumnIfMissing(d, 'collections', 'receiptAttachment', 'TEXT');
+    await addColumnIfMissing(d, 'collections', 'location', 'TEXT');
+    await d.execAsync('PRAGMA user_version = 10;');
+  },
+  11: async (d) => {
+    await addColumnIfMissing(d, 'customers', 'balanceHidden', 'INTEGER NOT NULL DEFAULT 0');
+    await addColumnIfMissing(d, 'customers', 'accountGroupRole', 'TEXT');
+    await addColumnIfMissing(d, 'customers', 'groupBalances', 'TEXT');
+    await addColumnIfMissing(d, 'customers', 'childBalances', 'TEXT');
+    await d.execAsync('PRAGMA user_version = 11;');
+  },
 };
 
 async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
-  const row = await d.getFirstAsync<{ version: number }>('PRAGMA user_version');
-  const currentVersion = row?.version ?? 0;
+  const row = await d.getFirstAsync<{ user_version?: number; version?: number }>('PRAGMA user_version');
+  const currentVersion = row?.user_version ?? row?.version ?? 0;
 
   if (currentVersion === 0) {
     // Fresh install — create full schema at latest version
@@ -36,9 +169,21 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
       CREATE TABLE IF NOT EXISTS customers (
         id TEXT PRIMARY KEY,
         fullName TEXT NOT NULL,
+        accountNumber TEXT,
+        externalCustomerCode TEXT,
+        customerType TEXT,
         phonePrimary TEXT,
+        phoneSecondary TEXT,
+        whatsapp TEXT,
         address TEXT,
+        geoLat REAL,
+        geoLng REAL,
+        assignedCollectorName TEXT,
         balances TEXT,
+        balanceHidden INTEGER NOT NULL DEFAULT 0,
+        accountGroupRole TEXT,
+        groupBalances TEXT,
+        childBalances TEXT,
         updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE TABLE IF NOT EXISTS tasks (
@@ -81,6 +226,8 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
         methodName TEXT,
         notes TEXT,
         collectedAt TEXT,
+        receiptAttachment TEXT,
+        location TEXT,
         updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE TABLE IF NOT EXISTS sync_metadata (
@@ -96,8 +243,30 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
         createdAt TEXT NOT NULL DEFAULT (datetime('now')),
         retryCount INTEGER DEFAULT 0,
         lastError TEXT,
-        nextRetryAt TEXT
+        nextRetryAt TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        blockedAt TEXT
       );
+      CREATE TABLE IF NOT EXISTS reservations (
+        id TEXT PRIMARY KEY,
+        customerId TEXT,
+        customerName TEXT,
+        itemName TEXT,
+        quantity REAL,
+        remainingQty REAL,
+        unitName TEXT,
+        totalAmount REAL,
+        currencyCode TEXT,
+        totalTons REAL,
+        averageTonPrice REAL,
+        reservedAt TEXT,
+        expiresAt TEXT,
+        status TEXT,
+        updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_reservations_customer_status ON reservations(customerId, status);
+      CREATE INDEX IF NOT EXISTS idx_mutation_queue_status_retry
+        ON mutation_queue(status, nextRetryAt, id);
       CREATE TABLE IF NOT EXISTS gps_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         latitude REAL NOT NULL,
@@ -108,6 +277,18 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
         recordedAt TEXT NOT NULL,
         synced INTEGER DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS reference_options (
+        kind TEXT NOT NULL,
+        id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        code TEXT,
+        payload TEXT,
+        updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (kind, id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_reference_options_kind ON reference_options(kind, name);
+      CREATE INDEX IF NOT EXISTS idx_customers_type_name ON customers(customerType, fullName);
+      CREATE INDEX IF NOT EXISTS idx_customers_account ON customers(accountNumber);
       PRAGMA user_version = ${SCHEMA_VERSION};
     `);
     return;
@@ -120,16 +301,38 @@ async function ensureSchemaVersion(d: SQLite.SQLiteDatabase): Promise<void> {
   }
 }
 
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (!db) {
-    db = await SQLite.openDatabaseAsync('albinaa.db');
-    await ensureSchemaVersion(db);
+async function openDb(): Promise<SQLite.SQLiteDatabase> {
+  if (db) return db;
+  if (!dbOpening) {
+    dbOpening = (async () => {
+      const opened = await SQLite.openDatabaseAsync('albinaa.db');
+      await ensureSchemaVersion(opened);
+      db = opened;
+      return opened;
+    })().finally(() => { dbOpening = null; });
   }
-  return db;
+  return dbOpening;
+}
+
+export async function getDb(): Promise<SQLite.SQLiteDatabase> {
+  // Account ownership changes clear and re-scope cached business data. New
+  // reads wait for that short transaction instead of preparing statements
+  // against SQLite while its exclusive transaction is being replaced.
+  if (ownerTransition) await ownerTransition;
+  return openDb();
 }
 
 export async function upsert(table: string, record: Record<string, any>) {
   const d = await getDb();
+  if (!BUSINESS_TABLES.includes(table as BusinessTable)) throw new Error(`Unsupported table: ${table}`);
+  await upsertWithDatabase(d, table as BusinessTable, record);
+}
+
+async function upsertWithDatabase(
+  d: SQLite.SQLiteDatabase,
+  table: BusinessTable,
+  record: Record<string, any>,
+) {
   const columns = Object.keys(record).join(', ');
   const placeholders = Object.keys(record).map(() => '?').join(', ');
   const values = Object.values(record);
@@ -141,13 +344,90 @@ export async function upsert(table: string, record: Record<string, any>) {
   );
 }
 
+async function materializeQueuedMutation(
+  d: SQLite.SQLiteDatabase,
+  operationId: string,
+  endpoint: string,
+  payload: Record<string, any>,
+) {
+  const id = `local:${operationId}`;
+  const customer = payload.customerId
+    ? await d.getFirstAsync<{ fullName: string }>('SELECT fullName FROM customers WHERE id = ?', payload.customerId)
+    : null;
+  const customerName = customer?.fullName ?? 'عميل';
+  if (['/collections', '/followups', '/payment-promises'].includes(endpoint) && payload.customerId) {
+    await d.runAsync(
+      `UPDATE tasks SET status = 'done', updatedAt = datetime('now')
+       WHERE customerId = ? AND status IN ('open', 'pending')
+         AND (dueDate IS NULL OR date(dueDate) <= date('now'))`,
+      payload.customerId,
+    );
+  }
+  if (endpoint === '/collections') {
+    const existing = await d.getFirstAsync<{ id: string }>('SELECT id FROM collections WHERE id = ?', id);
+    await upsertWithDatabase(d, 'collections', {
+      id, customerId: payload.customerId, customerName,
+      amount: payload.amount, currencyCode: payload.currencyCode,
+      methodName: 'بانتظار المزامنة', notes: payload.notes,
+      collectedAt: payload.collectedAt || new Date().toISOString(),
+    });
+    if (!existing) {
+      await applyLocalCollectionBalance(d, payload.customerId, payload.currencyCode, Number(payload.amount || 0));
+    }
+  } else if (endpoint === '/followups') {
+    await upsertWithDatabase(d, 'followups', {
+      id, customerId: payload.customerId, customerName,
+      typeName: 'بانتظار المزامنة', resultName: '', notes: payload.notes,
+      followupAt: payload.followupAt || new Date().toISOString(),
+    });
+  } else if (endpoint === '/payment-promises') {
+    await upsertWithDatabase(d, 'promises', {
+      id, customerId: payload.customerId, customerName,
+      expectedAmount: payload.expectedAmount, currencyCode: payload.currencyCode,
+      dueDate: payload.dueDate, status: 'بانتظار المزامنة', notes: payload.notes,
+    });
+  } else if (endpoint === '/tasks') {
+    await upsertWithDatabase(d, 'tasks', {
+      id, customerId: payload.customerId, customerName,
+      title: payload.priorityReason || payload.taskType || 'مهمة محلية',
+      dueDate: payload.dueDate, priority: payload.taskType, status: 'pending',
+    });
+  } else if (endpoint === '/reservations') {
+    const unit = await d.getFirstAsync<{ name: string }>(
+      'SELECT name FROM reference_options WHERE kind = ? AND id = ?',
+      'reservationUnits', payload.unitId,
+    );
+    const quantity = Number(payload.quantity || 0);
+    const unitPrice = Number(payload.unitPrice || 0);
+    await upsertWithDatabase(d, 'reservations', {
+      id, customerId: payload.customerId, customerName,
+      itemName: payload.itemName, quantity, remainingQty: quantity,
+      unitName: unit?.name || 'بانتظار المزامنة',
+      totalAmount: quantity * unitPrice, currencyCode: payload.currencyCode,
+      reservedAt: new Date().toISOString(), expiresAt: payload.expiresAt,
+      status: 'open',
+    });
+  }
+}
+
 export async function getAll(table: string): Promise<any[]> {
   const d = await getDb();
+  if (!BUSINESS_TABLES.includes(table as BusinessTable)) throw new Error(`Unsupported table: ${table}`);
   return await d.getAllAsync(`SELECT * FROM ${table} ORDER BY updatedAt DESC`);
+}
+
+export async function getCustomerOptionsOffline(): Promise<any[]> {
+  const d = await getDb();
+  return d.getAllAsync(
+    `SELECT id, fullName, accountNumber, externalCustomerCode,
+            phonePrimary, phoneSecondary, whatsapp
+     FROM customers ORDER BY fullName COLLATE NOCASE ASC`,
+  );
 }
 
 export async function dedupeTable(table: string): Promise<number> {
   const d = await getDb();
+  if (!BUSINESS_TABLES.includes(table as BusinessTable)) throw new Error(`Unsupported table: ${table}`);
   // Keep the most recent record (by updatedAt) per id, delete older duplicates
   const result = await d.runAsync(
     `DELETE FROM ${table} WHERE id IN (
@@ -161,7 +441,293 @@ export async function dedupeTable(table: string): Promise<number> {
 
 export async function getById(table: string, id: string): Promise<any> {
   const d = await getDb();
+  if (!BUSINESS_TABLES.includes(table as BusinessTable)) throw new Error(`Unsupported table: ${table}`);
   return await d.getFirstAsync(`SELECT * FROM ${table} WHERE id = ?`, id);
+}
+
+export async function updateCustomerPhoneOffline(id: string, phonePrimary: string): Promise<void> {
+  return updateCustomerContactOffline(id, { phonePrimary });
+}
+
+export async function updateCustomerContactOffline(
+  id: string,
+  fields: { phonePrimary?: string; phoneSecondary?: string; whatsapp?: string },
+): Promise<void> {
+  const d = await getDb();
+  const entries = Object.entries(fields).filter(([key]) => ['phonePrimary', 'phoneSecondary', 'whatsapp'].includes(key));
+  if (entries.length === 0) return;
+  const setClause = entries.map(([key]) => `${key} = ?`).join(', ');
+  await d.runAsync(
+    `UPDATE customers SET ${setClause}, updatedAt = datetime('now') WHERE id = ?`,
+    ...entries.map(([, value]) => value ?? ''), id,
+  );
+}
+
+async function applyLocalCollectionBalance(
+  d: SQLite.SQLiteDatabase,
+  customerId: string,
+  currencyCode: string,
+  amount: number,
+): Promise<void> {
+  if (!customerId || !currencyCode || !Number.isFinite(amount) || amount <= 0) return;
+  const customer = await d.getFirstAsync<{ balances: string | null }>(
+    'SELECT balances FROM customers WHERE id = ?', customerId,
+  );
+  if (!customer) return;
+  let balances: any[];
+  try { balances = JSON.parse(customer.balances || '[]'); } catch { balances = []; }
+  let found = false;
+  balances = balances.map((item) => {
+    const currency = item?.currency || item?.currencyCode;
+    if (currency !== currencyCode) return item;
+    found = true;
+    const current = Number(item?.operationalBalance ?? item?.balance ?? item?.accountingBalance ?? 0);
+    return { ...item, operationalBalance: current - amount };
+  });
+  if (!found) balances.push({ currency: currencyCode, balance: 0, operationalBalance: -amount });
+  await d.runAsync(
+    "UPDATE customers SET balances = ?, updatedAt = datetime('now') WHERE id = ?",
+    JSON.stringify(balances), customerId,
+  );
+}
+
+export async function recordCollectionOffline(input: {
+  id: string;
+  customerId: string;
+  customerName?: string;
+  amount: number;
+  currencyCode: string;
+  methodName?: string;
+  notes?: string;
+  collectedAt?: string;
+}): Promise<void> {
+  const d = await getDb();
+  const existing = await d.getFirstAsync<{ id: string }>('SELECT id FROM collections WHERE id = ?', input.id);
+  await upsertWithDatabase(d, 'collections', {
+    id: input.id,
+    customerId: input.customerId,
+    customerName: input.customerName || 'عميل',
+    amount: input.amount,
+    currencyCode: input.currencyCode,
+    methodName: input.methodName || 'تحصيل مسجل',
+    notes: input.notes,
+    collectedAt: input.collectedAt || new Date().toISOString(),
+  });
+  await d.runAsync(
+    `UPDATE tasks SET status = 'done', updatedAt = datetime('now')
+     WHERE customerId = ? AND status IN ('open', 'pending')
+       AND (dueDate IS NULL OR date(dueDate) <= date('now'))`,
+    input.customerId,
+  );
+  if (!existing) {
+    await applyLocalCollectionBalance(d, input.customerId, input.currencyCode, input.amount);
+  }
+}
+
+export async function updateCustomerLocationOffline(id: string, geoLat: number, geoLng: number): Promise<void> {
+  const d = await getDb();
+  await d.runAsync(
+    "UPDATE customers SET geoLat = ?, geoLng = ?, updatedAt = datetime('now') WHERE id = ?",
+    geoLat, geoLng, id,
+  );
+}
+
+export async function getCustomerOffline360(id: string): Promise<any | null> {
+  const d = await getDb();
+  const customer = await d.getFirstAsync<any>('SELECT * FROM customers WHERE id = ?', id);
+  if (!customer) return null;
+  const [followups, promises, collections] = await Promise.all([
+    d.getAllAsync<any>('SELECT * FROM followups WHERE customerId = ? ORDER BY followupAt DESC LIMIT 20', id),
+    d.getAllAsync<any>('SELECT * FROM promises WHERE customerId = ? ORDER BY dueDate DESC LIMIT 20', id),
+    d.getAllAsync<any>('SELECT * FROM collections WHERE customerId = ? ORDER BY collectedAt DESC LIMIT 20', id),
+  ]);
+  const timeline = [
+    ...followups.map((item) => ({ at: item.followupAt, type: 'followup', title: `متابعة — ${item.resultName || item.typeName || ''}` })),
+    ...promises.map((item) => ({ at: item.dueDate, type: 'payment_promise', title: `وعد سداد ${Number(item.expectedAmount || 0).toLocaleString('en-US')} ${item.currencyCode || ''}` })),
+    ...collections.map((item) => ({ at: item.collectedAt, type: 'collection', title: `تحصيل ${Number(item.amount || 0).toLocaleString('en-US')} ${item.currencyCode || ''}` })),
+  ].sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))).slice(0, 20);
+  return { ...customer, timeline, recentFollowups: followups, recentPromises: promises, recentCollections: collections };
+}
+
+function normalizeRecord(table: BusinessTable, record: Record<string, any>): Record<string, any> | null {
+  if (!record?.id) return null;
+  const normalized: Record<string, any> = {};
+  for (const column of TABLE_COLUMNS[table]) {
+    if (record[column] !== undefined) normalized[column] = record[column];
+  }
+  if (table === 'customers') {
+    for (const column of ['balances', 'groupBalances', 'childBalances']) {
+      if (normalized[column] !== undefined && typeof normalized[column] !== 'string') {
+        normalized[column] = JSON.stringify(normalized[column] || []);
+      }
+    }
+    if (normalized.balanceHidden !== undefined) normalized.balanceHidden = normalized.balanceHidden ? 1 : 0;
+  }
+  if (table === 'collections') {
+    for (const column of ['receiptAttachment', 'location']) {
+      if (normalized[column] !== undefined && normalized[column] !== null && typeof normalized[column] !== 'string') {
+        normalized[column] = JSON.stringify(normalized[column]);
+      }
+    }
+  }
+  return normalized;
+}
+
+export interface MobileSyncBatch {
+  customers?: Record<string, any>[];
+  tasks?: Record<string, any>[];
+  followups?: Record<string, any>[];
+  promises?: Record<string, any>[];
+  collections?: Record<string, any>[];
+  reservations?: Record<string, any>[];
+  references?: Record<string, Record<string, any>[]>;
+  newDebt?: Record<string, any> | null;
+}
+
+/**
+ * Applies a server snapshot and advances its token atomically. If the app is
+ * closed during this operation SQLite rolls everything back, so the same
+ * server page is requested again on the next launch.
+ */
+export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: string): Promise<void> {
+  const previous = ownerTransition;
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  ownerTransition = current;
+  if (previous) await previous;
+  try {
+    const d = await openDb();
+    await d.withExclusiveTransactionAsync(async (tx) => {
+    await tx.runAsync(`
+      CREATE TEMP TABLE IF NOT EXISTS sync_seen_ids (
+        tableName TEXT NOT NULL,
+        id TEXT NOT NULL,
+        PRIMARY KEY (tableName, id)
+      )
+    `);
+    for (const table of BUSINESS_TABLES) {
+      const records = batch[table];
+      if (!records) continue;
+      await tx.runAsync('DELETE FROM sync_seen_ids WHERE tableName = ?', table);
+      const seen = new Set<string>();
+      for (const raw of records) {
+        if (!raw?.id || seen.has(raw.id)) continue;
+        seen.add(raw.id);
+        const record = normalizeRecord(table, raw);
+        if (record) {
+          await upsertWithDatabase(tx, table, record);
+          await tx.runAsync(
+            'INSERT OR IGNORE INTO sync_seen_ids (tableName, id) VALUES (?, ?)',
+            table,
+            String(raw.id),
+          );
+        }
+      }
+      // Keep the previous snapshot readable while the (potentially large)
+      // upsert is running. Stale rows are removed only after every incoming
+      // row is safely present, avoiding transient "customer not found"
+      // screens during background sync.
+      await tx.runAsync(
+        `DELETE FROM ${table}
+         WHERE NOT EXISTS (
+           SELECT 1 FROM sync_seen_ids
+           WHERE tableName = ? AND sync_seen_ids.id = ${table}.id
+         )`,
+        table,
+      );
+    }
+    await tx.runAsync('DELETE FROM sync_seen_ids');
+    if (batch.references) {
+      await tx.runAsync('DELETE FROM reference_options');
+      for (const [kind, options] of Object.entries(batch.references)) {
+        for (const option of options || []) {
+          const id = String(option.id ?? option.code ?? '');
+          if (!id) continue;
+          const name = String(option.name ?? option.nameAr ?? option.code ?? id);
+          await tx.runAsync(
+            `INSERT OR REPLACE INTO reference_options (kind, id, name, code, payload, updatedAt)
+             VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+            kind, id, name, option.code ?? null, JSON.stringify(option),
+          );
+        }
+      }
+    }
+    if (batch.newDebt !== undefined) {
+      await tx.runAsync(
+        'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
+        'newDebt', JSON.stringify(batch.newDebt),
+      );
+    }
+    const queued = await tx.getAllAsync<{ operationId: string; endpoint: string; payload: string }>(
+      "SELECT operationId, endpoint, payload FROM mutation_queue WHERE status IN ('pending', 'blocked') ORDER BY id ASC",
+    );
+    for (const item of queued) {
+      try {
+        await materializeQueuedMutation(tx, item.operationId, item.endpoint, JSON.parse(item.payload));
+      } catch { /* malformed queued data remains available in queue diagnostics */ }
+    }
+    await tx.runAsync(
+      'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
+      'syncToken', syncToken,
+    );
+    await tx.runAsync(
+      'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
+      'lastSyncAt', new Date().toISOString(),
+    );
+    });
+  } finally {
+    release();
+    if (ownerTransition === current) ownerTransition = null;
+  }
+}
+
+/**
+ * Ensures cached business data can only be read by the account that created
+ * it. Existing unscoped data is treated as unsafe and removed once.
+ */
+export async function ensureDataOwner(ownerId: string): Promise<boolean> {
+  const normalizedOwner = String(ownerId || '').trim();
+  if (!normalizedOwner) throw new Error('Missing local data owner');
+
+  const previous = ownerTransition;
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  ownerTransition = current;
+  if (previous) await previous;
+
+  try {
+    const d = await openDb();
+    const row = await d.getFirstAsync<{ value: string }>(
+      "SELECT value FROM sync_metadata WHERE key = 'dataOwner'",
+    );
+    if (row?.value === normalizedOwner) return false;
+
+    await d.withExclusiveTransactionAsync(async (tx) => {
+      for (const table of BUSINESS_TABLES) await tx.runAsync(`DELETE FROM ${table}`);
+      await tx.runAsync('DELETE FROM mutation_queue');
+      await tx.runAsync('DELETE FROM gps_queue');
+      await tx.runAsync('DELETE FROM reference_options');
+      await tx.runAsync('DELETE FROM sync_metadata');
+      await tx.runAsync(
+        'INSERT INTO sync_metadata (key, value) VALUES (?, ?)',
+        'dataOwner', normalizedOwner,
+      );
+    });
+    return true;
+  } finally {
+    release();
+    if (ownerTransition === current) ownerTransition = null;
+  }
+}
+
+export async function getReferenceOptions(kind: string): Promise<any[]> {
+  const d = await getDb();
+  const rows = await d.getAllAsync<{ payload: string }>(
+    'SELECT payload FROM reference_options WHERE kind = ? ORDER BY name ASC', kind,
+  );
+  return rows.map((row) => {
+    try { return JSON.parse(row.payload); } catch { return null; }
+  }).filter(Boolean);
 }
 
 export async function setMeta(key: string, value: string) {
@@ -188,20 +754,43 @@ export async function enqueueMutation(
     `INSERT OR IGNORE INTO mutation_queue (operationId, type, endpoint, payload) VALUES (?, ?, ?, ?)`,
     operationId, type, endpoint, JSON.stringify(payload),
   );
+  await materializeQueuedMutation(d, operationId, endpoint, payload);
 }
 
 export async function getPendingMutations(): Promise<any[]> {
   const d = await getDb();
   return await d.getAllAsync(
     `SELECT * FROM mutation_queue
-     WHERE nextRetryAt IS NULL OR datetime(nextRetryAt) <= datetime('now')
+     WHERE status = 'pending'
+       AND (nextRetryAt IS NULL OR datetime(nextRetryAt) <= datetime('now'))
      ORDER BY id ASC`,
   );
 }
 
+export async function getMutationQueueStats(): Promise<{ pending: number; blocked: number }> {
+  const d = await getDb();
+  const rows = await d.getAllAsync<{ status: string; count: number }>(
+    'SELECT status, COUNT(*) AS count FROM mutation_queue GROUP BY status',
+  );
+  return rows.reduce((acc, row) => {
+    if (row.status === 'blocked') acc.blocked = row.count;
+    else acc.pending += row.count;
+    return acc;
+  }, { pending: 0, blocked: 0 });
+}
+
 export async function removeMutation(id: number) {
   const d = await getDb();
+  const row = await d.getFirstAsync<{ operationId: string }>(
+    'SELECT operationId FROM mutation_queue WHERE id = ?', id,
+  );
   await d.runAsync('DELETE FROM mutation_queue WHERE id = ?', id);
+  if (row?.operationId) {
+    const localId = `local:${row.operationId}`;
+    for (const table of ['tasks', 'followups', 'promises', 'collections'] as BusinessTable[]) {
+      await d.runAsync(`DELETE FROM ${table} WHERE id = ?`, localId);
+    }
+  }
 }
 
 function calculateBackoff(retryCount: number): number {
@@ -222,6 +811,25 @@ export async function incrementRetry(id: number, error: string) {
   await d.runAsync(
     `UPDATE mutation_queue SET retryCount = ?, lastError = ?, nextRetryAt = ? WHERE id = ?`,
     retryCount, error, nextRetryAt, id,
+  );
+}
+
+export async function blockMutation(id: number, error: string) {
+  const d = await getDb();
+  await d.runAsync(
+    `UPDATE mutation_queue
+     SET status = 'blocked', lastError = ?, blockedAt = datetime('now'), nextRetryAt = NULL
+     WHERE id = ?`,
+    error, id,
+  );
+}
+
+export async function retryBlockedMutations() {
+  const d = await getDb();
+  await d.runAsync(
+    `UPDATE mutation_queue
+     SET status = 'pending', retryCount = 0, lastError = NULL, blockedAt = NULL, nextRetryAt = NULL
+     WHERE status = 'blocked'`,
   );
 }
 

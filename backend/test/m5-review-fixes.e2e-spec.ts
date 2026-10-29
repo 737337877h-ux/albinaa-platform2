@@ -1,3 +1,5 @@
+const futureDate = (days: number) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+import { LegacyCollectionsTestModule } from './legacy-collections-test.module';
 /**
  * اختبارات E2E — تصحيحات مراجعة Milestone 5
  * تثبت البنود: (2) شرط الإسناد الحالي للوعد والتحصيل، (3) ذرية إنشاء الوعد،
@@ -22,13 +24,14 @@ describe('M5 Review Fixes (e2e)', () => {
   let prisma: PrismaService;
   let adminToken: string;
   let collectorToken: string;
+  let checkerToken: string;
   let collectorId: string;
   let assignedCustomerId: string;    // 90001 — مسند للمحصل
   let unassignedCustomerId: string;  // 90003 — غير مسند
   let methodId: string;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule, LegacyCollectionsTestModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new GlobalExceptionFilter());
@@ -72,6 +75,15 @@ describe('M5 Review Fixes (e2e)', () => {
       .post('/auth/login')
       .send({ username: `rev_${uniq}`, password: 'Test1234pass' }).expect(200)).body.accessToken;
 
+    const checker = await request(app.getHttpServer()).post('/users')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: `rev_checker_${uniq}`, fullName: 'مراجع عكس مستقل', password: 'Test1234pass' }).expect(201);
+    const cashierRole = await prisma.role.findFirstOrThrow({ where: { name: 'أمين الصندوق' } });
+    await request(app.getHttpServer()).post(`/users/${checker.body.id}/roles`)
+      .set('Authorization', `Bearer ${adminToken}`).send({ roleIds: [cashierRole.id] }).expect(201);
+    checkerToken = (await request(app.getHttpServer()).post('/auth/login')
+      .send({ username: `rev_checker_${uniq}`, password: 'Test1234pass' }).expect(200)).body.accessToken;
+
     methodId = (await prisma.collectionMethod.findFirstOrThrow({ where: { name: 'نقدي' } })).id;
   });
 
@@ -95,7 +107,7 @@ describe('M5 Review Fixes (e2e)', () => {
 
     it('يرفض تحصيلاً لعميل غير مسند للمحصل (403)', async () => {
       await request(app.getHttpServer())
-        .post('/collections')
+        .post('/__test/legacy-collections')
         .set('Authorization', `Bearer ${collectorToken}`)
         .send({ customerId: unassignedCustomerId, currencyCode: 'YER', amount: 100, methodId })
         .expect(403);
@@ -114,7 +126,7 @@ describe('M5 Review Fixes (e2e)', () => {
 
     it('المدير ينجح نيابةً عن المحصل عندما يكون الإسناد ساريًا', async () => {
       const res = await request(app.getHttpServer())
-        .post('/collections')
+        .post('/__test/legacy-collections')
         .set('Authorization', `Bearer ${adminToken}`)
         .send({
           customerId: assignedCustomerId, collectorId,
@@ -136,8 +148,11 @@ describe('M5 Review Fixes (e2e)', () => {
       const task = await prisma.task.findFirst({ where: { sourcePromiseId: res.body.id } });
       expect(task).not.toBeNull();
 
-      // فحص شامل: كل وعد في القاعدة له مهمة مصدرها هو (لا حالة جزئية إطلاقًا)
-      const promises = await prisma.paymentPromise.findMany({ select: { id: true } });
+      // افحص وعود هذا السيناريو؛ ملفات E2E أخرى قد تنشئ بيانات تحليلية مباشرة
+      // لاختبار التقارير ولا ينبغي أن تغيّر نتيجة اختبار ذرية مسار الـAPI.
+      const promises = await prisma.paymentPromise.findMany({
+        where: { customerId: assignedCustomerId }, select: { id: true },
+      });
       for (const p of promises) {
         const t = await prisma.task.count({ where: { sourcePromiseId: p.id } });
         expect(t).toBeGreaterThanOrEqual(1);
@@ -152,7 +167,7 @@ describe('M5 Review Fixes (e2e)', () => {
       promiseId = (await request(app.getHttpServer())
         .post('/payment-promises')
         .set('Authorization', `Bearer ${collectorToken}`)
-        .send({ customerId: assignedCustomerId, dueDate: '2026-08-20', expectedAmount: 3000, currencyCode: 'YER' })
+        .send({ customerId: assignedCustomerId, dueDate: futureDate(10), expectedAmount: 3000, currencyCode: 'YER' })
         .expect(201)).body.id;
     });
 
@@ -160,13 +175,13 @@ describe('M5 Review Fixes (e2e)', () => {
       const res = await request(app.getHttpServer())
         .patch(`/payment-promises/${promiseId}`)
         .set('Authorization', `Bearer ${collectorToken}`)
-        .send({ dueDate: '2026-09-01' })
+        .send({ dueDate: futureDate(20) })
         .expect(200);
       expect(res.body.status).toBe('upcoming');
       const task = await prisma.task.findFirstOrThrow({
         where: { sourcePromiseId: promiseId, taskType: 'promise_due', status: 'open' },
       });
-      expect(task.dueDate.toISOString().slice(0, 10)).toBe('2026-09-01');
+      expect(task.dueDate.toISOString().slice(0, 10)).toBe(futureDate(20));
 
       const audit = await prisma.auditLog.findFirst({
         where: { action: 'promise_updated', entityId: promiseId },
@@ -193,7 +208,7 @@ describe('M5 Review Fixes (e2e)', () => {
       (await request(app.getHttpServer())
         .post('/payment-promises')
         .set('Authorization', `Bearer ${collectorToken}`)
-        .send({ customerId: assignedCustomerId, dueDate: '2026-08-25', expectedAmount: 10000, currencyCode: 'YER' })
+        .send({ customerId: assignedCustomerId, dueDate: futureDate(15), expectedAmount: 10000, currencyCode: 'YER' })
         .expect(201)).body.id;
 
     it('partially_fulfilled بلا مبلغ → 400، وبمبلغ >= المتوقع → 400', async () => {
@@ -230,7 +245,7 @@ describe('M5 Review Fixes (e2e)', () => {
         await request(app.getHttpServer())
           .patch(`/payment-promises/${id}/status`)
           .set('Authorization', `Bearer ${collectorToken}`)
-          .send({ status, reason: 'x', fulfilledAmount: 1, newDueDate: '2026-12-01' })
+          .send({ status, reason: 'x', fulfilledAmount: 1, newDueDate: futureDate(60) })
           .expect(409);
       }
       // والتعديل على نهائي مرفوض أيضًا
@@ -252,15 +267,15 @@ describe('M5 Review Fixes (e2e)', () => {
       const res = await request(app.getHttpServer())
         .patch(`/payment-promises/${id}/status`)
         .set('Authorization', `Bearer ${collectorToken}`)
-        .send({ status: 'postponed', reason: 'طلب العميل', newDueDate: '2026-09-15' })
+        .send({ status: 'postponed', reason: 'طلب العميل', newDueDate: futureDate(30) })
         .expect(200);
       // لا يبقى postponed: الحالة الفعالة تحسب من الموعد الجديد
       expect(res.body.status).toBe('upcoming');
-      expect(res.body.dueDate.slice(0, 10)).toBe('2026-09-15');
+      expect(res.body.dueDate.slice(0, 10)).toBe(futureDate(30));
       const task = await prisma.task.findFirstOrThrow({
         where: { sourcePromiseId: id, taskType: 'promise_due', status: 'open' },
       });
-      expect(task.dueDate.toISOString().slice(0, 10)).toBe('2026-09-15');
+      expect(task.dueDate.toISOString().slice(0, 10)).toBe(futureDate(30));
       const audit = await prisma.auditLog.findFirst({
         where: { action: 'promise_postponed', entityId: id },
       });
@@ -276,7 +291,7 @@ describe('M5 Review Fixes (e2e)', () => {
         data: { organizationId: otherOrg.id, name: 'فرع خارجي' },
       });
       await request(app.getHttpServer())
-        .post('/collections')
+        .post('/__test/legacy-collections')
         .set('Authorization', `Bearer ${collectorToken}`)
         .send({
           customerId: assignedCustomerId, currencyCode: 'YER', amount: 100,
@@ -291,7 +306,7 @@ describe('M5 Review Fixes (e2e)', () => {
         data: { organizationId: admin.organizationId, name: `فرع معطل ${uniq}`, active: false },
       });
       await request(app.getHttpServer())
-        .post('/collections')
+        .post('/__test/legacy-collections')
         .set('Authorization', `Bearer ${collectorToken}`)
         .send({
           customerId: assignedCustomerId, currencyCode: 'YER', amount: 100,
@@ -305,7 +320,7 @@ describe('M5 Review Fixes (e2e)', () => {
   describe('عكس التحصيل الآمن من التزامن (البند 7)', () => {
     it('محاولتا عكس متزامنتان: واحدة تنجح والأخرى 409، بلا سجل مرآة أو قيد دفتر إضافي', async () => {
       const col = (await request(app.getHttpServer())
-        .post('/collections')
+        .post('/__test/legacy-collections')
         .set('Authorization', `Bearer ${collectorToken}`)
         .send({ customerId: assignedCustomerId, currencyCode: 'YER', amount: 777, methodId })
         .expect(201)).body;
@@ -321,7 +336,17 @@ describe('M5 Review Fixes (e2e)', () => {
       const statuses = [r1.status, r2.status].sort();
       expect(statuses).toEqual([200, 409]);
 
-      // قيد دفتر عكسي واحد فقط (القيد الفريد في القاعدة هو الصمام)
+      const accepted = r1.status === 200 ? r1 : r2;
+      expect(accepted.body.status).toBe('pending');
+      expect(await prisma.operationalLedger.count({
+        where: { sourceTable: 'collections', sourceId: col.id, entryType: 'collection_reversal' },
+      })).toBe(0);
+
+      await request(app.getHttpServer())
+        .post(`/collections/reconciliation/reversal-requests/${accepted.body.requestId}/review`)
+        .set('Authorization', `Bearer ${checkerToken}`).send({ approve: true }).expect(200);
+
+      // بعد اعتماد المستخدم الثاني: قيد دفتر عكسي واحد فقط (القيد الفريد هو الصمام)
       const ledgerCount = await prisma.operationalLedger.count({
         where: { sourceTable: 'collections', sourceId: col.id, entryType: 'collection_reversal' },
       });

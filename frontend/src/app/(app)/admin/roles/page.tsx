@@ -40,6 +40,19 @@ type PermissionGroup = {
 };
 
 const PERMISSION_GROUPS: PermissionGroup[] = [
+  { label: 'الموظفون والرواتب', prefix: 'hr.', items: [
+    { code: 'hr.tasks.manage', label: 'إنشاء وإسناد ومراجعة مهام الموظفين' },
+    { code: 'hr.attendance.read', label: 'عرض سجل الحضور والانصراف' },
+    { code: 'hr.attendance.qr', label: 'عرض رمز حضور المنشأة' },
+    { code: 'hr.requests.review', label: 'مراجعة طلبات السلف والإجازات للموظفين' },
+    { code: 'hr.payroll.read', label: 'عرض كشف الموظف ومسودة الراتب (تحتاج عرض الموظفين والرواتب)' },
+    { code: 'hr.payroll.manage', label: 'حفظ ومراجعة مسودة الراتب (تحتاج عرض الكشف)' },
+    { code: 'hr.payroll.approve', label: 'اعتماد وإعادة فتح كشف الرواتب بعد إغلاق الشهر' },
+    { code: 'hr.read', label: 'عرض الموظفين والدوام' },
+    { code: 'hr.manage', label: 'إدارة الموظفين والدوام (تحتاج عرض الموظفين)' },
+    { code: 'hr.salary.read', label: 'عرض الرواتب (تحتاج عرض الموظفين)' },
+    { code: 'hr.salary.manage', label: 'إدارة الرواتب (تحتاج عرض الموظفين والرواتب)' },
+  ] },
   { label: 'العملاء', prefix: 'customers.', items: [
     { code: 'customers.read', label: 'عرض العملاء' },
     { code: 'customers.read_all', label: 'عرض كل العملاء' },
@@ -69,6 +82,7 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   { label: 'الاستيراد', prefix: 'imports.', items: [
     { code: 'imports.run', label: 'تشغيل استيراد' },
     { code: 'imports.read', label: 'عرض الاستيرادات' },
+    { code: 'imports.reverse', label: 'التراجع عن استيراد' },
   ]},
   { label: 'التسويات', prefix: 'reconciliation.', items: [
     { code: 'reconciliation.review', label: 'مراجعة التسويات' },
@@ -76,6 +90,29 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   { label: 'التقارير', prefix: 'reports.', items: [
     { code: 'reports.read', label: 'عرض التقارير' },
     { code: 'reports.export', label: 'تصدير التقارير' },
+  ]},
+  { label: 'المخزون والتحويلات', prefix: 'inventory', items: [
+    { code: 'inventory.read', label: 'عرض الأصناف والمخزون' },
+    { code: 'inventory_transfers.read', label: 'عرض طلبات التحويل المخزني' },
+    { code: 'inventory_transfers.create', label: 'إنشاء وإرسال طلبات التحويل' },
+    { code: 'inventory_transfers.dry_run', label: 'تشغيل فحص Oracle للقراءة فقط' },
+    { code: 'inventory_transfers.approve', label: 'اعتماد أو رفض طلبات التحويل' },
+  ]},
+  { label: 'طلبات يمن سوفت التجريبية', prefix: 'oracle_test_requests.', items: [
+    { code: 'oracle_test_requests.purchase.read', label: 'عرض طلبات الشراء وحالة اعتمادها' },
+    { code: 'oracle_test_requests.purchase.create', label: 'إنشاء طلبات شراء' },
+    { code: 'oracle_test_requests.receipt.read', label: 'عرض طلبات سندات القبض وحالة اعتمادها' },
+    { code: 'oracle_test_requests.receipt.create', label: 'إنشاء طلبات سندات قبض' },
+    { code: 'oracle_test_requests.payment.read', label: 'عرض طلبات سندات الصرف وحالة اعتمادها' },
+    { code: 'oracle_test_requests.payment.create', label: 'إنشاء طلبات سندات صرف' },
+    { code: 'oracle_test_requests.journal.read', label: 'عرض طلبات القيود اليومية وحالة اعتمادها' },
+    { code: 'oracle_test_requests.journal.create', label: 'إنشاء طلبات قيود يومية' },
+    { code: 'oracle_test_requests.inventory_count.read', label: 'عرض مستندات الجرد وحالتها' },
+    { code: 'oracle_test_requests.inventory_count.dry_run', label: 'تشغيل Dry Run للجرد' },
+    { code: 'oracle_test_requests.inventory_count.create', label: 'إنشاء مسودة جرد متعددة الأصناف' },
+  ]},
+  { label: 'الائتمان', prefix: 'credit.', items: [
+    { code: 'credit.override', label: 'تجاوز سقف الائتمان بسبب موثق' },
   ]},
   { label: 'المستخدمون', prefix: 'users.', items: [
     { code: 'users.manage', label: 'إدارة المستخدمين' },
@@ -88,7 +125,44 @@ const PERMISSION_GROUPS: PermissionGroup[] = [
   ]},
   { label: 'المكررات', prefix: 'duplicates.', items: [
     { code: 'duplicates.review', label: 'مراجعة المكررات' },
+    { code: 'duplicates.merge', label: 'دمج العملاء والتراجع' },
   ]},
+];
+
+const MOBILE_PERMISSION_GROUPS: PermissionGroup[] = [
+  { label: 'الرئيسية والعمل', prefix: 'mobile.', items: [
+    { code: 'mobile.dashboard.view', label: 'عرض الصفحة الرئيسية' },
+    { code: 'mobile.tasks.view', label: 'عرض المهام' },
+    { code: 'mobile.tasks.create', label: 'إنشاء مهمة' },
+    { code: 'mobile.notifications.view', label: 'عرض الإشعارات' },
+  ] },
+  { label: 'الحسابات', prefix: 'mobile.', items: [
+    { code: 'mobile.customers.view', label: 'عرض العملاء' },
+    { code: 'mobile.delivery.customers.view_all_no_balance', label: 'مندوب التوصيل: عرض كل العملاء والمواقع دون الأرصدة' },
+    { code: 'mobile.advances.view', label: 'عرض السلف' },
+    { code: 'mobile.assignment_change.request', label: 'طلب تغيير الإسناد' },
+    { code: 'mobile.financial_adjustments.request', label: 'طلب خصم أو تصفية' },
+  ] },
+  { label: 'التحصيل والمتابعة', prefix: 'mobile.', items: [
+    { code: 'mobile.collections.view', label: 'عرض التحصيلات' },
+    { code: 'mobile.collections.create', label: 'تسجيل تحصيل' },
+    { code: 'mobile.followups.view', label: 'عرض المتابعات' },
+    { code: 'mobile.followups.create', label: 'تسجيل متابعة' },
+    { code: 'mobile.promises.view', label: 'عرض وعود السداد' },
+    { code: 'mobile.promises.create', label: 'تسجيل وعد سداد' },
+  ] },
+  { label: 'البضاعة والميدان', prefix: 'mobile.', items: [
+    { code: 'mobile.reservations.view', label: 'عرض البضاعة المحجوزة' },
+    { code: 'mobile.reservations.create', label: 'إضافة حجز بضاعة' },
+    { code: 'mobile.inventory.view', label: 'عرض الأصناف والمخزون' },
+    { code: 'mobile.inventory.cost.view', label: 'عرض التكلفة للمخزون والأصناف' },
+    { code: 'mobile.inventory_count.create', label: 'إنشاء مسودة جرد من الهاتف' },
+    { code: 'mobile.receipts.view', label: 'معاينة صور الإيصالات' },
+    { code: 'mobile.receipts.upload', label: 'رفع صورة إيصال' },
+    { code: 'mobile.location.view', label: 'عرض الموقع' },
+    { code: 'mobile.location.update', label: 'تحديث الموقع' },
+    { code: 'mobile.messages.view', label: 'قوالب الرسائل' },
+  ] },
 ];
 
 const createRoleSchema = z.object({
@@ -110,6 +184,7 @@ export default function RolesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editRole, setEditRole] = useState<RoleListItem | null>(null);
   const [deleteRole, setDeleteRole] = useState<RoleListItem | null>(null);
+  const [permissionScope, setPermissionScope] = useState<'platform' | 'mobile'>('platform');
 
   const rolesQuery = useQuery<RoleListItem[]>({
     queryKey: ['roles'],
@@ -120,6 +195,12 @@ export default function RolesPage() {
   const rolePermsQuery = useQuery<RolePermissions>({
     queryKey: ['roles', selectedRoleId, 'permissions'],
     queryFn: () => api<RolePermissions>(`/roles/${selectedRoleId}/permissions`),
+    enabled: canManage && !!selectedRoleId,
+  });
+
+  const permissionsQuery = useQuery<Permission[]>({
+    queryKey: ['permissions'],
+    queryFn: () => api<Permission[]>('/permissions'),
     enabled: canManage && !!selectedRoleId,
   });
 
@@ -195,8 +276,9 @@ export default function RolesPage() {
 
   const roles = rolesQuery.data ?? [];
   const selectedRole = roles.find((r) => r.id === selectedRoleId);
-  const allPerms = rolePermsQuery.data?.permissions ?? [];
-  const activePermCodes = new Set(allPerms.map((p) => p.code));
+  const allPerms = permissionsQuery.data ?? [];
+  const activePermCodes = new Set((rolePermsQuery.data?.permissions ?? []).map((p) => p.code));
+  const visibleGroups = permissionScope === 'mobile' ? MOBILE_PERMISSION_GROUPS : PERMISSION_GROUPS;
 
   const togglePermission = (permId: string, currentlyHas: boolean) => {
     if (!selectedRoleId) return;
@@ -324,20 +406,26 @@ export default function RolesPage() {
                 </div>
               </div>
               <DataState
-                isLoading={rolePermsQuery.isLoading}
-                isError={rolePermsQuery.isError}
-                error={rolePermsQuery.error}
-                onRetry={() => rolePermsQuery.refetch()}
-                isFetching={rolePermsQuery.isFetching}
+                isLoading={rolePermsQuery.isLoading || permissionsQuery.isLoading}
+                isError={rolePermsQuery.isError || permissionsQuery.isError}
+                error={rolePermsQuery.error ?? permissionsQuery.error}
+                onRetry={() => { rolePermsQuery.refetch(); permissionsQuery.refetch(); }}
+                isFetching={rolePermsQuery.isFetching || permissionsQuery.isFetching}
                 isEmpty={false}
                 skeletonClassName="h-64"
               >
-                <div className="divide-y divide-concrete-100 dark:divide-white/10">
-                  {PERMISSION_GROUPS.map((group) => {
-                    const groupPerms = allPerms.filter((p) => p.code.startsWith(group.prefix));
+                <div>
+                  <div className="flex gap-2 border-b border-concrete-100 p-3 dark:border-white/10">
+                    <Button variant={permissionScope === 'platform' ? 'primary' : 'secondary'} onClick={() => setPermissionScope('platform')}>صلاحيات المنصة</Button>
+                    <Button variant={permissionScope === 'mobile' ? 'primary' : 'secondary'} onClick={() => setPermissionScope('mobile')}>صلاحيات التطبيق</Button>
+                  </div>
+                  <div className="divide-y divide-concrete-100 dark:divide-white/10">
+                  {visibleGroups.map((group, groupIndex) => {
+                    const itemCodes = new Set(group.items.map((item) => item.code));
+                    const groupPerms = allPerms.filter((p) => itemCodes.has(p.code));
                     if (groupPerms.length === 0) return null;
                     return (
-                      <div key={group.prefix} className="px-4 py-3">
+                      <div key={`${permissionScope}-${group.label}-${groupIndex}`} className="px-4 py-3">
                         <h4 className="mb-2 text-xs font-semibold text-concrete-500 dark:text-concrete-400">
                           {group.label}
                         </h4>
@@ -373,6 +461,7 @@ export default function RolesPage() {
                       </div>
                     );
                   })}
+                  </div>
                 </div>
               </DataState>
             </>

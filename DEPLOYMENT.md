@@ -196,3 +196,33 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-rec
 - **Email**: support@albinaa.com
 - **GitHub Issues**: https://github.com/737337877h-ux/albinaa-platform2/issues
 - **Documentation**: [docs/](./docs/)
+
+## 9. النسخ الاحتياطي والاستعادة
+
+- ينفّذ خادم `backup` نسخة PostgreSQL فيزيائية كاملة يوميًا الساعة 02:00.
+- يجمع ملفات WAL التفاضلية كل ساعة عند الدقيقة 05، مع احتفاظ افتراضي لمدة 7 أيام.
+- ينفّذ اختبار استعادة معزولًا في اليوم الأول من كل شهر الساعة 04:00، ويحفظ تقرير JSON في `/backups/restore-tests`.
+- مدة الاحتفاظ بالنسخ الكاملة يضبطها `BACKUP_RETENTION_DAYS`، ومدة الفروقات يضبطها `DIFF_RETENTION_DAYS`.
+
+تشغيل تحقق يدوي آمن داخل حاوية النسخ:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec backup \
+  /bin/sh /usr/local/bin/backup-runner.sh full
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec backup \
+  /bin/sh /usr/local/bin/backup-runner.sh differential
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec backup \
+  /bin/sh /usr/local/bin/restore-test.sh
+```
+
+ينبغي نسخ مجلد/وحدة `albinaa_backups` إلى تخزين خارجي مشفّر؛ وجود النسخة على الخادم نفسه لا يكفي للتعافي من فقد الخادم.
+
+## 10. فحص الجاهزية والمراقبة
+
+قبل تشغيل الإنتاج، افحص ملف البيئة المحلي الذي لا يُرفع إلى Git:
+
+```bash
+node scripts/validate-production-env.mjs .env.prod
+```
+
+يفشل الفحص عند بقاء قيم تجريبية، أو قصر الأسرار، أو تكرار أسرار JWT، أو استخدام HTTP/CORS غير آمن. ولتفعيل المراقبة الدورية، عيّن متغير مستودع GitHub باسم `PRODUCTION_HEALTH_URL` إلى أصل واجهة API المشفر مثل `https://api.company.example`. يفحص workflow مساري `/health` و`/health/ready` كل 15 دقيقة، وتظهر إخفاقاته في GitHub Actions والتنبيهات المرتبطة بالمستودع.

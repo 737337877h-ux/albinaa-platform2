@@ -1,4 +1,5 @@
 'use client';
+import Image from 'next/image';
 import { cn } from '@/lib/utils';
 
 /**
@@ -18,6 +19,9 @@ export function BrickMark({ className }: { className?: string }) {
   );
 }
 
-export function BrandLogo({ className }: { className?: string }) {
+export function BrandLogo({ className, src, name = 'البناء الراقي' }: { className?: string; src?: string | null; name?: string }) {
+  if (src) {
+    return <Image unoptimized src={src} width={80} height={80} alt={`شعار ${name}`} className={cn('object-contain', className)} />;
+  }
   return <BrickMark className={className} />;
 }
