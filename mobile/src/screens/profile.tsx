@@ -29,12 +29,11 @@ export default function ProfileScreen({ navigation }: any) {
       <TouchableOpacity style={styles.settingsBtn} onPress={() => navigation.navigate('Settings')}>
         <Text style={styles.settingsText}>إعدادات الاتصال والمزامنة والتنبيهات</Text>
       </TouchableOpacity>
-      <View style={styles.quickRow}>
+      <TouchableOpacity style={styles.templatesBtn} onPress={()=>navigation.navigate('HrCenter')}><Text style={styles.templatesText}>خدمات الموظفين — الحضور والطلبات والمهام</Text></TouchableOpacity><View style={styles.quickRow}>
         {canUseMobileFeature(permissions, 'mobile.followups.view', 'followups.create') && <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('FollowupsList')}><Text style={styles.quickText}>المتابعات</Text></TouchableOpacity>}
         {canUseMobileFeature(permissions, 'mobile.promises.view', 'promises.create') && <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('PromisesList')}><Text style={styles.quickText}>وعود السداد</Text></TouchableOpacity>}
       </View>
       {canUseMobileFeature(permissions, 'mobile.messages.view', 'followups.create') && <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('MessageTemplates')}><Text style={styles.templatesText}>قوالب واتساب والرسائل النصية</Text></TouchableOpacity>}
-      {canUseMobileFeature(permissions, 'mobile.reservations.view', 'reservations.read') && <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('Reservations')}><Text style={styles.templatesText}>حجوزات البضاعة ومتوسط سعر الطن</Text></TouchableOpacity>}
 
       <View style={styles.section}>
         <InfoRow label="إصدار التطبيق" value={APP_VERSION} />
@@ -57,19 +56,19 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   header: { backgroundColor: colors.primary, padding: 30, alignItems: 'center' },
   avatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.gold, justifyContent: 'center', alignItems: 'center', marginBottom: 12, ...shadow },
-  avatarText: { fontSize: 32, color: colors.primary, fontWeight: '900' },
-  name: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
-  username: { fontSize: 16, color: colors.warmGray, marginTop: 4 },
-  offlineHint: { fontSize: 12, color: '#DCE8E5', marginTop: 10, textAlign: 'center' },
+  avatarText: { fontFamily: 'TajawalBold', fontSize: 32, color: colors.primary, fontWeight: '900' },
+  name: { fontFamily: 'TajawalBold', fontSize: 23, fontWeight: 'bold', color: '#fff' },
+  username: { fontFamily: 'TajawalRegular', fontSize: 16, color: colors.warmGray, marginTop: 4 },
+  offlineHint: { fontFamily: 'TajawalRegular', fontSize: 13, color: '#DCE8E5', marginTop: 10, textAlign: 'center' },
   section: { backgroundColor: colors.surface, margin: 16, borderRadius: radius.md, overflow: 'hidden', borderWidth: 1, borderColor: colors.line, ...shadow },
   infoRow: { flexDirection: 'row-reverse', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.line },
-  infoLabel: { fontSize: 15, color: colors.muted },
-  infoValue: { fontSize: 15, color: colors.primary, fontWeight: '700' },
+  infoLabel: { fontFamily: 'TajawalRegular', fontSize: 16, color: colors.muted },
+  infoValue: { fontFamily: 'TajawalBold', fontSize: 16, color: colors.primary, fontWeight: '700' },
   settingsBtn: { marginHorizontal: 16, backgroundColor: colors.gold, borderRadius: radius.md, padding: 16, alignItems: 'center', ...shadow },
-  settingsText: { color: colors.primary, fontSize: 15, fontWeight: '900' },
-  quickRow: { flexDirection: 'row-reverse', gap: 8, marginHorizontal: 16, marginTop: 10 },
-  quickBtn: { flex: 1, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, padding: 14, alignItems: 'center' },
-  quickText: { color: colors.primary, fontSize: 13, fontWeight: '800' },
+  settingsText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 16, fontWeight: '900' },
+  quickRow: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 8, marginHorizontal: 16, marginTop: 10 },
+  quickBtn: { flexGrow: 1, flexBasis: '45%', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, padding: 14, alignItems: 'center', justifyContent: 'center' },
+  quickText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 14, fontWeight: '800', textAlign: 'center' },
   templatesBtn: { marginHorizontal: 16, marginTop: 8, backgroundColor: colors.goldSoft, borderRadius: radius.md, padding: 14, alignItems: 'center' },
-  templatesText: { color: colors.primary, fontSize: 13, fontWeight: '800' },
+  templatesText: { fontFamily: 'TajawalBold', color: colors.primary, fontSize: 14, fontWeight: '800' },
 });

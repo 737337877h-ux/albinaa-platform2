@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Modal } from 'react-native';
 import { getCustomerOptionsOffline } from '../db/database';
 import { colors, radius, shadow } from '../theme';
+import { matchesSmartSearch } from '../utils/search';
 
 export interface CustomerOption {
   id: string;
@@ -38,7 +39,7 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
           phonePrimary: c.phonePrimary || null,
           phoneSecondary: c.phoneSecondary || null,
           whatsapp: c.whatsapp || null,
-          accountCode: c.accountNumber || c.externalCustomerCode || null,
+          accountCode: c.externalCustomerCode || c.accountNumber || null,
         });
       }
       setCustomers(unique);
@@ -58,7 +59,7 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
         phonePrimary: c.phonePrimary || null,
         phoneSecondary: c.phoneSecondary || null,
         whatsapp: c.whatsapp || null,
-        accountCode: c.accountNumber || c.externalCustomerCode || null,
+        accountCode: c.externalCustomerCode || c.accountNumber || null,
       });
     }
     setCustomers(unique);
@@ -67,11 +68,7 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
   };
 
   const filtered = customers.filter((c) =>
-    !search || c.fullName?.includes(search)
-      || (c.phonePrimary || '').includes(search)
-      || (c.phoneSecondary || '').includes(search)
-      || (c.whatsapp || '').includes(search)
-      || (c.accountCode || '').includes(search),
+    matchesSmartSearch([c.fullName, c.phonePrimary, c.phoneSecondary, c.whatsapp, c.accountCode].filter(Boolean).join(' '), search),
   );
 
   return (
@@ -122,17 +119,17 @@ export default function CustomerPicker({ selectedId, selectedName, onSelect }: P
 }
 
 const styles = StyleSheet.create({
-  label: { fontSize: 15, fontWeight: '800', color: colors.ink, marginBottom: 8, marginTop: 16, textAlign: 'right' },
+  label: { fontFamily: 'TajawalBold', fontSize: 16, fontWeight: '800', color: colors.ink, marginBottom: 8, marginTop: 16, textAlign: 'right' },
   pickerBtn: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 14, borderWidth: 1, borderColor: colors.line },
-  pickerText: { fontSize: 16, color: colors.ink, textAlign: 'right' },
+  pickerText: { fontFamily: 'TajawalRegular', fontSize: 16, color: colors.ink, textAlign: 'right' },
   modalContainer: { flex: 1, backgroundColor: colors.background, paddingTop: 40 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: colors.primary, borderBottomWidth: 2, borderBottomColor: colors.gold },
-  modalTitle: { color: colors.background, fontSize: 18, fontWeight: '900' },
-  modalClose: { color: colors.gold, fontSize: 14, fontWeight: '900' },
-  searchInput: { margin: 16, padding: 12, backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, fontSize: 16, color: colors.ink, textAlign: 'right' },
+  modalTitle: { fontFamily: 'TajawalBold', color: colors.background, fontSize: 18, fontWeight: '900' },
+  modalClose: { fontFamily: 'TajawalBold', color: colors.gold, fontSize: 15, fontWeight: '900' },
+  searchInput: { fontFamily: 'TajawalRegular', margin: 16, padding: 12, backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, fontSize: 16, color: colors.ink, textAlign: 'right' },
   customerRow: { backgroundColor: colors.surface, marginHorizontal: 16, marginBottom: 8, padding: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, ...shadow },
   customerRowActive: { borderColor: colors.gold, borderWidth: 2, backgroundColor: colors.goldSoft },
-  customerName: { fontSize: 16, color: colors.ink, fontWeight: '800', textAlign: 'right' },
-  customerPhone: { fontSize: 13, color: colors.muted, marginTop: 4, textAlign: 'right' },
+  customerName: { fontFamily: 'TajawalBold', fontSize: 16, color: colors.ink, fontWeight: '800', textAlign: 'right' },
+  customerPhone: { fontFamily: 'TajawalRegular', fontSize: 14, color: colors.muted, marginTop: 4, textAlign: 'right' },
   emptyText: { textAlign: 'center', color: colors.muted, padding: 30 },
 });

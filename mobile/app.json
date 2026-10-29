@@ -3,7 +3,7 @@
     "owner": "alqalisi",
     "name": "ALRAQi ERP",
     "slug": "albinaa-collector",
-    "version": "1.3.13",
+    "version": "1.3.72",
     "orientation": "portrait",
     "icon": "./assets/alraqi-app-icon-approved.png",
     "userInterfaceStyle": "light",
@@ -12,26 +12,28 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.albinaa.collector",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "يستخدم تطبيق المحصل موقعك لتسجيل نقاط التحصيل",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "يستخدم تطبيق المحصل موقعك في الخلفية لتتبع مسار التحصيل",
-        "NSCameraUsageDescription": "يستخدم التطبيق الكاميرا لتصوير سندات التحصيل",
-        "NSPhotoLibraryUsageDescription": "يستخدم التطبيق معرض الصور لرفع سندات التحصيل"
+        "NSLocationWhenInUseUsageDescription": "ظٹط³طھط®ط¯ظ… طھط·ط¨ظٹظ‚ ط§ظ„ظ…ط­طµظ„ ظ…ظˆظ‚ط¹ظƒ ظ„طھط³ط¬ظٹظ„ ظ†ظ‚ط§ط· ط§ظ„طھط­طµظٹظ„",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "ظٹط³طھط®ط¯ظ… طھط·ط¨ظٹظ‚ ط§ظ„ظ…ط­طµظ„ ظ…ظˆظ‚ط¹ظƒ ظپظٹ ط§ظ„ط®ظ„ظپظٹط© ظ„طھطھط¨ط¹ ظ…ط³ط§ط± ط§ظ„طھط­طµظٹظ„",
+        "NSCameraUsageDescription": "ظٹط³طھط®ط¯ظ… ط§ظ„طھط·ط¨ظٹظ‚ ط§ظ„ظƒط§ظ…ظٹط±ط§ ظ„طھطµظˆظٹط± ط³ظ†ط¯ط§طھ ط§ظ„طھط­طµظٹظ„",
+        "NSPhotoLibraryUsageDescription": "ظٹط³طھط®ط¯ظ… ط§ظ„طھط·ط¨ظٹظ‚ ظ…ط¹ط±ط¶ ط§ظ„طµظˆط± ظ„ط±ظپط¹ ط³ظ†ط¯ط§طھ ط§ظ„طھط­طµظٹظ„"
       }
     },
     "android": {
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#275E59",
         "foregroundImage": "./assets/alraqi-adaptive-foreground-approved.png"
       },
       "predictiveBackGestureEnabled": false,
-      "versionCode": 17,
+      "versionCode": 76,
       "package": "com.albinaa.collector",
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.REQUEST_INSTALL_PACKAGES"
       ]
     },
     "web": {
@@ -39,6 +41,12 @@
     },
     "plugins": [
       "./plugins/with-cleartext-traffic.js",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "ظٹط³طھط®ط¯ظ… طھط·ط¨ظٹظ‚ ط§ظ„ط±ط§ظ‚ظٹ ط§ظ„ظƒط§ظ…ظٹط±ط§ ظ„ظ‚ط±ط§ط،ط© ط¨ط§ط±ظƒظˆط¯ ط§ظ„ط£طµظ†ط§ظپ"
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -63,11 +71,26 @@
               {
                 "fontFamily": "Tajawal",
                 "fontDefinitions": [
-                  { "path": "./assets/fonts/Tajawal-Regular.ttf", "weight": 400 },
-                  { "path": "./assets/fonts/Tajawal-Medium.ttf", "weight": 500 },
-                  { "path": "./assets/fonts/Tajawal-Bold.ttf", "weight": 700 },
-                  { "path": "./assets/fonts/Tajawal-ExtraBold.ttf", "weight": 800 },
-                  { "path": "./assets/fonts/Tajawal-Black.ttf", "weight": 900 }
+                  {
+                    "path": "./assets/fonts/Tajawal-Regular.ttf",
+                    "weight": 400
+                  },
+                  {
+                    "path": "./assets/fonts/Tajawal-Medium.ttf",
+                    "weight": 500
+                  },
+                  {
+                    "path": "./assets/fonts/Tajawal-Bold.ttf",
+                    "weight": 700
+                  },
+                  {
+                    "path": "./assets/fonts/Tajawal-ExtraBold.ttf",
+                    "weight": 800
+                  },
+                  {
+                    "path": "./assets/fonts/Tajawal-Black.ttf",
+                    "weight": 900
+                  }
                 ]
               }
             ]
@@ -79,13 +102,13 @@
       [
         "expo-contacts",
         {
-          "contactsPermission": "يستخدم تطبيق الراقي جهات الاتصال لاختيار رقم العميل أو حفظه في الهاتف"
+          "contactsPermission": "ظٹط³طھط®ط¯ظ… طھط·ط¨ظٹظ‚ ط§ظ„ط±ط§ظ‚ظٹ ط¬ظ‡ط§طھ ط§ظ„ط§طھطµط§ظ„ ظ„ط§ط®طھظٹط§ط± ط±ظ‚ظ… ط§ظ„ط¹ظ…ظٹظ„ ط£ظˆ ط­ظپط¸ظ‡ ظپظٹ ط§ظ„ظ‡ط§طھظپ"
         }
       ],
       [
         "expo-local-authentication",
         {
-          "faceIDPermission": "يستخدم تطبيق الراقي بصمة الوجه لفتح البيانات المحفوظة بأمان"
+          "faceIDPermission": "ظٹط³طھط®ط¯ظ… طھط·ط¨ظٹظ‚ ط§ظ„ط±ط§ظ‚ظٹ ط¨طµظ…ط© ط§ظ„ظˆط¬ظ‡ ظ„ظپطھط­ ط§ظ„ط¨ظٹط§ظ†ط§طھ ط§ظ„ظ…ط­ظپظˆط¸ط© ط¨ط£ظ…ط§ظ†"
         }
       ],
       [
@@ -94,29 +117,34 @@
           "icon": "./assets/android-icon-monochrome.png",
           "color": "#D4AF37",
           "defaultChannel": "albinaa-reminders",
-          "sounds": ["./assets/sounds/news_flash.mp3"]
+          "sounds": [
+            "./assets/sounds/news_flash.mp3",
+            "./native/collector-res/raw/collection_success.mp3"
+          ]
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "يستخدم تطبيق المحصل موقعك لتسجيل نقاط التحصيل",
-          "locationAlwaysAndWhenInUsePermission": "يستخدم تطبيق المحصل موقعك في الخلفية لتتبع مسار التحصيل"
+          "locationWhenInUsePermission": "ظٹط³طھط®ط¯ظ… طھط·ط¨ظٹظ‚ ط§ظ„ظ…ط­طµظ„ ظ…ظˆظ‚ط¹ظƒ ظ„طھط³ط¬ظٹظ„ ظ†ظ‚ط§ط· ط§ظ„طھط­طµظٹظ„",
+          "locationAlwaysAndWhenInUsePermission": "ظٹط³طھط®ط¯ظ… طھط·ط¨ظٹظ‚ ط§ظ„ظ…ط­طµظ„ ظ…ظˆظ‚ط¹ظƒ ظپظٹ ط§ظ„ط®ظ„ظپظٹط© ظ„طھطھط¨ط¹ ظ…ط³ط§ط± ط§ظ„طھط­طµظٹظ„"
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "يستخدم التطبيق معرض الصور لرفع سندات التحصيل",
-          "cameraPermission": "يستخدم التطبيق الكاميرا لتصوير سندات التحصيل"
+          "photosPermission": "ظٹط³طھط®ط¯ظ… ط§ظ„طھط·ط¨ظٹظ‚ ظ…ط¹ط±ط¶ ط§ظ„طµظˆط± ظ„ط±ظپط¹ ط³ظ†ط¯ط§طھ ط§ظ„طھط­طµظٹظ„",
+          "cameraPermission": "ظٹط³طھط®ط¯ظ… ط§ظ„طھط·ط¨ظٹظ‚ ط§ظ„ظƒط§ظ…ظٹط±ط§ ظ„طھطµظˆظٹط± ط³ظ†ط¯ط§طھ ط§ظ„طھط­طµظٹظ„"
         }
-      ]
+      ],
+      "expo-audio",
+      "expo-sharing"
     ],
     "extra": {
       "apiUrl": {
         "development": "http://localhost:3000",
-        "preview": "https://api.albinaa.com",
-        "production": "https://api.albinaa.com"
+        "preview": "http://192.168.1.5:18002",
+        "production": "https://app.alraqi-erp.com/api"
       },
       "eas": {
         "projectId": "1c9056d8-ce20-4d8f-8ee9-d6716ebf459b"

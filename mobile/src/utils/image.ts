@@ -1,7 +1,10 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Alert } from 'react-native';
 import { IMAGE_COMPRESSION_QUALITY } from './constants';
+
+const OFFLINE_RECEIPTS_DIR = `${FileSystem.documentDirectory ?? FileSystem.cacheDirectory}offline-receipts/`;
 
 export async function pickFromCamera(): Promise<string | null> {
   const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -37,5 +40,8 @@ export async function compressImage(uri: string): Promise<string> {
     [{ resize: { width: 1920 } }],
     { compress: IMAGE_COMPRESSION_QUALITY, format: ImageManipulator.SaveFormat.JPEG },
   );
-  return result.uri;
+  await FileSystem.makeDirectoryAsync(OFFLINE_RECEIPTS_DIR, { intermediates: true });
+  const persistentUri = `${OFFLINE_RECEIPTS_DIR}receipt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  await FileSystem.copyAsync({ from: result.uri, to: persistentUri });
+  return persistentUri;
 }

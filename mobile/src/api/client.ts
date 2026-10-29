@@ -1,13 +1,12 @@
 import axios, { AxiosInstance } from 'axios';
-import { getBaseUrl } from '../config/api';
+import { canRetryOnAlternateRoute } from './route-retry';
+import { activateRuntimeBaseUrl, getBaseUrl, getBaseUrlCandidates, pingServer } from '../config/api';
 import { getAccessToken, getRefreshToken, setTokens, clearTokens } from '../utils/secure-storage';
 
 let client: AxiosInstance | null = null;
-let isRefreshing = false;
-let pendingRequests: Array<{
-  resolve: (token: string) => void;
-  reject: (error: unknown) => void;
-}> = [];
+let clientBuild: Promise<AxiosInstance> | null = null;
+let sessionGeneration = 0;
+let refreshFlight: Promise<string> | null = null;
 
 async function buildClient(): Promise<AxiosInstance> {
   const baseURL = await getBaseUrl();
@@ -17,7 +16,13 @@ async function buildClient(): Promise<AxiosInstance> {
   const c = axios.create({ baseURL, timeout: 15_000 });
 
   c.interceptors.request.use(async (config) => {
+    const generation = sessionGeneration;
+    if ((config as any)._sessionGeneration !== undefined && (config as any)._sessionGeneration !== generation) throw new Error('تغيرت جلسة الدخول');
+    config.baseURL = await getBaseUrl();
+    c.defaults.baseURL = config.baseURL;
     const token = await getAccessToken();
+    if (generation !== sessionGeneration) throw new Error('تغيرت جلسة الدخول');
+    (config as any)._sessionGeneration = generation;
     if (token) config.headers.Authorization = `Bearer ${token}`;
     return config;
   });
@@ -26,38 +31,58 @@ async function buildClient(): Promise<AxiosInstance> {
     (res) => res,
     async (error) => {
       const req = error.config;
-      if (error.response?.status !== 401 || req._retry) return Promise.reject(error);
+      // A lost response may follow a committed write. Only reads may be
+      // automatically replayed on another route; queued writes keep their IDs.
+      if (!error.response && req && canRetryOnAlternateRoute(req.method) && !req._serverRetry) {
+        req._serverRetry = true;
+        const current = String(req.baseURL || c.defaults.baseURL || '').replace(/\/+$/, '');
+        const candidates = await getBaseUrlCandidates();
+        for (const candidate of candidates) {
+          if (candidate === current) continue;
+          const health = await pingServer(candidate, 3_500);
+          if (!health.ok) continue;
+          activateRuntimeBaseUrl(candidate);
+          c.defaults.baseURL = candidate;
+          req.baseURL = candidate;
+          return c(req);
+        }
+      }
+      if (error.response?.status !== 401 || !req || req._retry || /\/auth\/(login|refresh)/.test(req.url ?? '')) return Promise.reject(error);
       req._retry = true;
-
-      if (isRefreshing) {
-        return new Promise<string>((resolve, reject) => pendingRequests.push({ resolve, reject }))
-          .then((token) => {
-            req.headers.Authorization = `Bearer ${token}`;
-            return c(req);
-          });
-      }
-
-      isRefreshing = true;
-      try {
-        const refreshToken = await getRefreshToken();
-        if (!refreshToken) throw new Error('No refresh token');
-        const { data } = await axios.post(`${baseURL}/auth/refresh`, { refreshToken });
-        await setTokens(data.accessToken, data.refreshToken);
-        pendingRequests.forEach((pending) => pending.resolve(data.accessToken));
-        pendingRequests = [];
-        req.headers.Authorization = `Bearer ${data.accessToken}`;
+      const generation = sessionGeneration;
+      if (req._sessionGeneration !== generation) throw new Error('تغيرت جلسة الدخول؛ أعد فتح الصفحة');
+      const currentToken = await getAccessToken();
+      if (generation !== sessionGeneration) throw new Error('تغيرت جلسة الدخول');
+      // A slow 401 for the previous token must not rotate the new session again.
+      if (currentToken && req.headers.Authorization !== `Bearer ${currentToken}`) {
+        req.headers.Authorization = `Bearer ${currentToken}`;
         return c(req);
-      } catch (refreshError) {
-        pendingRequests.forEach((pending) => pending.reject(refreshError));
-        pendingRequests = [];
-        const status = (refreshError as any)?.response?.status;
-        // A disconnected LAN is not a logout. Clear credentials only when the
-        // server explicitly rejects the refresh token.
-        if ([400, 401, 403].includes(status)) await clearTokens();
-        throw refreshError;
-      } finally {
-        isRefreshing = false;
       }
+      if (!refreshFlight) {
+       const flight = (async () => {
+        const refreshToken = await getRefreshToken();
+        if (!refreshToken) throw new Error('انتهت الجلسة، يرجى تسجيل الدخول مجددًا عند الاتصال');
+        // Session refresh must follow the route chosen by the latest health
+        // check, not the public URL captured when this client was created.
+        const activeBaseUrl = (await getBaseUrl()).replace(/\/+$/, '');
+        try {
+          const { data } = await axios.post(`${activeBaseUrl}/auth/refresh`, { refreshToken }, { timeout: 8_000 });
+          if (generation !== sessionGeneration) throw new Error('تغيرت جلسة الدخول');
+          await setTokens(data.accessToken, data.refreshToken);
+          return data.accessToken as string;
+        } catch (refreshError) {
+          // Never erase a newer login, nor credentials on network/temporary/server failures.
+          if ((refreshError as any)?.response?.status === 401 && await getRefreshToken() === refreshToken && generation === sessionGeneration) await clearTokens();
+          throw refreshError;
+        }
+       })();
+       refreshFlight = flight;
+       void flight.finally(() => { if (refreshFlight === flight) refreshFlight = null; }).catch(() => undefined);
+      }
+      const token = await refreshFlight;
+      if (generation !== sessionGeneration) throw new Error('تغيرت جلسة الدخول');
+      req.headers.Authorization = `Bearer ${token}`;
+      return c(req);
     },
   );
 
@@ -65,8 +90,12 @@ async function buildClient(): Promise<AxiosInstance> {
 }
 
 export async function getClient(): Promise<AxiosInstance> {
-  if (!client) client = await buildClient();
-  return client;
+  if (client) return client;
+  if (!clientBuild) {
+    clientBuild = buildClient().then((built) => { client = built; return built; })
+      .finally(() => { clientBuild = null; });
+  }
+  return clientBuild;
 }
 
 /**
@@ -76,10 +105,8 @@ export async function getClient(): Promise<AxiosInstance> {
 export async function resetClient(): Promise<AxiosInstance> {
   // A logout or server/account switch must not inherit a refresh operation or
   // rejected request queue from the previous session.
-  const resetError = new Error('HTTP session reset');
-  pendingRequests.forEach((pending) => pending.reject(resetError));
-  pendingRequests = [];
-  isRefreshing = false;
+  sessionGeneration += 1;
+  refreshFlight = null;
   client = await buildClient();
   return client;
 }

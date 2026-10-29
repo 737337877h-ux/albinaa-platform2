@@ -1,4 +1,5 @@
 import * as Location from 'expo-location';
+import { isOperationsApp } from '../config/product';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import * as Notifications from 'expo-notifications';
@@ -38,6 +39,7 @@ export async function requestBackgroundGpsPermission(): Promise<boolean> {
 }
 
 export async function startGpsTracking() {
+  if (isOperationsApp) return;
   if (watchSubscription) return;
   await SecureStore.setItemAsync(TRACKING_KEY, 'true');
   watchSubscription = await Location.watchPositionAsync(
@@ -47,6 +49,7 @@ export async function startGpsTracking() {
 }
 
 export async function restoreGpsTracking(): Promise<boolean> {
+  if (isOperationsApp) return false;
   const enabled = (await SecureStore.getItemAsync(TRACKING_KEY)) === 'true';
   if (!enabled) return false;
   const permission = await Location.getForegroundPermissionsAsync();

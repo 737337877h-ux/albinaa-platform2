@@ -12,7 +12,7 @@ jest.mock('expo-secure-store', () => ({
 const mockFetch: any = jest.fn();
 global.fetch = mockFetch;
 
-import { isLocalNetworkUrl, isValidBaseUrl, pingServer } from '../src/config/api';
+import { getStoredBaseUrl, isLocalNetworkUrl, isValidBaseUrl, pingServer, getBaseUrlCandidates, prepareOnlineRoute, PUBLIC_API_URL } from '../src/config/api';
 
 describe('api config', () => {
   beforeEach(() => {
@@ -38,19 +38,55 @@ describe('api config', () => {
     });
   });
 
+  it('uses public then LAN for saved production endpoints', async () => {
+    mockStore['albinaa.api_base_url'] = 'http://192.168.1.5:18002';
+    expect(await getBaseUrlCandidates()).toEqual([PUBLIC_API_URL, 'http://192.168.1.5:18002']);
+  });
+  it('never fails over an isolated server into production', async () => {
+    mockStore['albinaa.api_base_url'] = 'http://192.168.1.5:18003';
+    expect(await getBaseUrlCandidates()).toEqual(['http://192.168.1.5:18003']);
+  });
+  it('respects an explicit LAN-only preference', async () => {
+    mockStore['albinaa.api_base_url'] = PUBLIC_API_URL;
+    mockStore['albinaa.sync_lan_only'] = 'true';
+    expect(await getBaseUrlCandidates()).toEqual(['http://192.168.1.5:18002']);
+  });
+  it('falls back to LAN when public health fails', async () => {
+    mockStore['albinaa.api_base_url'] = PUBLIC_API_URL;
+    mockFetch.mockRejectedValueOnce(new Error('offline'));
+    mockFetch.mockResolvedValueOnce({ok:true,status:200,json:async () => ({status:'ok'})});
+    expect(await prepareOnlineRoute()).toMatchObject({ok:true,route:'lan'});
+    expect(mockFetch.mock.calls.map((call: any) => call[0])).toEqual([PUBLIC_API_URL+'/health','http://192.168.1.5:18002/health']);
+  });
+  it('returns offline when neither production route is reachable', async () => {
+    mockStore['albinaa.api_base_url'] = PUBLIC_API_URL;
+    mockFetch.mockRejectedValue(new Error('offline'));
+    expect(await prepareOnlineRoute()).toMatchObject({ok:false});
+  });
+
+  it('preserves an explicitly selected isolated 18003 endpoint', async () => {
+    mockStore['albinaa.api_base_url'] = 'http://192.168.1.5:18003';
+    await expect(getStoredBaseUrl()).resolves.toBe('http://192.168.1.5:18003');
+    expect(mockStore['albinaa.api_base_url']).toBe('http://192.168.1.5:18003');
+  });
+
   describe('isLocalNetworkUrl', () => {
     it.each([
       'http://192.168.8.148:18001',
+      'http://192.168.1.5:18002',
       'http://10.0.0.5:18001',
       'http://172.16.2.20:18001',
       'http://172.31.255.1',
       'http://albinaa.local:18001',
+      'https://desktop-tajgfbm.tail16c86c.ts.net/api',
     ])('accepts private LAN address %s', (url) => {
       expect(isLocalNetworkUrl(url)).toBe(true);
     });
 
     it.each([
       'https://api.albinaa.com',
+      'https://desktop-tajgfbm.another-tailnet.ts.net/api',
+      'http://desktop-tajgfbm.tail16c86c.ts.net/api',
       'http://172.32.0.1',
       'http://8.8.8.8',
     ])('rejects non-LAN address %s', (url) => {

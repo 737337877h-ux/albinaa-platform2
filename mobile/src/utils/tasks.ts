@@ -22,8 +22,43 @@ const TASK_PRIORITY: Record<string, number> = {
   followup_normal: 12,
 };
 
+export function isDailyPriority(taskType: unknown): boolean {
+  return ['followup_overdue', 'risk_critical', 'risk_high', 'large_debt_7plus',
+    'debt_120plus', 'high_balance_no_followup', 'repeated_no_answer', 'needs_visit',
+    'followup_periodic_medium', 'followup_normal', 'escalation_message_30',
+    'escalation_call_60', 'escalation_visit_90', 'escalation_legal_120',
+    'account_group_priority', 'account_group_risk_critical', 'account_group_risk_high',
+  ].includes(String(taskType ?? ''));
+}
+
 function timestamp(value: unknown): number {
   return value ? new Date(String(value)).getTime() : 0;
+}
+
+export function taskDateKey(value: unknown): string {
+  if (!value) return '';
+  const raw = String(value);
+  const direct = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (direct) return direct;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+}
+
+/** عمل اليوم يعرض المهام المستحقة في تاريخ اليوم فقط؛ الأقدم تظهر في المتأخرة. */
+export function isDueForTodayWork(value: unknown, todayKey: string): boolean {
+  const due = taskDateKey(value);
+  return Boolean(due && due === todayKey);
+}
+
+export function todayTaskViews<T extends {id:string; customerId?:string|null; taskType?:string|null; priority?:string|null; title?:string|null; dueDate?:string|Date|null; status?:string|null; priorityReason?:string|null}>(items:T[], today:string, focusedId?:string|null) {
+  const due = items.filter(t => ['open','pending','',null,undefined].includes(t.status) && isDueForTodayWork(t.dueDate,today));
+  const key = (t:T) => t.customerId || `task:${t.id}`;
+  const manual = collapseTasksByCustomer(due.filter(t=>!isDailyPriority(t.taskType||t.priority)),focusedId);
+  const automatic = collapseTasksByCustomer(due.filter(t=>isDailyPriority(t.taskType||t.priority)),focusedId);
+  const manualByKey = new Map(manual.map(t=>[key(t),t]));
+  const automaticByKey = new Map(automatic.map(t=>[key(t),t]));
+  const decorate = (rows:T[]) => rows.map(t=>({...t,hasManual:manualByKey.has(key(t)),hasAutomatic:automaticByKey.has(key(t)),manualReason:manualByKey.get(key(t))?.priorityReason||manualByKey.get(key(t))?.title,automaticReason:automaticByKey.get(key(t))?.priorityReason||automaticByKey.get(key(t))?.title}));
+  return {all:decorate(collapseTasksByCustomer(due,focusedId)),manual:decorate(manual),automatic:decorate(automatic)};
 }
 
 export function collapseTasksByCustomer<T extends {

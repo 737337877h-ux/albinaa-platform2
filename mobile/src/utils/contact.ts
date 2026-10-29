@@ -2,7 +2,7 @@
 export function normalizePhone(raw?: string | null): string | null {
   if (!raw) return null;
 
-  let digits = raw.replace(/\D/g, '');
+  let digits = raw.replace(/[٠-٩]/g, c => String(c.charCodeAt(0) - 0x660)).replace(/[۰-۹]/g, c => String(c.charCodeAt(0) - 0x6f0)).replace(/\D/g, '');
   if (digits.startsWith('00')) digits = digits.slice(2);
   if (digits.length === 10 && digits.startsWith('0')) digits = digits.slice(1);
   if (digits.length === 9) digits = `967${digits}`;
@@ -10,14 +10,14 @@ export function normalizePhone(raw?: string | null): string | null {
   return digits.length >= 7 && digits.length <= 15 ? digits : null;
 }
 
-export function contactLinks(phone?: string | null) {
+export function contactLinks(phone?: string | null, message?: string) {
   const normalized = normalizePhone(phone);
   if (!normalized) return null;
 
   return {
     tel: `tel:+${normalized}`,
     sms: `sms:+${normalized}`,
-    whatsapp: `https://wa.me/${normalized}`,
+    whatsapp: `https://wa.me/${normalized}${message?.trim() ? `?text=${encodeURIComponent(message.trim())}` : ''}`,
   };
 }
 

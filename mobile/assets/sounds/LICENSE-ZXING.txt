@@ -1,0 +1,7 @@
+barcode_scanner_beep.ogg is the standard scan-success sound from the official
+ZXing (Zebra Crossing) Barcode Scanner project:
+https://github.com/zxing/zxing/blob/master/android/res/raw/beep.ogg
+
+Copyright (C) ZXing authors.
+Licensed under the Apache License, Version 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
