@@ -13,7 +13,7 @@ module.exports = ({ config }) => {
     ...config,
     name: 'الراقي إدارة العملاء والمخزون',
     slug: 'alraqi-operations',
-    version: '1.0.8',
+    version: '1.0.9',
     icon: './assets/operations-logo.png',
     plugins: (config.plugins || []).map(plugin => {
       const [name, options] = Array.isArray(plugin) ? plugin : [plugin, {}];
@@ -23,7 +23,7 @@ module.exports = ({ config }) => {
     android: {
       ...config.android,
       package: 'com.alraqi.operations',
-      versionCode: 9,
+      versionCode: 10,
       adaptiveIcon: { foregroundImage: './assets/operations-logo.png', backgroundColor: '#F7F7F7' },
       googleServicesFile: fs.existsSync(firebase) ? firebase : undefined,
     },
