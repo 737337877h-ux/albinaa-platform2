@@ -847,6 +847,7 @@ function normalizeRecord(table: BusinessTable, record: Record<string, any>): Rec
 }
 
 export interface MobileSyncBatch {
+  inventoryCatalogVersion?: string;
   customers?: Record<string, any>[];
   tasks?: Record<string, any>[];
   followups?: Record<string, any>[];
@@ -991,6 +992,14 @@ export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: strin
         await insertReferenceOptionsBatched(tx, kind, options || []);
         if (kind === 'oracleItems') {
           await replaceInventoryCatalog(tx, options || []);
+          // Commit the revision in the same transaction as every item/barcode.
+          // A failed import must leave the previous catalog and revision intact.
+          if (batch.inventoryCatalogVersion) {
+            await tx.runAsync('INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
+              'inventoryCatalogVersion', batch.inventoryCatalogVersion);
+          } else {
+            await tx.runAsync('DELETE FROM sync_metadata WHERE key = ?', 'inventoryCatalogVersion');
+          }
           await tx.runAsync(
             'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
             'inventoryCatalogComplete', new Date().toISOString(),

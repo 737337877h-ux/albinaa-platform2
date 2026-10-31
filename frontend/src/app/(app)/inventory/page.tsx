@@ -19,6 +19,7 @@ import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Badge, Button, Card, Input, Pagination, Select, StatCard } from '@/components/ui/primitives';
 import { Table, TD, THead, TRow } from '@/components/ui/table';
 import { api } from '@/lib/api';
+import { usePublishedInventoryVersion } from '@/lib/use-published-inventory-version';
 import { useCan } from '@/lib/auth';
 import {
   inventoryNumber,
@@ -57,6 +58,7 @@ function useDebounced<T>(value: T, delay: number): T {
 export default function InventoryPage() {
   const can = useCan();
   const allowed = can('inventory.read');
+  const catalogVersion = usePublishedInventoryVersion(allowed);
   const [view, setView] = useState<InventoryView>('items');
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search, 350);
@@ -69,25 +71,25 @@ export default function InventoryPage() {
   useEffect(() => { setPage(1); }, [debouncedSearch, itemStatus, groupCode, warehouseCode, positiveOnly, view]);
 
   const summary = useQuery<OracleInventorySummary>({
-    queryKey: ['oracle-inventory-summary'],
+    queryKey: ['oracle-inventory-summary', catalogVersion],
     queryFn: () => api('/oracle-inventory/summary'),
     enabled: allowed,
     staleTime: 60_000,
   });
   const groups = useQuery<OracleItemGroup[]>({
-    queryKey: ['oracle-inventory-groups'],
+    queryKey: ['oracle-inventory-groups', catalogVersion],
     queryFn: () => api('/oracle-inventory/item-groups'),
     enabled: allowed,
     staleTime: 60_000,
   });
   const warehouses = useQuery<OracleWarehousesResponse>({
-    queryKey: ['oracle-inventory-warehouses'],
+    queryKey: ['oracle-inventory-warehouses', catalogVersion],
     queryFn: () => api('/oracle-inventory/warehouses?status=all'),
     enabled: allowed,
     staleTime: 60_000,
   });
   const items = useQuery<OracleItemsResponse>({
-    queryKey: ['oracle-inventory-items', debouncedSearch, itemStatus, groupCode, page],
+    queryKey: ['oracle-inventory-items', debouncedSearch, itemStatus, groupCode, page, catalogVersion],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), limit: '25', status: itemStatus });
       if (debouncedSearch) params.set('search', debouncedSearch);
@@ -97,7 +99,7 @@ export default function InventoryPage() {
     enabled: allowed && view === 'items',
   });
   const stock = useQuery<OracleStockResponse>({
-    queryKey: ['oracle-inventory-stock', debouncedSearch, warehouseCode, positiveOnly, page],
+    queryKey: ['oracle-inventory-stock', debouncedSearch, warehouseCode, positiveOnly, page, catalogVersion],
     queryFn: () => {
       const params = new URLSearchParams({
         page: String(page),

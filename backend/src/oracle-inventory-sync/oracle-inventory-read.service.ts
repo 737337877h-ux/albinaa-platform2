@@ -1008,18 +1008,25 @@ export class OracleInventoryReadService {
     };
   }
 
-  /** Complete but compact catalog for first-run and daily mobile SQLite refreshes. */
-  async offlineReferenceCatalog(actor: AuthUser, sourceSchema = 'IAS20261') {
+  async catalogVersion(actor: AuthUser, sourceSchema?: string) {
+    const snapshot = await this.activeSnapshot(actor.organizationId, sourceSchema);
+    return { version: snapshot.activeRunId, sourceSchema: snapshot.sourceSchema, publishedAt: snapshot.activeRun.publishedAt };
+  }
+
+  /** Send a new catalog whenever its published snapshot or cost visibility changes. */
+  async offlineReferenceCatalog(actor: AuthUser, sourceSchema = 'IAS20261', knownVersion?: string) {
     const snapshot = await this.activeSnapshot(actor.organizationId, sourceSchema);
     const movementRun = await this.prisma.oracleMovementSyncRun.findFirst({
       where: {
         organizationId: actor.organizationId,
         sourceSchema: snapshot.sourceSchema,
-        status: { in: ['validated', 'published', 'validating'] },
+        status: { in: ['validated', 'published'] },
       },
       orderBy: { startedAt: 'desc' },
       select: { id: true },
     });
+    const catalogVersion = `${snapshot.sourceSchema}:${snapshot.activeRunId}:${movementRun?.id ?? 'none'}:${actor.permissions.includes('mobile.inventory.cost.view') ? 'cost' : 'standard'}`;
+    if (knownVersion === catalogVersion) return { catalogVersion };
     const [warehouses, items, publishedMovements] = await Promise.all([
       this.prisma.oracleWarehouseMirror.findMany({
         where: { syncRunId: snapshot.activeRunId, organizationId: actor.organizationId, isInactive: false },
@@ -1127,6 +1134,7 @@ export class OracleInventoryReadService {
     const valuation = summarizeOracleMovementValuation(publishedMovements);
     return {
       snapshotRunId: snapshot.activeRunId,
+      catalogVersion,
       warehouses,
       items: items.map((item) => {
         const itemMovements = movementsByItem.get(item.externalItemCode) ?? [];

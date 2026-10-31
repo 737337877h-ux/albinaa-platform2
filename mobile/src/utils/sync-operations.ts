@@ -158,6 +158,7 @@ export async function pullLatestMobileSnapshot(): Promise<void> {
   const response = await fetchSync(hasOfflineInventory ? (lastToken || undefined) : undefined);
   const data = response.data;
   await applySyncSnapshot({
+    inventoryCatalogVersion: data.inventoryCatalogVersion,
     customers: data.customers || [], tasks: data.tasks || [], followups: data.followups || [],
     promises: data.promises || [], collections: data.collections || [], reservations: data.reservations || [],
     references: data.references || {}, newDebt: data.newDebt ?? null, customerAlerts: data.customerAlerts ?? null,

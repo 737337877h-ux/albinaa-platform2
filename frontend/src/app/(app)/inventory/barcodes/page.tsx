@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/app-shell';
 import { Badge, Button, Card, Field, Input, Select } from '@/components/ui/primitives';
 import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { api } from '@/lib/api';
+import { usePublishedInventoryVersion } from '@/lib/use-published-inventory-version';
 import { useCan } from '@/lib/auth';
 import type { OracleItemsResponse } from '@/lib/oracle-inventory';
 import { fmtDateTime } from '@/lib/format';
@@ -26,6 +27,7 @@ type BarcodePrintReport = {
 export default function InventoryBarcodesPage() {
   const can = useCan();
   const allowed = can('inventory.read');
+  const catalogVersion = usePublishedInventoryVersion(allowed);
   const [search, setSearch] = useState('');
   const [unprintedSearch, setUnprintedSearch] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -39,12 +41,12 @@ export default function InventoryBarcodesPage() {
   const barcodeRef = useRef<SVGSVGElement>(null);
   useEffect(() => { const timer = setTimeout(() => setDebounced(search.trim()), 300); return () => clearTimeout(timer); }, [search]);
   const items = useQuery<OracleItemsResponse>({
-    queryKey: ['barcode-items', debounced],
+    queryKey: ['barcode-items', debounced, catalogVersion],
     queryFn: () => api(`/oracle-inventory/items?search=${encodeURIComponent(debounced)}&page=1&limit=30&status=active`),
     enabled: allowed,
   });
   const report = useQuery<BarcodePrintReport>({
-    queryKey: ['barcode-print-report'],
+    queryKey: ['barcode-print-report', catalogVersion],
     queryFn: () => api('/oracle-inventory/barcode-prints/report'),
     enabled: allowed,
   });
