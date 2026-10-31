@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { AlertTriangle, ChevronDown, ChevronLeft, ChevronUp, Download, Grid3X3, List, PackageCheck, Plus, Search } from 'lucide-react';
@@ -12,6 +12,7 @@ import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Badge, Button, Card, Field, Input, Money, Select, Textarea } from '@/components/ui/primitives';
 import { Dialog } from '@/components/ui/dialog';
 import { Table, TD, THead, TRow } from '@/components/ui/table';
+import { createRequestId } from '@/lib/request-id';
 
 const hasToken = () => typeof window !== 'undefined' && !!tokenStore.access;
 
@@ -314,6 +315,7 @@ export default function ReservationsPage() {
 function CreateReservationDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState(EMPTY_CREATE_FORM);
+  const request = useRef({ payload: '', operationId: '' });
   const [customerSearch, setCustomerSearch] = useState('');
   const customers = useQuery({
     queryKey: ['reservation-customer-search', customerSearch],
@@ -321,9 +323,8 @@ function CreateReservationDialog({ open, onClose }: { open: boolean; onClose: ()
     enabled: open && !form.customerId && customerSearch.trim().length >= 2,
   });
   const create = useMutation({
-    mutationFn: () => api('/reservations', {
-      method: 'POST',
-      body: JSON.stringify({
+    mutationFn: () => {
+      const body = JSON.stringify({
         customerId: form.customerId,
         totalTons: Number(form.totalTons),
         unitPrice: Number(form.unitPrice),
@@ -331,14 +332,17 @@ function CreateReservationDialog({ open, onClose }: { open: boolean; onClose: ()
         documentNumber: form.documentNumber.trim() || undefined,
         notes: form.notes.trim() || undefined,
         expiresAt: form.expiresAt || undefined,
-      }),
-    }),
+      });
+      if (request.current.payload !== body) request.current = { payload: body, operationId: createRequestId() };
+      return api('/reservations', { method: 'POST', body, headers: { 'Idempotency-Key': request.current.operationId } });
+    },
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['reservations'] }),
         queryClient.invalidateQueries({ queryKey: ['reservations-summary'] }),
       ]);
       setForm(EMPTY_CREATE_FORM);
+      request.current = { payload: '', operationId: '' };
       setCustomerSearch('');
       onClose();
     },
@@ -347,6 +351,7 @@ function CreateReservationDialog({ open, onClose }: { open: boolean; onClose: ()
   const close = () => {
     if (create.isPending) return;
     setForm(EMPTY_CREATE_FORM);
+    request.current = { payload: '', operationId: '' };
     setCustomerSearch('');
     onClose();
   };

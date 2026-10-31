@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ReceiptPreview, { ReceiptReference } from '../components/receipt-preview';
 import { useAuth } from '../store/auth-context';
 import { canUseMobileFeature } from '../utils/mobile-permissions';
+import { reminderBalanceText } from '../utils/reminder-balances';
 
 async function openLink(url: string, fallbackMsg: string) {
   try {
@@ -255,20 +256,14 @@ export default function Customer360Screen({ route, navigation }: any) {
     const channel = messageChannel;
     const hasAccountGroup = childBalances.some((item: any) => Number(item?.balance ?? 0) > 0.001);
     const sourceBalances = hasAccountGroup ? groupBalances : balances;
-    const primaryBalance = sourceBalances
-      .filter((item: any) => Number(item?.balance ?? item?.operationalBalance ?? item?.accountingBalance ?? 0) > 0.001)
-      .sort((a: any, b: any) => Number(b?.balance ?? b?.operationalBalance ?? 0) - Number(a?.balance ?? a?.operationalBalance ?? 0))[0] || {};
-    const amount = Math.abs(Number(primaryBalance.balance ?? primaryBalance.operationalBalance ?? primaryBalance.accountingBalance ?? 0));
+    const debtText = reminderBalanceText(sourceBalances);
     const rendered = renderMessageTemplate(template.body, {
       customerName: fullName,
       customerCode: accountCode || '—',
-      balance: amount.toLocaleString('en-US', { maximumFractionDigits: 2 }),
-      currency: primaryBalance.currency || primaryBalance.currencyCode || '',
+      balance: debtText.balance,
+      currency: debtText.currency,
     });
-    const formatTotals = (items: any[]) => items
-      .filter((item) => Number(item?.balance ?? 0) > 0.001)
-      .map((item) => `${Number(item.balance).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${item.currency}`)
-      .join('، ');
+    const formatTotals = (items: any[]) => reminderBalanceText(items).summary;
     const body = hasAccountGroup
       ? `${rendered}\n\nإجمالي الحساب الرئيسي والفرعي: ${formatTotals(groupBalances)}.\nإجمالي الحسابات الفرعية: ${formatTotals(childBalances)}.`
       : rendered;

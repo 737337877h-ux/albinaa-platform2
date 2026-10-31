@@ -50,6 +50,25 @@ describe('Reservation units and summary (e2e)', () => {
     if (app) await app.close();
   });
 
+  it('creates one reservation for concurrent submissions and offline retries of the same operation', async () => {
+    const operationId = `reservation-retry-${Date.now()}`;
+    const body = { customerId, totalTons: 4.5, unitPrice: 380000, currencyCode: 'YER' };
+    const submit = (data = body, key = operationId) => request(app.getHttpServer()).post('/reservations')
+      .set('Authorization', `Bearer ${token}`).set('Idempotency-Key', key).send(data);
+    const responses = await Promise.all([submit(), submit()]);
+    expect(responses.map(response => response.status)).toEqual([201, 201]);
+    expect(responses[0].body.id).toBe(responses[1].body.id);
+    const retry = await submit().expect(201);
+    expect(retry.body.id).toBe(responses[0].body.id);
+    expect(await prisma.reservation.count({ where: { id: retry.body.id } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { entityId: retry.body.id, action: 'reservation_created' } })).toBe(1);
+    await submit({ ...body, totalTons: 5 }).expect(409);
+    const separate = await submit(body, `${operationId}-new-order`).expect(201);
+    expect(separate.body.id).not.toBe(retry.body.id);
+    // The summary baseline below must not include this test's orders.
+    await prisma.reservation.deleteMany({ where: { id: { in: [retry.body.id, separate.body.id] } } });
+  });
+
   it('uses normalized units and returns one-query currency-safe summary', async () => {
     const units = await request(app.getHttpServer())
       .get('/reservations/units')
