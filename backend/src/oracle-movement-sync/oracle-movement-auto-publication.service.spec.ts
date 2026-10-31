@@ -14,6 +14,7 @@ describe('OracleMovementAutoPublicationService safety classification', () => {
         update: jest.fn().mockResolvedValue({}),
       },
       reservationAdjustment: {
+        findMany: jest.fn().mockResolvedValue([]),
         findUnique: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}),
       },
     };
@@ -30,6 +31,44 @@ describe('OracleMovementAutoPublicationService safety classification', () => {
     expect(data.remainingTons.toString()).toBe('0');
     expect(data.issuedQty.increment.toString()).toBe('0.4');
     expect(tx.reservationAdjustment.create.mock.calls[0][0].data.tonsDelta.toString()).toBe('-0.4');
+  });
+
+  it('does not deduct a replayed sale from another reservation after the original closes', async () => {
+    const tx = {
+      customer: { findFirst: jest.fn().mockResolvedValue({ id: 'customer' }) },
+      reservation: { findMany: jest.fn(), update: jest.fn() },
+      reservationAdjustment: { findMany: jest.fn().mockResolvedValue([{ tonsDelta: decimal('-1') }]) },
+    };
+    await (service as any).applyReservationMovement(tx, 'org', {
+      external_item_code: '230800105001', external_customer_code: '20560', document_type: '1', in_out: -1,
+      primary_quantity: decimal(200), primary_free_quantity: decimal(0), source_fingerprint: 'same-sale', movement_date: new Date(),
+    }, 'movement');
+    expect(tx.reservation.findMany).not.toHaveBeenCalled();
+    expect(tx.reservation.update).not.toHaveBeenCalled();
+  });
+
+  it('reverses an issue by reducing issued quantity and restoring the remaining quantity', async () => {
+    const tx = {
+      reservationAdjustment: { findMany: jest.fn().mockResolvedValue([{ id: 'a', reservationId: 'r', tonsDelta: decimal('-1') }]), update: jest.fn() },
+      reservation: { findUnique: jest.fn().mockResolvedValue({ remainingTons: decimal(2), issuedQty: decimal(3) }), update: jest.fn() },
+    };
+    await (service as any).reverseReservationMovements(tx, ['movement']);
+    const data = tx.reservation.update.mock.calls[0][0].data;
+    expect(data.issuedQty.toString()).toBe('2');
+    expect(data.remainingTons.toString()).toBe('3');
+  });
+
+  it('does not restore the same return twice across different reservations', async () => {
+    const tx = {
+      customer: { findFirst: jest.fn().mockResolvedValue({ id: 'customer' }) },
+      reservation: { findFirst: jest.fn(), update: jest.fn() },
+      reservationAdjustment: { findMany: jest.fn().mockResolvedValue([{ tonsDelta: decimal('0.06') }]) },
+    };
+    await (service as any).applyReservationMovement(tx, 'org', {
+      external_item_code: '230800105005', external_customer_code: '20560', document_type: '3', in_out: 1,
+      primary_quantity: decimal(3), primary_free_quantity: decimal(0), source_fingerprint: 'same-return', movement_date: new Date(),
+    }, 'movement');
+    expect(tx.reservation.findFirst).not.toHaveBeenCalled();
   });
 
   const customer = (overrides: Record<string, unknown> = {}) => ({

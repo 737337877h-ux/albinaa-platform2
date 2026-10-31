@@ -697,7 +697,7 @@ export class OracleMovementAutoPublicationService {
     if (!isSale && !isSalesReturn) return;
 
     const rods = row.primary_quantity.plus(row.primary_free_quantity).abs();
-    if (!rods.isPositive()) return;
+    if (!rods.gt(0)) return;
     const movementTons = rods.div(standard.rodsPerTon).toDecimalPlaces(6);
     const customer = await tx.customer.findFirst({
       where: {
@@ -709,19 +709,28 @@ export class OracleMovementAutoPublicationService {
     });
     if (!customer) return;
 
+    const previousAdjustments = await tx.reservationAdjustment.findMany({
+      where: { reservation: { customerId: customer.id }, sourceFingerprint: row.source_fingerprint, reversedAt: null },
+      select: { tonsDelta: true },
+    });
+    if (isSalesReturn && previousAdjustments.length) return;
+
     if (isSale) {
-      let unapplied = movementTons;
+      const alreadyIssued = previousAdjustments.reduce((sum, adjustment) => sum.minus(adjustment.tonsDelta), new Prisma.Decimal(0));
+      let unapplied = Prisma.Decimal.max(new Prisma.Decimal(0), movementTons.minus(alreadyIssued));
+      if (!unapplied.gt(0)) return;
       const reservations = await tx.reservation.findMany({
         where: {
           customerId: customer.id,
           status: { in: ['open', 'partial'] },
-          OR: [{ expiresAt: null }, { expiresAt: { gte: new Date() } }],
+          reservedAt: { lte: row.movement_date },
+          OR: [{ expiresAt: null }, { expiresAt: { gte: row.movement_date } }],
           remainingTons: { gt: 0 },
         },
         orderBy: [{ reservedAt: 'asc' }, { createdAt: 'asc' }],
       });
       for (const reservation of reservations) {
-        if (!unapplied.isPositive()) break;
+        if (!unapplied.gt(0)) break;
         const alreadyApplied = await tx.reservationAdjustment.findUnique({
           where: {
             reservationId_sourceFingerprint: {
@@ -734,7 +743,7 @@ export class OracleMovementAutoPublicationService {
         if (alreadyApplied) continue;
         const available = reservation.remainingTons ?? new Prisma.Decimal(0);
         const applied = Prisma.Decimal.min(available, unapplied).toDecimalPlaces(6);
-        if (!applied.isPositive()) continue;
+        if (!applied.gt(0)) continue;
         const remaining = available.minus(applied).toDecimalPlaces(6);
         await tx.reservation.update({
           where: { id: reservation.id },
@@ -766,7 +775,7 @@ export class OracleMovementAutoPublicationService {
     }
 
     const reservation = await tx.reservation.findFirst({
-      where: { customerId: customer.id, status: { not: 'cancelled' }, totalTons: { not: null } },
+      where: { customerId: customer.id, status: { not: 'cancelled' }, totalTons: { not: null }, reservedAt: { lte: row.movement_date } },
       orderBy: [{ reservedAt: 'desc' }, { createdAt: 'desc' }],
     });
     if (!reservation) return;
@@ -821,7 +830,7 @@ export class OracleMovementAutoPublicationService {
       if (!reservation) continue;
       const current = reservation.remainingTons ?? new Prisma.Decimal(0);
       const restored = current.minus(adjustment.tonsDelta).toDecimalPlaces(6);
-      const issuedDelta = adjustment.tonsDelta.negated();
+      const issuedDelta = adjustment.tonsDelta;
       const nextIssued = Prisma.Decimal.max(new Prisma.Decimal(0), reservation.issuedQty.plus(issuedDelta));
       await tx.reservation.update({
         where: { id: reservation.id },

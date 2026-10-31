@@ -7,6 +7,7 @@ import { enqueueMutation } from '../db/database';
 import { useSync } from '../store/sync-context';
 import { apiErrorMessage } from '../utils/errors';
 import { colors, radius, shadow } from '../theme';
+import { generateIdempotencyKey } from '../utils/constants';
 
 export default function NewReservationScreen({ route, navigation }: any) {
   const [customerId, setCustomerId] = useState(route.params?.customerId || '');
@@ -18,6 +19,7 @@ export default function NewReservationScreen({ route, navigation }: any) {
   const [notes, setNotes] = useState('');
   const queryClient = useQueryClient();
   const { triggerSync } = useSync();
+  const request = React.useRef({ payload: '', operationId: '' });
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -34,11 +36,13 @@ export default function NewReservationScreen({ route, navigation }: any) {
         documentNumber: documentNumber.trim() || undefined,
         notes: notes.trim() || undefined,
       };
+      const serialized = JSON.stringify(payload);
+      if (request.current.payload !== serialized) request.current = { payload: serialized, operationId: generateIdempotencyKey() };
+      const operationId = request.current.operationId;
       try {
-        return await createReservation(payload);
+        return await createReservation(payload, operationId);
       } catch (error: any) {
         if (!error?.response) {
-          const operationId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
           await enqueueMutation(operationId, 'POST', '/reservations', payload);
           return { data: { id: operationId, offline: true } };
         }

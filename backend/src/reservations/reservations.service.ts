@@ -9,6 +9,7 @@ import { IssueReservationDto } from './dto/issue-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
 import { CreateUnitDto, UpdateUnitDto } from './dto/manage-unit.dto';
 import { RESERVATION_ITEM_STANDARDS } from './reservation-catalog';
+import { createHash } from 'crypto';
 
 export function reservationWeightTons(quantity: number, weightKg: number | null): number | null {
   return weightKg === null ? null : quantity * weightKg / 1000;
@@ -326,7 +327,7 @@ export class ReservationsService {
           orderBy: { code: 'asc' },
         });
 
-    const reservation = await this.prisma.reservation.create({
+    const create = (db: Prisma.TransactionClient | PrismaService) => db.reservation.create({
       data: {
         customerId: dto.customerId,
         // Legacy required column from the pre-PR-F credit-reservation shape — unused by goods
@@ -351,7 +352,28 @@ export class ReservationsService {
       },
     });
 
-    await this.audit.log({
+    const operationId = req?.headers?.['idempotency-key'];
+    let created = true;
+    const reservation = typeof operationId === 'string' && operationId.trim()
+      ? await this.prisma.$transaction(async (tx) => {
+          const key = `reservation:${actor.organizationId}:${actor.id}:${createHash('sha256').update(operationId).digest('hex')}`;
+          const requestHash = createHash('sha256').update(JSON.stringify(dto, Object.keys(dto).sort())).digest('hex');
+          // Serialize retries before creating the row, not after the side effect.
+          await tx.$queryRaw`SELECT true AS locked FROM pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+          const existing = await tx.idempotencyKey.findUnique({ where: { key } });
+          if (existing) {
+            const saved = existing.response as { requestHash: string; reservation: Prisma.JsonObject };
+            if (saved.requestHash !== requestHash) throw new ConflictException('معرّف الطلب مستخدم لبيانات حجز مختلفة');
+            created = false;
+            return saved.reservation as unknown as Awaited<ReturnType<typeof create>>;
+          }
+          const row = await create(tx);
+          await tx.idempotencyKey.create({ data: { key, response: { requestHash, reservation: JSON.parse(JSON.stringify(row)) } } });
+          return row;
+        })
+      : await create(this.prisma);
+
+    if (created) await this.audit.log({
       userId: actor.id, action: 'reservation_created', entityTable: 'reservations', entityId: reservation.id,
       newValue: {
         customerId: dto.customerId,

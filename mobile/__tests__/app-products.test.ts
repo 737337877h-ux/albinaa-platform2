@@ -16,16 +16,16 @@ describe('independent application identities', () => {
   test('collector source configuration works without private Firebase files', () => {
     jest.spyOn(fs, 'existsSync').mockReturnValue(false);
     const result = factory({ config: configFile.expo });
-    expect(result.version).toBe('1.3.73');
-    expect(result.android).toMatchObject({ package: 'com.albinaa.collector', versionCode: 77 });
+    expect(result.version).toBe('1.3.74');
+    expect(result.android).toMatchObject({ package: 'com.albinaa.collector', versionCode: 78 });
     expect(result.android.googleServicesFile).toBeUndefined();
   });
   test('operations uses its own package, version, scheme and notification sound', () => {
     process.env.ALRAQI_APP = 'operations';
     jest.spyOn(fs, 'existsSync').mockReturnValue(false);
     const result = factory({ config: configFile.expo });
-    expect(result.version).toBe('1.0.9');
-    expect(result.android).toMatchObject({ package: 'com.alraqi.operations', versionCode: 10 });
+    expect(result.version).toBe('1.0.10');
+    expect(result.android).toMatchObject({ package: 'com.alraqi.operations', versionCode: 11 });
     expect(result.scheme).toBe('alraqi-operations');
     expect(result.extra.operationsPushConfigured).toBe(false);
     expect(result.plugins.find((p: any) => Array.isArray(p) && p[0] === 'expo-notifications')[1].sounds)

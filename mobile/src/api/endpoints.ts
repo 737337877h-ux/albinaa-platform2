@@ -268,9 +268,9 @@ export async function createReservation(data: {
   documentNumber?: string;
   notes?: string;
   expiresAt?: string;
-}) {
+}, operationId?: string) {
   const client = await getClient();
-  return client.post('/reservations', data);
+  return client.post('/reservations', data, { headers: operationId ? { 'Idempotency-Key': operationId } : undefined });
 }
 
 export type OracleRequestKind = 'purchase' | 'receipt' | 'payment' | 'journal' | 'inventory_transfer' | 'inventory_count';
