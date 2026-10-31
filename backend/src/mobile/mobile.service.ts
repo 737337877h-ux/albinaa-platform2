@@ -401,7 +401,7 @@ export class MobileService {
     return rows.map(({ name, ...row }) => ({ ...row, fullName: name }));
   }
 
-  async sync(user: AuthUser, lastSyncToken?: string, operationsOnly = false, collectionOnly = false) {
+  async sync(user: AuthUser, lastSyncToken?: string, operationsOnly = false, collectionOnly = false, inventoryCatalogVersion?: string) {
     const collector = await this.prisma.collector.findUnique({ where: { userId: user.id } });
     const collectorId = collector?.id;
 
@@ -568,9 +568,8 @@ export class MobileService {
       this.oracleRequests?.currencies().catch(() => null) ?? Promise.resolve(null),
       operationsOnly ? Promise.resolve(null) : this.oracleRequests?.catalog('receipt').catch(() => null) ?? Promise.resolve(null),
       operationsOnly ? Promise.resolve(null) : this.oracleRequests?.catalog('payment').catch(() => null) ?? Promise.resolve(null),
-      (!lastSyncToken || !Number.isFinite(new Date(lastSyncToken).getTime())
-        || Date.now() - new Date(lastSyncToken).getTime() > 24 * 60 * 60 * 1000)
-        ? canViewInventory ? this.oracleInventory?.offlineReferenceCatalog(user, 'IAS20261').catch(() => null) ?? Promise.resolve(null) : Promise.resolve(null)
+      canViewInventory
+        ? this.oracleInventory?.offlineReferenceCatalog(user, 'IAS20261', inventoryCatalogVersion).catch(() => null) ?? Promise.resolve(null)
         : Promise.resolve(null),
       canViewInventory
         ? this.oracleInventory?.summary(user, { sourceSchema: 'IAS20261' }).catch(() => null) ?? Promise.resolve(null)
@@ -650,6 +649,7 @@ export class MobileService {
       syncToken,
       snapshot: 'full',
       schemaVersion: 1,
+      inventoryCatalogVersion: (offlineInventoryCatalog as any)?.catalogVersion,
       mobileCapabilities: user.permissions.filter((code) => code.startsWith('mobile.')),
       references: {
         currencies,

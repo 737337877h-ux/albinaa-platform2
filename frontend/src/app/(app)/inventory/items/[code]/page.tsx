@@ -9,6 +9,7 @@ import { DataState, PermissionNotice } from '@/components/ui/data-state';
 import { Badge, Card, StatCard } from '@/components/ui/primitives';
 import { Table, TD, THead, TRow } from '@/components/ui/table';
 import { api } from '@/lib/api';
+import { usePublishedInventoryVersion } from '@/lib/use-published-inventory-version';
 import { useCan } from '@/lib/auth';
 import { inventoryNumber, OracleItemDetail } from '@/lib/oracle-inventory';
 
@@ -21,10 +22,11 @@ function priceList(rows: Array<{ currencyCode: string; price: string; unitName?:
 export default function InventoryItemDetailPage() {
   const can = useCan();
   const allowed = can('inventory.read');
+  const catalogVersion = usePublishedInventoryVersion(allowed);
   const params = useParams<{ code: string }>();
   const code = decodeURIComponent(String(params.code));
   const detail = useQuery<OracleItemDetail>({
-    queryKey: ['oracle-inventory-item', code],
+    queryKey: ['oracle-inventory-item', code, catalogVersion],
     queryFn: () => api(`/oracle-inventory/items/${encodeURIComponent(code)}`),
     enabled: allowed && !!code,
   });

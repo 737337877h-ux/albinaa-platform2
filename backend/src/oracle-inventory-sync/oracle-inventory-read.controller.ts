@@ -19,6 +19,12 @@ import { OracleInventoryReadService } from './oracle-inventory-read.service';
 export class OracleInventoryReadController {
   constructor(private readonly inventory: OracleInventoryReadService) {}
 
+  @Get('catalog-version')
+  @ApiOperation({ summary: 'Published inventory catalog revision without loading the catalog' })
+  catalogVersion(@CurrentUser() actor: AuthUser, @Query() query: OracleInventorySourceQueryDto) {
+    return this.inventory.catalogVersion(actor, query.sourceSchema);
+  }
+
   @Get('summary')
   @ApiOperation({ summary: 'Published Oracle inventory snapshot summary (read only)' })
   summary(@CurrentUser() actor: AuthUser, @Query() query: OracleInventorySourceQueryDto) {

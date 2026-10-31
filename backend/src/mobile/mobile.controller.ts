@@ -136,19 +136,19 @@ export class MobileController {
   @Post('sync')
   @ApiOperation({ summary: 'مزامنة كاملة للجوال' })
   sync(@CurrentUser() user: AuthUser, @Body() dto: SyncRequestDto) {
-    return this.mobile.sync(user, dto.lastSyncToken);
+    return this.mobile.sync(user, dto.lastSyncToken, false, false, dto.inventoryCatalogVersion);
   }
 
   @Post('operations-sync')
   @ApiOperation({ summary: 'مزامنة تطبيق العمليات دون أرصدة أو نشاط التحصيل' })
   operationsSync(@CurrentUser() user: AuthUser, @Body() dto: SyncRequestDto) {
-    return this.mobile.sync(user, dto.lastSyncToken, true);
+    return this.mobile.sync(user, dto.lastSyncToken, true, false, dto.inventoryCatalogVersion);
   }
 
   @Post('collection-sync')
   @ApiOperation({ summary: 'مزامنة التحصيل دون المخزون والحجوزات' })
   collectionSync(@CurrentUser() user: AuthUser, @Body() dto: SyncRequestDto) {
-    return this.mobile.sync(user, dto.lastSyncToken, false, true);
+    return this.mobile.sync(user, dto.lastSyncToken, false, true, dto.inventoryCatalogVersion);
   }
 
   @Post('heartbeat')

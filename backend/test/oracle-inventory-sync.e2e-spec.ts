@@ -79,7 +79,7 @@ describe('Oracle inventory snapshot loader (isolated database)', () => {
     await expect(prisma.oracleItemMirror.count({ where: { syncRunId: first.syncRunId! } })).resolves.toBe(1);
     await expect(prisma.oracleItemUnitMirror.count({ where: { syncRunId: first.syncRunId! } })).resolves.toBe(1);
     await expect(prisma.oracleStockBalanceMirror.count({ where: { syncRunId: first.syncRunId! } })).resolves.toBe(1);
-    await expect(prisma.oracleInventoryActiveSnapshot.count()).resolves.toBe(0);
+    await expect(prisma.oracleInventoryActiveSnapshot.count({ where: { organizationId: organization.id } })).resolves.toBe(0);
 
     const validation = await publication.validate(first.syncRunId!);
     expect(validation).toMatchObject({ passed: true, errorCount: 0, warningCount: 1 });
@@ -128,15 +128,28 @@ describe('Oracle inventory snapshot loader (isolated database)', () => {
       items: [{ externalItemCode: 'ITEM-1', availableQuantity: '25.5' }],
     });
 
+    const firstCatalog = await reader.offlineReferenceCatalog(actor, 'IAS20261');
+    const renamedItems = (await fs.readFile(path.join(snapshotDirectory, 'items.csv'), 'utf8')).replace('صنف اختبار', 'اسم الصنف الجديد');
+    await fs.writeFile(path.join(snapshotDirectory, 'items.csv'), renamedItems, 'utf8');
+    const renamedManifest = JSON.parse(await fs.readFile(path.join(snapshotDirectory, 'manifest.json'), 'utf8'));
+    renamedManifest.files.find((file: { file: string }) => file.file === 'items.csv').sha256 = sha256(renamedItems);
+    await fs.writeFile(path.join(snapshotDirectory, 'manifest.json'), JSON.stringify(renamedManifest), 'utf8');
     const second = await loader.run({ snapshotDirectory, organizationId: organization.id, apply: true });
     const secondPublication = await publication.publish(second.syncRunId!);
     expect(secondPublication).toMatchObject({ published: true, previousRunId: first.syncRunId });
+    const renamedCatalog = await reader.offlineReferenceCatalog(actor, 'IAS20261', firstCatalog.catalogVersion);
+    expect(renamedCatalog.catalogVersion).not.toBe(firstCatalog.catalogVersion);
+    expect((renamedCatalog as any).items[0].nameAr).toBe('اسم الصنف الجديد');
+    expect(await reader.offlineReferenceCatalog(actor, 'IAS20261', renamedCatalog.catalogVersion)).not.toHaveProperty('items');
     await expect(prisma.oracleInventoryActiveSnapshot.findUnique({
       where: { organizationId_sourceSchema: { organizationId: organization.id, sourceSchema: 'IAS20261' } },
     })).resolves.toMatchObject({ activeRunId: second.syncRunId, previousRunId: first.syncRunId });
 
     const rollback = await publication.rollbackToPrevious(organization.id, 'IAS20261');
     expect(rollback).toMatchObject({ fromRunId: second.syncRunId, toRunId: first.syncRunId });
+    const restoredCatalog = await reader.offlineReferenceCatalog(actor, 'IAS20261', renamedCatalog.catalogVersion);
+    expect(restoredCatalog.catalogVersion).toBe(firstCatalog.catalogVersion);
+    expect((restoredCatalog as any).items[0].nameAr).toBe('صنف اختبار');
     await expect(prisma.oracleInventoryActiveSnapshot.findUnique({
       where: { organizationId_sourceSchema: { organizationId: organization.id, sourceSchema: 'IAS20261' } },
     })).resolves.toMatchObject({ activeRunId: first.syncRunId, previousRunId: second.syncRunId });

@@ -13,6 +13,7 @@ import {
   markOfflineRequestResult, removeMutation, retryBlockedMutations, retryPendingMutationsNow, saveGpsPoint,
 } from '../db/database';
 import { useAuth } from './auth-context';
+import { useQueryClient } from '@tanstack/react-query';
 import { SYNC_INTERVAL_MS } from '../utils/constants';
 import {
   getLanOnlySync, prepareOnlineRoute,
@@ -179,6 +180,7 @@ async function executeQueuedRequest(client: any, mutation: any, rawPayload: any)
 }
 
 export function SyncProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const { isAuthenticated, refreshUser } = useAuth();
   const [status, setStatus] = useState<SyncStatus>(INITIAL_STATUS);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -274,6 +276,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       const data = response.data;
       stage('حفظ البيانات على الهاتف');
       await applySyncSnapshot({
+        inventoryCatalogVersion: data.inventoryCatalogVersion,
         customers: data.customers || [],
         tasks: data.tasks || [],
         followups: data.followups || [],
@@ -284,6 +287,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         newDebt: data.newDebt ?? null,
         customerAlerts: data.customerAlerts ?? null,
       }, data.syncToken);
+      // Also refresh an open screen after a background task replaced SQLite.
+      void queryClient.invalidateQueries({ predicate: query =>
+        String(query.queryKey[0]).startsWith('mobile-inventory-') || query.queryKey[0] === 'barcode-items',
+      });
       // طلبات العملاء مرآة قراءة مستقلة وكاملة. فشل صلاحيتها لا يمنع
       // مزامنة العملاء والمهام، وتبقى آخر لقطة محلية قابلة للاستخدام.
       if (isOperationsApp) {
@@ -322,7 +329,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     } finally {
       syncingRef.current = false;
     }
-  }, [isAuthenticated, processQueue, refreshUser, syncGps]);
+  }, [isAuthenticated, processQueue, queryClient, refreshUser, syncGps]);
 
   const retryBlocked = useCallback(async () => {
     await retryBlockedMutations();

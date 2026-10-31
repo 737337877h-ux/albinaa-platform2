@@ -10,6 +10,7 @@ import {
   getInventorySummaryOffline,
   getReferenceOptions,
   hasInventoryCatalogOffline,
+  getMeta,
   mergeReferenceOptions,
   replaceReferenceOptions,
   searchInventoryItemsOffline,
@@ -22,6 +23,7 @@ export interface SyncResponse {
   serverTime: string;
   snapshot: 'full';
   schemaVersion: number;
+  inventoryCatalogVersion?: string;
   tasks: any[];
   customers: any[];
   followups: any[];
@@ -69,12 +71,14 @@ export interface ReservationUnit {
 export async function fetchSync(lastSyncToken?: string) {
   const client = await getClient();
   const startedAt = Date.now();
+  const inventoryCatalogVersion = await hasInventoryCatalogOffline()
+    ? (await getMeta('inventoryCatalogVersion') || undefined) : undefined;
   // The first offline snapshot includes the complete Oracle item/unit catalog.
   // It is intentionally larger than ordinary API calls and can exceed the
   // client's 15-second default while still progressing normally on the LAN.
   const response = await client.post<SyncResponse>(
     isOperationsApp ? '/mobile/operations-sync' : '/mobile/collection-sync',
-    { lastSyncToken },
+    { lastSyncToken, inventoryCatalogVersion },
     { timeout: 90_000 },
   );
   const key = 'albinaa.device-id';

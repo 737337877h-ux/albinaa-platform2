@@ -27,6 +27,18 @@ describe('mobile sync without collector assignment', () => {
     expect(prisma.paymentPromise.findMany).toHaveBeenCalledWith(expect.objectContaining({where:{collectorId:'collector'}}));
     expect(prisma.task.findMany).toHaveBeenCalledWith(expect.objectContaining({where:expect.objectContaining({assignedTo:'collector',customer:{organizationId:'org'}})}));
   });
+  it('checks the catalog revision even after a recent general sync and retains the supplied version', async () => {
+    const { service } = setup();
+    const inventory = {
+      offlineReferenceCatalog: jest.fn().mockResolvedValue({ catalogVersion: 'new-catalog', warehouses: [], items: [{ externalItemCode: 'i', nameAr: 'New name' }] }),
+      summary: jest.fn().mockResolvedValue(null),
+    };
+    (service as any).oracleInventory = inventory;
+    const result = await service.sync({ ...user, permissions: ['mobile.inventory.view'] }, new Date().toISOString(), true, false, 'old-catalog');
+    expect(inventory.offlineReferenceCatalog).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'org' }), 'IAS20261', 'old-catalog');
+    expect(result.inventoryCatalogVersion).toBe('new-catalog');
+    expect(result.references.oracleItems?.[0].nameAr).toBe('New name');
+  });
   it('retains organization-wide access only for explicitly permitted users',async()=>{
     const {prisma,service}=setup();await service.sync({...user,permissions:[...permissions,'customers.read_all']});
     expect(prisma.paymentPromise.findMany).toHaveBeenCalledWith(expect.objectContaining({where:{customer:{organizationId:'org'}}}));
