@@ -5,7 +5,8 @@ const { spawnSync } = require('node:child_process');
 const { loadConfig } = require('../src/config');
 
 // Existing movement fingerprints include the CSV text of decimal values.
-// Keep the established provider/format; .937 vs 0.937 must not republish history.
+// Preserve the established CSV format while buffering OCI reads. Different
+// decimal text must never make historical movements appear new.
 // The identity and Oracle read-only transaction are checked in the child too.
 function invocation(config, outputRoot, windowsRoot) {
   if (config.user !== 'ALBINAA_RO' || config.defaultSchema !== 'IAS20261') {
@@ -13,11 +14,8 @@ function invocation(config, outputRoot, windowsRoot) {
   }
   if (!outputRoot || !windowsRoot) throw new Error('Output directory and Windows directory are required');
   return {
-    executable: path.join(windowsRoot, 'SysWOW64/WindowsPowerShell/v1.0/powershell.exe'),
-    args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-      path.resolve(__dirname, '../../integrations/oracle-movements-readonly/Invoke-OracleMovementSnapshot.ps1'),
-      '-OutputRoot', path.resolve(outputRoot), '-OracleUser', 'ALBINAA_RO',
-      '-OracleAlias', config.connectString, '-JsonResult'],
+    executable: process.execPath,
+    args: [path.join(__dirname, 'export-buffered-movement-snapshot.js'), path.resolve(outputRoot)],
   };
 }
 
@@ -26,10 +24,10 @@ async function exportWithRetry(command, environment, password, dependencies = {}
   const now = dependencies.now || Date.now;
   const delay = dependencies.delay || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const log = dependencies.log || ((message) => process.stderr.write(`${message}\n`));
-  const deadline = now() + 420000;
+  const deadline = now() + 900000;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const remaining = deadline - now();
-    if (remaining <= 0) throw new Error('Compatible movement export exceeded its 420-second total budget');
+    if (remaining <= 0) throw new Error('Compatible movement export exceeded its 900-second total budget');
     const result = run(command.executable, command.args, {
       env: environment, encoding: 'utf8', windowsHide: true,
       timeout: remaining, maxBuffer: 4 * 1024 * 1024,
@@ -40,7 +38,7 @@ async function exportWithRetry(command, environment, password, dependencies = {}
       log(`Movement export completed on attempt ${attempt}`);
       return summary;
     }
-    const message = String(result.stderr || result.error?.message || 'Compatible movement export failed')
+    const message = [result.error?.message, result.stderr || (result.error ? '' : 'Compatible movement export failed')].filter(Boolean).join('\n')
       .split(password).join('[REDACTED]');
     // Retry the entire read-only transaction, never resume a partial CSV.
     // Permission, SQL, identity, serialization and process-timeout errors fail closed.
@@ -61,6 +59,11 @@ async function main() {
   const config = loadConfig().oracle;
   const command = invocation(config, process.argv[2], process.env.SystemRoot || process.env.WINDIR);
   const environment = { ...process.env, ALBINAA_ORACLE_PASSWORD: config.password };
+  // Pass the validated connection configuration privately, never on argv.
+  environment.ALBINAA_ORACLE_EXPORT_CONFIG = JSON.stringify({
+    user: config.user, password: config.password, connectString: config.connectString,
+    clientLibDir: config.clientLibDir, defaultSchema: config.defaultSchema,
+  });
   for (const key of ['ORACLE_PASSWORD', 'ORACLE_PASSWORD_BASE64', 'ORACLE_READ_API_KEY', 'ORACLE_READ_API_KEYS']) delete environment[key];
   // Let Windows PowerShell discover its own compatible modules, not pwsh 7's.
   delete environment.PSModulePath;
@@ -69,6 +72,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify(summary)}\n`);
   } finally {
     delete environment.ALBINAA_ORACLE_PASSWORD;
+    delete environment.ALBINAA_ORACLE_EXPORT_CONFIG;
   }
 }
 

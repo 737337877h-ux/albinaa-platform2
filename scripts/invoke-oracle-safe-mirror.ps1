@@ -136,9 +136,9 @@ try {
       if ($part -eq 'customers') { $argsForExport += $part }
       $argsForExport += $outputRoot
       # The legacy 32-bit provider is slower immediately after resume. The
-      # movement exporter has its own 420-second hard limit; leave enough time
+      # movement exporter has its own 900-second hard limit; leave enough time
       # for it while retaining the shorter bound for customer/inventory reads.
-      $extractSeconds = if ($part -eq 'movements') { 480 } else { 240 }
+      $extractSeconds = if ($part -eq 'movements') { 960 } else { 240 }
       $snapshot = Child $argsForExport "extract-$part" $extractSeconds
       $directory = [IO.Path]::GetFullPath($snapshot.directory)
       if (-not $directory.StartsWith(([IO.Path]::GetFullPath($outputRoot).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)) { throw 'Snapshot outside its expected directory' }

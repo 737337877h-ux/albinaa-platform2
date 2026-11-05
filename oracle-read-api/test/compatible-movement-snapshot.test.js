@@ -8,10 +8,10 @@ const { invocation, exportWithRetry } = require('../scripts/export-compatible-mo
 test('uses the existing decimal serializer with explicit read-only identity', () => {
   const config = { user: 'ALBINAA_RO', defaultSchema: 'IAS20261', password: 'not-on-command-line', connectString: '(DESCRIPTION=test)' };
   const result = invocation(config, 'test-snapshots', 'C:/Windows');
-  assert.match(result.executable.replaceAll('\\', '/'), /SysWOW64\/WindowsPowerShell/);
-  assert.ok(result.args.includes('ALBINAA_RO'));
-  assert.ok(result.args.includes('-JsonResult'));
-  assert.ok(result.args.includes(config.connectString));
+  assert.equal(result.executable, process.execPath);
+  assert.match(result.args[0], /export-buffered-movement-snapshot\.js$/);
+  assert.equal(result.args[1], path.resolve('test-snapshots'));
+  assert.ok(!JSON.stringify(result).includes(config.connectString));
   assert.ok(!JSON.stringify(result).includes(config.password));
 });
 
@@ -42,7 +42,7 @@ test('retries a failed read transaction and returns only the complete successful
   });
   assert.equal(calls, 2);
   assert.equal(summary.directory, 'complete');
-  assert.deepEqual(timeouts, [420000, 388000]);
+  assert.deepEqual(timeouts, [900000, 868000]);
   assert.ok(logs.join('\n').includes('[REDACTED]'));
   assert.ok(!logs.join('\n').includes('secret'));
 });
@@ -75,10 +75,23 @@ test('does not retry malformed successful output or extend the total deadline', 
   let calls = 0, clock = 0;
   await assert.rejects(exportWithRetry({ executable: 'test', args: [] }, {}, 'secret', {
     now: () => clock, log: () => {},
-    run: () => { calls++; clock = 420000; return { status: 1, stderr: 'ORA-03113: connection lost' }; },
+    run: () => { calls++; clock = 900000; return { status: 1, stderr: 'ORA-03113: connection lost' }; },
   }), /ORA-03113/);
   assert.equal(calls, 1);
   await assert.rejects(exportWithRetry({ executable: 'test', args: [] }, {}, 'secret', {
     run: () => ({ status: 0, stdout: '{"directory":"partial"}' }),
   }), /Incomplete/);
+});
+
+test('accepts a complete slow export beyond the old seven-minute cutoff', async () => {
+  let clock = 0;
+  const summary = await exportWithRetry({ executable: 'test', args: [] }, {}, 'secret', {
+    now: () => clock, log: () => {},
+    run: (_exe, _args, options) => {
+      assert.equal(options.timeout, 900000);
+      clock += 480000;
+      return { status: 0, stdout: JSON.stringify({ directory: 'complete', counts: { customer_movements: 13000, inventory_movements: 85000 } }) };
+    },
+  });
+  assert.equal(summary.counts.customer_movements, 13000);
 });
