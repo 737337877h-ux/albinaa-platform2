@@ -35,7 +35,8 @@ export class OracleAdvanceLedgerService implements OnModuleInit, OnModuleDestroy
         const user = await this.prisma.user.findFirst({ where: { id: job.uploadedBy, organizationId: job.organizationId, isActive: true } });
         if (!user) continue;
         try {
-          const result = await this.sync({ ...user, roles: [], permissions: [] }, false, true);
+          // Opt-in is scoped to the organization; new Oracle advances must also be reconciled and discovered.
+          const result = await this.sync({ ...user, roles: [], permissions: [] }, false);
           this.logger.log(`Advance sync ${job.organizationId}: ${result.status}; updated=${result.balancesUpdated}; skipped=${result.issues.length}`);
           if (result.issues.length) this.logger.warn(JSON.stringify(result.issues));
         } catch (error) { this.logger.warn(`Advance sync ${job.organizationId} failed: ${error instanceof Error ? error.message : 'unknown'}`); }

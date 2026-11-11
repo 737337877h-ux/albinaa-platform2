@@ -76,3 +76,70 @@ describe('reviewed Oracle opening reconciliation', () => {
     expect(() => reconcileApprovedAdvanceOpening({ ...report(), total: 2 }, 11635000, approval)).toThrow('Incomplete');
   });
 });
+
+describe('scheduled advance discovery', () => {
+  const priorSchema = process.env.ORACLE_READ_SCHEMA;
+  const priorEnabled = process.env.ORACLE_ADVANCE_SYNC_ENABLED;
+
+  beforeEach(() => {
+    process.env.ORACLE_READ_SCHEMA = 'IAS20261';
+    process.env.ORACLE_ADVANCE_SYNC_ENABLED = 'true';
+  });
+  afterEach(() => {
+    if (priorSchema === undefined) delete process.env.ORACLE_READ_SCHEMA;
+    else process.env.ORACLE_READ_SCHEMA = priorSchema;
+    if (priorEnabled === undefined) delete process.env.ORACLE_ADVANCE_SYNC_ENABLED;
+    else process.env.ORACLE_ADVANCE_SYNC_ENABLED = priorEnabled;
+  });
+
+  function setup(registered = true) {
+    const db = {
+      importJob: { findMany: jest.fn().mockResolvedValue(registered ? [{ organizationId: 'org', uploadedBy: 'importer' }] : []) },
+      user: { findFirst: jest.fn().mockResolvedValue({ id: 'importer', organizationId: 'org', isActive: true }) },
+      systemSetting: { findUnique: jest.fn().mockResolvedValue(null) },
+      currency: { findMany: jest.fn().mockResolvedValue([{ code: 'USD' }, { code: 'YER' }]) },
+      customer: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const rows = [
+      { accountNumber: '20060', nameAr: 'New USD advance', sourceAccountCode: '113101002', analyticalType: 5, currencyCode: 'USD', balance: 500.09 },
+      { accountNumber: '20061', nameAr: 'New YER advance', sourceAccountCode: '113101002', analyticalType: 5, currencyCode: 'YER', balance: 350000 },
+    ];
+    const reader = { read: jest.fn().mockResolvedValue({ schema: 'IAS20261', accounts: rows }) };
+    const statements = { read: jest.fn().mockImplementation(async (account) => {
+      const source = rows.find(row => row.accountNumber === account.accountNumber)!;
+      return { ...report(), currency: source.currencyCode, openingBalance: 0, periodStartBalance: 0,
+        periodEndBalance: source.balance, totalDebit: source.balance,
+        items: [{ ...report().items[0], debit: source.balance, runningBalance: source.balance }] };
+    }) };
+    const service = new OracleAdvanceLedgerService(db as any, reader as any, statements as any);
+    const publish = jest.spyOn(service, 'publish').mockResolvedValue({ unchanged: false, created: true });
+    return { db, reader, statements, service, publish };
+  }
+
+  it('reconciles and publishes new advances in both currencies for an opted-in organization', async () => {
+    const { db, statements, service, publish } = setup();
+    await service.refreshRegistered();
+    expect(statements.read.mock.calls.map(([account]) => account.accountNumber)).toEqual(['20060', '20061']);
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(publish.mock.calls.map(call => [call[1], call[4].currency, call[4].periodEndBalance]))
+      .toEqual([['20060', 'USD', 500.09], ['20061', 'YER', 350000]]);
+    expect(db.customer.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { organizationId: 'org', customerType: 'advance', mergedIntoId: null },
+    }));
+  });
+
+  it('does not read or publish Oracle advances for an organization without a previous import', async () => {
+    const { reader, service, publish } = setup(false);
+    await service.refreshRegistered();
+    expect(reader.read).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('does not publish a newly discovered account when its statement fails reconciliation', async () => {
+    const { statements, service, publish } = setup();
+    statements.read.mockImplementation(async () => report());
+    await service.refreshRegistered();
+    expect(statements.read).toHaveBeenCalledTimes(2);
+    expect(publish).not.toHaveBeenCalled();
+  });
+});
