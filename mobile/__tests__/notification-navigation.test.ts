@@ -1,6 +1,11 @@
 import {describe,test,expect} from '@jest/globals';
 import {notificationNavigationTarget as target} from '../src/utils/notification-navigation';
 describe('notification destinations',()=>{
+ test('collector nudge opens the assigned customer, staff messages remain shared',()=>{
+  expect(target('customer_followup_reminder',{customerId:'c1'})).toEqual({route:'Customer360',params:{id:'c1'}});
+  expect(target('staff_broadcast').route).toBe('Notifications');
+  expect(target('staff_inactivity').route).toBe('Main');
+ });
  test.each(['assigned','returned','completed','cancelled'])('HR task %s opens employee work, never collection tasks',event=>expect(target('hr_task_'+event,{taskId:'t',assignmentId:'a'})).toEqual({route:'HrTasks',params:{taskId:'t',assignmentId:'a'}}));
  test('submission opens the manager review screen',()=>expect(target('hr_task_submitted',{taskId:'t',assignmentId:'a',reviewerEvent:true}).route).toBe('HrTaskReview'));
  test.each(['advance','leave'])('request %s routes reviewer and employee separately',requestKind=>{expect(target('hr_request_submitted',{requestKind,reviewerEvent:true}).route).toBe('HrRequestReview');expect(target('hr_request_decided',{requestKind,reviewerEvent:false}).route).toBe('HrRequests');});

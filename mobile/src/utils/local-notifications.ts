@@ -89,7 +89,7 @@ export function buildReminderPlan(
   const soon = new Date(now.getTime() + 10_000);
   const overdueTasks = tasks.filter((task) => {
     const due = dateOnlyAtLocalHour(task.dueDate, 9);
-    return task.status !== 'completed' && due && due.getTime() < now.getTime();
+    return !['completed','done','pending_completion','cancelled'].includes(task.status) && due && due.getTime() < now.getTime();
   });
 
   if (overdueTasks.length > 0) {
@@ -104,7 +104,7 @@ export function buildReminderPlan(
 
   const futureTasks = tasks
     .map((task) => ({ task, at: dateOnlyAtLocalHour(task.dueDate, 9) }))
-    .filter((entry) => entry.task.status !== 'completed' && entry.at && entry.at.getTime() >= now.getTime())
+    .filter((entry) => !['completed','done','pending_completion','cancelled'].includes(entry.task.status) && entry.at && entry.at.getTime() >= now.getTime())
     .sort((a, b) => a.at!.getTime() - b.at!.getTime())
     .slice(0, 25);
   for (const { task, at } of futureTasks) {
@@ -118,7 +118,7 @@ export function buildReminderPlan(
   }
 
   const duePromises = promises
-    .filter((promise) => !['fulfilled', 'cancelled'].includes(promise.status))
+    .filter((promise) => !['fulfilled', 'cancelled','cancelled_approved'].includes(promise.status))
     .map((promise) => ({ promise, at: dateOnlyAtLocalHour(promise.dueDate, 8) }))
     .filter((entry) => entry.at && entry.at.getTime() >= now.getTime())
     .sort((a, b) => a.at!.getTime() - b.at!.getTime())

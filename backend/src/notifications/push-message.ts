@@ -1,4 +1,6 @@
 export function pushMessage(kind: string, payload: Record<string, unknown>) {
+    if(kind==='staff_broadcast'||kind==='staff_inactivity')return {title:String(payload.title??'رسالة من الإدارة'),body:String(payload.message??'افتح التطبيق للاطلاع على الرسالة')};
+    if(kind==='customer_followup_reminder')return {title:'تذكير بمتابعة عميل',body:String(payload.message??`يرجى متابعة العميل ${payload.customerName??''}`)};
     const customerName = typeof payload.customerName === 'string' ? payload.customerName : '';
     if (kind === 'finance_alert' && payload.event === 'financial_adjustment_requested') {
       const type = payload.requestType === 'settlement' ? 'تصفية' : 'خصم';

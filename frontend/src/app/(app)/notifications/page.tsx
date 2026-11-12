@@ -13,6 +13,7 @@ import { DataState } from '@/components/ui/data-state';
 import { toast } from '@/components/ui/toast';
 import { Badge, Button, Card, Pagination } from '@/components/ui/primitives';
 import { isFinancialAdjustmentEvent } from '@/lib/financial-adjustment';
+import {StaffBroadcastButton} from '@/components/staff-messages';
 
 /* ────────────────────────────── Types ────────────────────────────────── */
 
@@ -85,6 +86,7 @@ export default function NotificationsPage() {
         title="الإشعارات"
         action={
           <div className="flex items-center gap-2">
+            <StaffBroadcastButton/>
             <Button
               variant="secondary"
               onClick={toggleUnreadOnly}

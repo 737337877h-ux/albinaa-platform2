@@ -11,8 +11,8 @@ android.defaultConfig {
     manifestPlaceholders.alraqiRoundIcon = operations ? '@mipmap/operations_launcher' : '@mipmap/ic_launcher_round'
     if (operations) {
         applicationId 'com.alraqi.operations'
-        versionCode 13
-        versionName '1.0.12'
+        versionCode 14
+        versionName '1.0.13'
     }
 }
 

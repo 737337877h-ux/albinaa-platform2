@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { useMe, useCan, useLogout } from '@/lib/auth';
+import {StaffMessagePopup} from './staff-messages';
 import { api, ApiError, tokenStore } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { brandingFromOrganization, OrganizationBrandSource } from '@/lib/branding';
@@ -351,7 +352,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         )}
 
-        <main className="min-w-0 flex-1 px-4 py-5 pb-24 lg:px-6 lg:pb-8">{children}</main>
+        <main className="min-w-0 flex-1 px-4 py-5 pb-24 lg:px-6 lg:pb-8"><StaffMessagePopup/>{children}</main>
 
         <nav
           aria-label="التنقل السريع"

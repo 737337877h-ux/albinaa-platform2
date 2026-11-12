@@ -3,6 +3,7 @@ import { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
+import {Idempotent} from '../common/decorators/idempotent.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { CompleteTaskDto } from './dto/complete-task.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
@@ -85,6 +86,7 @@ export class TasksController {
   }
 
   @Post(':id/complete')
+  @Idempotent('user')
   @RequirePermissions('tasks.manage')
   @ApiOperation({
     summary: 'إكمال مهمة مع تسجيل متابعة ونتيجة — وعند result=promise يُنشأ وعد سداد. ' +

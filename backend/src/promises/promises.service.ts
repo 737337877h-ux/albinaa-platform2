@@ -186,6 +186,19 @@ export class PromisesService {
     return promise;
   }
 
+  async completeVerified(actor:AuthUser,id:string){
+    if(!actor.permissions.includes('promises.create'))throw new ForbiddenException('لا تملك صلاحية إكمال الوعد');
+    const before=await this.findOne(actor,id);
+    if(before.status==='fulfilled')return {completed:true,status:before.status,remainingAmount:0};
+    if(before.status==='cancelled_approved')throw new BadRequestException('الوعد ملغى؛ لا يمكن إثبات الوفاء به');
+    if(!this.settlement)throw new BadRequestException('خدمة مطابقة التحصيل غير متاحة؛ لم تتغير حالة الوعد');
+    const options={customerIds:[before.customerId],promiseIds:[id],actorId:actor.id,maxChanges:1};
+    const preview=await this.settlement.reconcileForOrganization(actor.organizationId,{...options,dryRun:true});
+    if(preview.changes.length)await this.settlement.reconcileForOrganization(actor.organizationId,{...options,dryRun:false,expectedPlanHash:preview.planHash});
+    const after=await this.findOne(actor,id);
+    return {completed:after.status==='fulfilled',status:after.status,remainingAmount:Math.max(0,Number(after.expectedAmount)-Number(after.fulfilledAmount??0))};
+  }
+
   async findAll(user: AuthUser, q: QueryPromisesDto) {
     const page = q.page ?? 1;
     const limit = q.limit ?? 25;

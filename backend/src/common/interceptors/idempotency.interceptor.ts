@@ -15,7 +15,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
   ) {}
 
   intercept(ctx: ExecutionContext, next: CallHandler): Observable<any> {
-    const isIdempotent = this.reflector.getAllAndOverride<boolean>(IDEMPOTENT_KEY, [
+    const isIdempotent = this.reflector.getAllAndOverride<boolean | 'user'>(IDEMPOTENT_KEY, [
       ctx.getHandler(),
       ctx.getClass(),
     ]);
@@ -26,7 +26,9 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
     if (!idempotencyKey) return next.handle();
 
-    const compositeKey = `${req.method}:${req.path}:${idempotencyKey}`;
+    const actor = (req as Request & {user?: {id:string;organizationId:string}}).user;
+    const scope = isIdempotent === 'user' ? `${actor?.organizationId}:${actor?.id}:` : '';
+    const compositeKey = `${scope}${req.method}:${req.path}:${idempotencyKey}`;
 
     return from(
       this.prisma.idempotencyKey.findUnique({ where: { key: compositeKey } }),

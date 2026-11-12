@@ -34,9 +34,10 @@ export class NotificationsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('application') application?: string,
+    @Query('kind') kind?: string,
   ) {
     return this.notifications.listMine(
-      user, unreadOnly === 'true', Number(page ?? 1), Number(limit ?? 25), application,
+      user, unreadOnly === 'true', Number(page ?? 1), Number(limit ?? 25), application,kind,
     );
   }
 

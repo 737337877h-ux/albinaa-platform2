@@ -32,5 +32,5 @@ export function canOpenOperationsRoute(route: string, permissions: readonly stri
 export const operationsDocumentKinds = ['customer_order', 'quotation', 'purchase', 'inventory_transfer', 'inventory_count'];
 export function isOperationsNotification(kind: string): boolean {
   return kind.startsWith('hr_') || kind.startsWith('inventory_') || kind.startsWith('quotation_')
-    || kind.startsWith('sales_order_') || kind.startsWith('purchase_') || kind === 'sync_failed';
+    || kind.startsWith('sales_order_') || kind.startsWith('purchase_') || kind === 'sync_failed' || kind==='staff_broadcast' || kind==='staff_inactivity';
 }

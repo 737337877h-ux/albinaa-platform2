@@ -8,6 +8,7 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchNotifications, markNotificationRead, markAllNotificationsRead } from '../api/endpoints';
 import Loading from '../components/loading';
+import StaffBroadcastComposer from '../components/staff-broadcast-composer';
 import { colors, radius, shadow } from '../theme';
 import { notificationNavigationTarget } from '../utils/notification-navigation';
 
@@ -26,6 +27,7 @@ interface NotificationsResponse {
 }
 
 const KIND_LABELS: Record<string, string> = {
+  customer_followup_reminder:'تذكير بمتابعة عميل',staff_broadcast:'رسالة من الإدارة',staff_inactivity:'تذكير بالنشاط',
   followup_due: 'متابعة مستحقة',
   promise_due: 'وعد سداد مستحق',
   promise_overdue: 'وعد سداد متأخر',
@@ -65,6 +67,7 @@ function extractNotifications(payload: NotificationsResponse | NotificationItem[
 }
 
 function formatTitle(item: NotificationItem): string {
+  if(item.kind.startsWith('staff_'))return String(item.payload?.title??'رسالة من الإدارة');
   if (item.payload?.diagnostic === true) return String(item.payload.title ?? 'إشعار اختبار');
   if((item.kind.startsWith('hr_request_')||item.kind.startsWith('hr_task_')))return String(item.payload?.title??'طلب موظف');
   const kind = kindLabel(item);
@@ -79,6 +82,7 @@ function formatTitle(item: NotificationItem): string {
 }
 
 function formatBody(item: NotificationItem): string {
+  if(item.kind.startsWith('staff_')||item.kind==='customer_followup_reminder')return String(item.payload?.message??'');
   const p = item.payload || {};
   if (p.diagnostic === true) return String(p.message ?? 'إشعار اختبار فقط');
   if((item.kind.startsWith('hr_request_')||item.kind.startsWith('hr_task_')))return String(p.message??'راجع الطلب');
@@ -104,6 +108,7 @@ function getNavigationTarget(item: NotificationItem): { route: string; params: R
 }
 
 export default function NotificationsScreen() {
+  const [compose,setCompose]=React.useState(false);
   const permissions = useAuth().user?.permissions ?? [];
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -147,6 +152,8 @@ export default function NotificationsScreen() {
 
   return (
     <View style={styles.container}>
+      {compose&&<StaffBroadcastComposer onClose={()=>{setCompose(false);void refetch();}}/>}
+      {permissions.includes('notifications.broadcast')&&<TouchableOpacity onPress={()=>setCompose(true)} style={{padding:14,margin:12,backgroundColor:colors.primary,borderRadius:12}}><Text style={{color:'#fff',fontFamily:'TajawalBold',textAlign:'center'}}>إرسال رسالة جماعية للموظفين</Text></TouchableOpacity>}
       <View style={styles.header}>
         <Text style={styles.headerText}>
           {notifications.length} إشعار — {unreadCount} غير مقروء

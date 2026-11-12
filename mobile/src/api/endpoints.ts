@@ -2,7 +2,7 @@ import {inventoryCostAccess} from '../utils/inventory-cost-access';
 import { isOperationsApp } from '../config/product';
 import {getCachedUser} from '../utils/secure-storage';
 import { getClient } from './client';
-import { Platform } from 'react-native';
+import { AppState,Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import {
@@ -94,6 +94,7 @@ export async function fetchSync(lastSyncToken?: string) {
     appVersion: Constants.expoConfig?.version || '1.3.18',
     lastSyncedAt: new Date().toISOString(),
     responseMs: Date.now() - startedAt,
+    foreground:AppState.currentState==='active',
   }).catch(() => undefined);
   return response;
 }

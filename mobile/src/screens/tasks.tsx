@@ -10,6 +10,7 @@ import { collapseTasksByCustomer, taskDateKey, isDailyPriority, todayTaskViews }
 import { useAuth } from '../store/auth-context';
 import { canUseMobileFeature } from '../utils/mobile-permissions';
 import {customerEngagementIds, hasNoRecordedFollowup, totalActionableDebtorBalance} from '../utils/customer';
+import TaskCompletionSheet from '../components/task-completion-sheet';
 
 type TaskFilter = 'today' | 'scheduled' | 'overdue' | 'never_followed';
 const taskFilter = (value: unknown): TaskFilter => value === 'stored' || value === 'scheduled' ? 'scheduled' : value === 'overdue' ? 'overdue' : value === 'never_followed' ? 'never_followed' : 'today';
@@ -19,6 +20,7 @@ const FILTER_LABELS: Record<TaskFilter, string> = {
 };
 
 export default function TasksScreen({ navigation, route }: any) {
+  const [completing,setCompleting]=React.useState<any>(null);
   const [localTasks, setLocalTasks] = React.useState<any[]>([]);
   const [unfollowedAccounts, setUnfollowedAccounts] = React.useState<any[]>([]);
   const load = React.useCallback(async () => {
@@ -101,12 +103,14 @@ export default function TasksScreen({ navigation, route }: any) {
           {item.dueDate ? displayDateFromIso(String(item.dueDate).slice(0, 10)) : ''}
         </Text>
         <Text style={styles.taskType}>{item.neverFollowed ? 'دون متابعة' : taskLabel(item.taskType || item.priority)}</Text>
+        {!item.neverFollowed && user?.permissions?.includes('tasks.manage') && <TouchableOpacity accessibilityLabel="إتمام المهمة وتسجيل نتيجتها" onPress={event=>{event.stopPropagation();setCompleting(item);}} style={{padding:10,backgroundColor:colors.primarySoft,borderRadius:10,marginTop:8}}><Text style={{color:colors.primary,fontFamily:'TajawalBold'}}>إتمام المهمة</Text></TouchableOpacity>}
       </View>
     </TouchableOpacity>
   );
 
   return (
     <View style={styles.container}>
+      {!!completing&&<TaskCompletionSheet key={completing.id} task={completing} onClose={()=>setCompleting(null)} onDone={()=>void load()}/>}
       <View style={styles.header}>
         <View>
           <Text style={styles.eyebrow}>الراقي</Text><Text style={styles.title}>المهام</Text>

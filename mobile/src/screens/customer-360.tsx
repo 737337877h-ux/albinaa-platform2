@@ -1,6 +1,9 @@
 import {parseGeoPoint} from '../utils/geo-point';
+import {contactReturn,PendingContact} from '../utils/contact-return';
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, Platform, Modal, FlatList, TextInput, KeyboardAvoidingView, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, Platform, Modal, FlatList, TextInput, KeyboardAvoidingView, Keyboard,AppState } from 'react-native';
+import NewFollowupScreen from './new-followup';
+import {getClient} from '../api/client';
 import { enqueueMutation, cancelContactAttemptLocal, getCustomerOffline360, updateCustomerContactOffline } from '../db/database';
 import { useFocusEffect } from '@react-navigation/native';
 import Loading from '../components/loading';
@@ -71,6 +74,20 @@ export default function Customer360Screen({ route, navigation }: any) {
   const [statementCustomerId, setStatementCustomerId] = React.useState('');
   const [receiptPreview, setReceiptPreview] = React.useState<ReceiptReference | null>(null);
   const [modalKeyboardHeight, setModalKeyboardHeight] = React.useState(0);
+  const [contactOutcome,setContactOutcome]=React.useState<string|null>(null);
+  const [reminding,setReminding]=React.useState(false);
+  const pendingContact=React.useRef<PendingContact|null>(null);
+  React.useEffect(()=>{
+    pendingContact.current=null;setContactOutcome(null);
+    let previous=AppState.currentState;
+    const listener=AppState.addEventListener('change',next=>{
+      const returned=contactReturn(pendingContact.current,next,previous,id);
+      pendingContact.current=returned.pending;
+      if(returned.channel&&canCreateFollowup)setContactOutcome(returned.channel);
+      previous=next;
+    });
+    return()=>listener.remove();
+  },[id,canCreateFollowup]);
   React.useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', (event) => {
       if (Platform.OS === 'android') setModalKeyboardHeight(event.endCoordinates.height);
@@ -237,7 +254,8 @@ export default function Customer360Screen({ route, navigation }: any) {
     try {
       if(!await Linking.canOpenURL(url)){Alert.alert('تنبيه',fallback);return;}
       await enqueueMutation(operationId,'POST','/followups/contact-attempts',{operationId,customerId:id,channel,occurredAt});
-      try{await Linking.openURL(url);}catch{await cancelContactAttemptLocal(operationId);Alert.alert('خطأ','تعذر فتح التطبيق');return;}
+      pendingContact.current={customerId:id,channel,leftApp:false};
+      try{await Linking.openURL(url);}catch{pendingContact.current=null;await cancelContactAttemptLocal(operationId);Alert.alert('خطأ','تعذر فتح التطبيق');return;}
       void triggerSync();
     } catch { Alert.alert('تنبيه','تعذر حفظ محاولة التواصل؛ أعد المحاولة أو سجّل المتابعة يدويًا.'); }
   };
@@ -250,6 +268,15 @@ export default function Customer360Screen({ route, navigation }: any) {
       { text: 'إلغاء', style: 'cancel' as const },
     ]);
   };
+
+  const remindCollector=()=>Alert.alert('تذكير المحصّل',`إرسال تذكير للمحصّل المسند لمتابعة ${fullName}؟`,[
+    {text:'إلغاء',style:'cancel'},
+    {text:'إرسال التذكير',onPress:async()=>{setReminding(true);try{
+      const operationId=generateIdempotencyKey();
+      const {data}=await (await getClient()).post(`/employee-messages/customers/${id}/remind`,{operationId},{headers:{'Idempotency-Key':operationId}});
+      Alert.alert(data.alreadySent?'أُرسل تذكير مؤخرًا':'تم تجهيز التذكير',`المحصّل: ${data.collectorName}`);
+    }catch(error:any){Alert.alert('تعذر إرسال التذكير',error?.response?.data?.message||'تحقق من الاتصال والإسناد وحاول مجددًا');}finally{setReminding(false);}}},
+  ]);
 
   const sendTemplate = (template: MessageTemplate) => {
     if (!messageChannel) return;
@@ -403,6 +430,7 @@ export default function Customer360Screen({ route, navigation }: any) {
       )}
       {availablePhones.length > 0 && <Text style={{color:colors.muted,textAlign:'right',paddingHorizontal:16,fontSize:12}}>بعد فتح الاتصال أو الرسالة لديك 10 دقائق لتسجيل المتابعة أو المهمة أو الوعد؛ وإلا تُسجَّل محاولة تواصل ومهمة بعد 7 أيام تلقائيًا.</Text>}
       <TouchableOpacity style={styles.saveContact} onPress={openPhoneEditor}><Text style={styles.saveContactText}>إضافة أو تعديل أرقام العميل</Text></TouchableOpacity>
+      {permissions.includes('customers.remind')&&<TouchableOpacity style={styles.saveContact} disabled={reminding} onPress={remindCollector}><Text style={styles.saveContactText}>{reminding?'جارٍ إرسال التذكير...':'تذكير المحصّل بمتابعة العميل'}</Text></TouchableOpacity>}
       {availablePhones.length > 0 && <TouchableOpacity style={styles.saveContact} onPress={saveToContacts}><Text style={styles.saveContactText}>حفظ جميع الأرقام في جهات الاتصال</Text></TouchableOpacity>}
       <TouchableOpacity style={styles.importContact} onPress={openContactPicker}><Text style={styles.importContactText}>اختيار رقم العميل من دفتر الهاتف</Text></TouchableOpacity>
 
@@ -611,6 +639,10 @@ export default function Customer360Screen({ route, navigation }: any) {
             </ScrollView>
           </View></View>
         </KeyboardAvoidingView>
+      </Modal>
+      <Modal visible={!!contactOutcome} animationType="slide" onRequestClose={()=>setContactOutcome(null)}>
+        <View style={{flex:1,backgroundColor:colors.background}}><View style={{padding:18,flexDirection:'row-reverse',justifyContent:'space-between'}}><Text style={{fontFamily:'TajawalBold',fontSize:20}}>نتيجة {contactOutcome==='call'?'الاتصال':'الرسالة'}</Text><TouchableOpacity onPress={()=>setContactOutcome(null)}><Text>لاحقًا</Text></TouchableOpacity></View>
+        {!!contactOutcome&&<NewFollowupScreen key={id+contactOutcome} route={{params:{customerId:id,customerName:fullName}}} navigation={{...navigation,goBack:()=>{setContactOutcome(null);void loadLocal();}}}/>}</View>
       </Modal>
       <ReceiptPreview receipt={receiptPreview} onClose={() => setReceiptPreview(null)} />
     </ScrollView>

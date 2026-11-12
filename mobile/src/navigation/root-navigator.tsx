@@ -28,6 +28,7 @@ import CollectionsListScreen from '../screens/collections-list';
 import NewTaskScreen from '../screens/new-task';
 import UploadReceiptScreen from '../screens/upload-receipt';
 import NotificationsScreen from '../screens/notifications';
+import StaffMessagePopup from '../components/staff-message-popup';
 import ProfileScreen from '../screens/profile';
 import SettingsScreen from '../screens/settings';
 import CustomerLocationPickerScreen from '../screens/customer-location-picker';
@@ -193,6 +194,7 @@ export default function RootNavigator() {
   return (
     <>
     <MobileUpdatePrompt />
+    <StaffMessagePopup />
     <NavigationContainer ref={navigationRef} onReady={flushNotification} onStateChange={flushNotification}>
       {isAuthenticated ? (
         <Stack.Navigator screenLayout={({ children, route }) => !canOpenAppRoute(route.name, user?.permissions ?? []) ? <ToolPage title="غير متاح"><ToolText>هذه الوظيفة ليست ضمن هذا التطبيق أو صلاحيات حسابك.</ToolText></ToolPage> : <>{children}</>} screenOptions={{ headerStyle: { backgroundColor: colors.primary }, headerTintColor: '#fff', headerTitleStyle: { fontFamily: fonts.bold, fontWeight: '700', fontSize: 20 }, headerTitleAlign: 'center' }}>

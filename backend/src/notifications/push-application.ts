@@ -18,7 +18,7 @@ export function pushDevicesForKind<T extends { applicationId?: string }>(kind: s
   if (kind.startsWith('hr_') && payload?.reviewerEvent === true) return operations;
   if (kind.startsWith('hr_') && operations.length) return operations;
   if (kind.startsWith('hr_')) return devices.filter(d => !d.applicationId || d.applicationId === COLLECTOR_APP);
-  if (kind === 'sync_failed') return devices;
+  if (kind === 'sync_failed' || kind === 'staff_broadcast' || kind === 'staff_inactivity') return devices;
   if (isOperationsKind(kind)) return operations;
   return devices.filter(d => !d.applicationId || d.applicationId === COLLECTOR_APP);
 }

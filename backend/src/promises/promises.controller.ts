@@ -75,4 +75,7 @@ export class PromisesController {
   ) {
     return this.promises.setStatus(user, id, dto, req);
   }
+
+  @Post(':id/complete') @RequirePermissions('promises.create') @Idempotent('user')
+  completeVerified(@CurrentUser() user:AuthUser,@Param('id',ParseUUIDPipe) id:string){return this.promises.completeVerified(user,id);}
 }

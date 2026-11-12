@@ -1,5 +1,11 @@
 import { pushDevicesForKind, pushSoundForDevice } from './push-application';
 describe('push app isolation', () => {
+  it('shares staff announcements but keeps customer nudges in collection',()=>{
+    const devices=[{applicationId:'com.albinaa.collector'},{applicationId:'com.alraqi.operations'}];
+    expect(pushDevicesForKind('staff_broadcast',devices)).toEqual(devices);
+    expect(pushDevicesForKind('staff_inactivity',devices)).toEqual(devices);
+    expect(pushDevicesForKind('customer_followup_reminder',devices)).toEqual([devices[0]]);
+  });
   const collector={id:'old',applicationId:'com.albinaa.collector'}, operations={id:'new',applicationId:'com.alraqi.operations'};
   it('uses the supplied sound only after the Operations device registers its channel',()=>{
     expect(pushSoundForDevice({...operations,notificationChannelId:'alraqi-operations-sms-v1'})).toEqual({channelId:'alraqi-operations-sms-v1',sound:'alraqi_sms.m4a'});

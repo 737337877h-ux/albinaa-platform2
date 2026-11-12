@@ -19,6 +19,9 @@ describe('operations application boundary', () => {
     expect(canOpenOperationsRoute('Inventory', ['mobile.inventory.view'])).toBe(true);
   });
   test('separates collection and employee task notifications', () => {
+    expect(isOperationsNotification('staff_broadcast')).toBe(true);
+    expect(isOperationsNotification('staff_inactivity')).toBe(true);
+    expect(isOperationsNotification('customer_followup_reminder')).toBe(false);
     expect(isOperationsNotification('hr_task_assigned')).toBe(true);
     expect(isOperationsNotification('task_new')).toBe(false);
     expect(isOperationsNotification('collection_created')).toBe(false);

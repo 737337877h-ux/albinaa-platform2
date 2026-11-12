@@ -7,6 +7,7 @@ import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { ArrowDownUp, CheckCircle2, Download, Eye, FileCheck2, Pencil, Phone, MessageSquare, MessageCircle, MapPin, Building2, UserCheck, Clock, AlertTriangle, UserX, Link2, Unlink } from 'lucide-react';
 import { api, apiFileBlob, ApiError, downloadApiFile } from '@/lib/api';
 import { useCan } from '@/lib/auth';
+import {createRequestId} from '@/lib/request-id';
 import { fmtDate, fmtDateTime, fmtMoney, CCY_AR, TASK_TYPE_AR, PROMISE_STATUS_AR, COLLECTION_STATUS_AR } from '@/lib/format';
 import { friendlyApiError } from '@/lib/errors';
 import { archiveStatementPeriodError } from '@/lib/statement-period';
@@ -856,6 +857,7 @@ export default function Customer360Page() {
                 </Link>
               )}
               {canWrite && <Button variant="secondary" onClick={() => setEditCustomerOpen(true)}><Pencil className="h-4 w-4" />تعديل البيانات</Button>}
+              {can('customers.remind')&&<Button variant="secondary" onClick={async()=>{if(!window.confirm(`إرسال تذكير للمحصّل المسند لمتابعة ${c.name}؟`))return;try{const operationId=createRequestId();const result=await api<{alreadySent:boolean;collectorName:string}>(`/employee-messages/customers/${id}/remind`,{method:'POST',body:JSON.stringify({operationId}),headers:{'Idempotency-Key':operationId}});toast(`${result.alreadySent?'أُرسل تذكير مؤخرًا':'تم تجهيز التذكير'} — ${result.collectorName}`,'ok');}catch(error){toast((error as Error).message,'err');}}}>تذكير المحصّل</Button>}
               <Link href={c.customerType === 'advance' ? '/advances' : '/customers'} className="text-sm text-pine-700 hover:underline dark:text-pine-100">
                 ← العودة إلى {c.customerType === 'advance' ? 'السلف' : 'العملاء'}
               </Link>

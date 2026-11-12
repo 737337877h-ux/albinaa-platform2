@@ -4,6 +4,7 @@ export interface NotificationNavigationTarget {
 }
 
 export function notificationNavigationTarget(kind: string, payload: Record<string, any> = {}): NotificationNavigationTarget {
+  if(kind==='staff_inactivity')return {route:'Main',params:{}};
   if(kind.startsWith('hr_task_'))return {route:payload.reviewerEvent?'HrTaskReview':'HrTasks',params:{assignmentId:payload.assignmentId,taskId:payload.taskId}};
   if(kind.startsWith('hr_request_'))return {route:payload.reviewerEvent?'HrRequestReview':'HrRequests',params:{requestId:payload.requestId}};
   if (kind === 'task_new' || kind === 'task_overdue' || payload.taskId || payload.route === 'Tasks') return { route: 'Main', params: { screen: 'Tasks', params: { taskId: payload.taskId } } };

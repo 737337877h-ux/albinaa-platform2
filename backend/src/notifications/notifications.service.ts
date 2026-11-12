@@ -111,8 +111,10 @@ export class NotificationsService {
     });
   }
 
-  async listMine(user: AuthUser, unreadOnly = false, page = 1, limit = 25, application?:string) {
-    const baseWhere = {userId:user.id,...notificationApplicationScope(application)};
+  async listMine(user: AuthUser, unreadOnly = false, page = 1, limit = 25, application?:string, kind?:string) {
+    limit=Number.isFinite(limit)?Math.max(1,Math.min(100,Math.floor(limit)||25)):25;
+    page=Number.isFinite(page)?Math.max(1,Math.floor(page)||1):1;
+    const baseWhere = {userId:user.id,...notificationApplicationScope(application),...(kind?{kind}:{})};
     const where = { ...baseWhere, ...(unreadOnly ? { readAt: null } : {}) };
     const [total, unread, items] = await Promise.all([
       this.prisma.notification.count({ where: baseWhere }),

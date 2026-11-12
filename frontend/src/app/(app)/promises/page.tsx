@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Plus, Pencil, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
+import { createRequestId } from '@/lib/request-id';
 import { useCan } from '@/lib/auth';
 import { fmtDate, fmtMoney, CCY_AR, PROMISE_STATUS_AR } from '@/lib/format';
 import { PageHeader } from '@/components/app-shell';
@@ -152,6 +153,14 @@ export default function PromisesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editItem, setEditItem] = useState<PromiseItem | null>(null);
   const [statusItem, setStatusItem] = useState<PromiseItem | null>(null);
+  const completion = useMutation({
+    mutationFn: (id:string) => api<{completed:boolean;remainingAmount:number}>(`/payment-promises/${id}/complete`, {method:'POST',body:'{}',headers:{'Idempotency-Key':createRequestId()}}),
+    onSuccess: result => {
+      toast(result.completed?'تمت مطابقة السداد وإكمال الوعد':`لم يكتمل الوعد؛ المتبقي ${fmtMoney(result.remainingAmount)}`,result.completed?'ok':'err');
+      void qc.invalidateQueries({queryKey:['payment-promises']});
+    },
+    onError: (error:Error) => toast(error.message,'err'),
+  });
 
   /* ──── Queries ──── */
   const query = useQuery<PromisesResponse>({
@@ -382,6 +391,7 @@ export default function PromisesPage() {
                       {canCreate && (
                         <TD>
                           <div className="flex items-center gap-1">
+                            {!['fulfilled','cancelled_approved'].includes(p.status)&&<Button variant="secondary" disabled={completion.isPending} onClick={()=>{if(window.confirm('سيُراجع النظام التحصيلات المعتمدة قبل إثبات الوفاء بالوعد. هل تريد التحقق؟'))completion.mutate(p.id);}}>إكمال الوعد</Button>}
                             {isEditable(p.status) && (
                               <button
                                 onClick={() => setEditItem(p)}

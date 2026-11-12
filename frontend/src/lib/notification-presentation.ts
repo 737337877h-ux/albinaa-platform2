@@ -4,6 +4,9 @@ import {financialAdjustmentDecisionAr,financialAdjustmentTypeAr} from './financi
 type KindTone = 'neutral' | 'pine' | 'hazard' | 'debt';
 
 export const KIND_AR: Record<string, { label: string; tone: KindTone }> = {
+  staff_broadcast: {label:'رسالة من الإدارة',tone:'pine'},
+  staff_inactivity: {label:'تذكير بالنشاط',tone:'neutral'},
+  customer_followup_reminder: {label:'تذكير بمتابعة عميل',tone:'hazard'},
   hr_task_assigned: {label:'مهمة موظف جديدة',tone:'pine'},
   hr_task_submitted: {label:'إنجاز يحتاج المراجعة',tone:'hazard'},
   hr_task_completed: {label:'إنجاز معتمد',tone:'pine'},
@@ -37,6 +40,11 @@ export function describeNotification(n: TargetableNotification): { title: string
 
   if((n.kind.startsWith('hr_request_')||n.kind.startsWith('hr_task_')))return {title:String(p.title??'طلب موظف'),text:String(p.message??''),href:notificationHref(n)};
   switch (n.kind) {
+    case 'staff_broadcast':
+    case 'staff_inactivity':
+      return {title:String(p.title??'رسالة من الإدارة'),text:String(p.message??''),href:n.kind==='staff_inactivity'?'/dashboard':'/notifications'};
+    case 'customer_followup_reminder':
+      return {title:'تذكير بمتابعة عميل',text:String(p.message??`يرجى متابعة العميل ${customerName}`),href:customerHref};
     case 'task_overdue': return {title:'إعادة تصعيد مهمة متأخرة',text:`مهمة متأخرة${customerName ? ` — ${customerName}` : ''}`,href:notificationHref(n)};
     case 'task_new': return {title:'مهمة جديدة',text:String(p.message??'أُسندت إليك مهمة جديدة'),href:notificationHref(n)};
     case 'assignment_change_requested': return {title:'طلب تغيير إسناد',text:String(p.message??'طلب جديد يحتاج المراجعة'),href:notificationHref(n)};

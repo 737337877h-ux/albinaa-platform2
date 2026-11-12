@@ -136,6 +136,10 @@ export class MobileService {
         ...(dto.responseMs !== undefined ? { lastResponseMs: dto.responseMs } : {}),
       },
     });
+    if(dto.foreground===true){
+      const key=`mobile.lastForeground.${user.id}`;
+      await this.prisma.systemSetting.upsert({where:{organizationId_key:{organizationId:user.organizationId,key}},create:{organizationId:user.organizationId,key,value:{at:now.toISOString()}},update:{value:{at:now.toISOString()}}});
+    }
     return { ok: true, serverTime: now, deviceId: row.deviceId };
   }
 

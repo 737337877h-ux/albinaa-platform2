@@ -1,4 +1,8 @@
 import React from 'react';
+import {Alert} from 'react-native';
+import {useAuth} from '../store/auth-context';
+import {getClient} from '../api/client';
+import {generateIdempotencyKey} from '../utils/constants';
 import { FlatList, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -26,7 +30,9 @@ export default function PromisesListScreen({ navigation, route }: any) {
   const [rows, setRows] = React.useState<any[]>([]);
   const [filter, setFilter] = React.useState<PromiseFilter>(filterValue(route?.params?.initialFilter));
   const [search, setSearch] = React.useState('');
-  const { status } = useSync();
+  const { status,triggerSync } = useSync();
+  const {user}=useAuth();
+  const [checking,setChecking]=React.useState<string|null>(null);
   const load = React.useCallback(() => getAll('promises').then(setRows), []);
   useFocusEffect(React.useCallback(() => { void load(); }, [load]));
   React.useEffect(() => {
@@ -73,7 +79,9 @@ export default function PromisesListScreen({ navigation, route }: any) {
           {bucket === 'fulfilled' && !!item.settlementDate && <Text style={styles.date}>السداد: {dateLabel(item.settlementDate)}</Text>}
           {late && !!item.missedDueDate && <Text style={styles.lateNote}>تاريخ التأخر محفوظ: {dateLabel(item.missedDueDate)}</Text>}
         </View>
-        <View><Text style={styles.amount}>{Number(item.expectedAmount || 0).toLocaleString('en-US')}</Text><Text style={styles.currency}>{item.currencyCode}</Text></View>
+        <View><Text style={styles.amount}>{Number(item.expectedAmount || 0).toLocaleString('en-US',{maximumFractionDigits:4})}</Text><Text style={styles.currency}>{item.currencyCode}</Text>
+        {!['fulfilled','cancelled'].includes(bucket)&&user?.permissions?.includes('promises.create')&&<TouchableOpacity disabled={!!checking} onPress={event=>{event.stopPropagation();Alert.alert('إكمال الوعد','سيُراجع النظام التحصيلات المعتمدة قبل إثبات الوفاء بالوعد.',[{text:'إلغاء',style:'cancel'},{text:'تحقق من السداد',onPress:async()=>{setChecking(item.id);try{const key=generateIdempotencyKey();const {data}=await(await getClient()).post(`/payment-promises/${item.id}/complete`,{},{headers:{'Idempotency-Key':key}});await triggerSync();await load();Alert.alert(data.completed?'تم الوفاء بالوعد':'الوعد لم يكتمل',data.completed?'تمت مطابقة السداد مع التحصيلات المعتمدة.':`المتبقي: ${Number(data.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`);}catch(error:any){Alert.alert('تعذر التحقق',error?.response?.data?.message||'تحقق من الاتصال وحاول مجددًا');}finally{setChecking(null);}}}]);}} style={{padding:10,borderRadius:10,backgroundColor:colors.primarySoft,marginTop:8}}><Text style={{fontFamily:'TajawalBold',color:colors.primary}}>{checking===item.id?'جارٍ التحقق...':'إكمال الوعد'}</Text></TouchableOpacity>}
+        </View>
       </TouchableOpacity>;
     }} />
   </View>;

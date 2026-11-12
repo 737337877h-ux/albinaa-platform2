@@ -1257,13 +1257,16 @@ export class TasksService {
     const task = await this.prisma.task.findFirst({
       where: {
         id: taskId,
-        ...(user.permissions.includes('customers.read_all') || !collector
+        customer: { organizationId: user.organizationId },
+        ...(user.permissions.includes('customers.read_all')
           ? {}
-          : { assignedTo: collector.id }),
+          : { assignedTo: collector?.id ?? '00000000-0000-0000-0000-000000000000' }),
       },
     });
     if (!task) throw new NotFoundException('المهمة غير موجودة أو خارج نطاق صلاحيتك');
-    return this.prisma.task.update({ where: { id: taskId }, data: { status: 'done' } });
+    const changed=await this.prisma.task.updateMany({where:{id:taskId,status:'open',customer:{organizationId:user.organizationId},...(!user.permissions.includes('customers.read_all')?{assignedTo:collector?.id??'00000000-0000-0000-0000-000000000000'}:{})},data:{status:'done'}});
+    if(!changed.count)throw new ConflictException('تغيرت حالة المهمة؛ حدّث القائمة');
+    return {id:taskId,status:'done'};
   }
 
   /**
@@ -1278,9 +1281,10 @@ export class TasksService {
     const task = await this.prisma.task.findFirst({
       where: {
         id: taskId,
-        ...(user.permissions.includes('customers.read_all') || !collector
+        customer: { organizationId: user.organizationId },
+        ...(user.permissions.includes('customers.read_all')
           ? {}
-          : { assignedTo: collector.id }),
+          : { assignedTo: collector?.id ?? '00000000-0000-0000-0000-000000000000' }),
       },
     });
     if (!task) throw new NotFoundException('المهمة غير موجودة أو خارج نطاق صلاحيتك');
@@ -1299,6 +1303,7 @@ export class TasksService {
     // المحصل المسند حاليًا للعميل (قاعدة M5: لا وعد بلا إسناد ساري).
     let promiseDue: { date: Date; amount: number; currency: string; collectorId: string } | null = null;
     if (result === 'promise') {
+      if(!user.permissions.includes('promises.create'))throw new ForbiddenException('لا تملك صلاحية إنشاء وعد سداد');
       if (!dto.promiseDueDate) {
         throw new BadRequestException('عند اختيار نتيجة "وعد بالسداد" يجب تحديد تاريخ الاستحقاق (promiseDueDate)');
       }
@@ -1345,7 +1350,8 @@ export class TasksService {
 
     // ذريًا: إغلاق المهمة + تسجيل المتابعة — لا إتمام بلا متابعة
     const followup = await this.prisma.$transaction(async (tx) => {
-      await tx.task.update({ where: { id: taskId }, data: { status: 'done' } });
+      const changed=await tx.task.updateMany({where:{id:taskId,status:'open',customer:{organizationId:user.organizationId},...(!user.permissions.includes('customers.read_all')?{assignedTo:collector!.id}:{})},data:{status:'done'}});
+      if(!changed.count)throw new ConflictException('أُغلقت المهمة أو تغيرت قبل الحفظ؛ حدّث القائمة');
       return tx.followup.create({
         data: {
           customerId: task.customerId!,
