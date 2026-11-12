@@ -58,3 +58,7 @@ it('recognizes recorded local finals by an exact global serial alias and exclude
  expect(r.finalReceiptId).toBe('local-final');expect(r.matchedBy).toBe('serial');
  expect(countableReceiptRequest(r)).toBe(false);
 });
+it.each(['handed_to_cashier','matched','approved'])('keeps a final receipt countable after its cashier status changes to %s',status=>{
+ const rows=recordedLocalReceiptFinals([{id:'final',customerId:'customer',currencyCode:'YER',amount:100,collectedAt:'2026-11-12',status}]);
+ expect(rows).toHaveLength(1);
+});

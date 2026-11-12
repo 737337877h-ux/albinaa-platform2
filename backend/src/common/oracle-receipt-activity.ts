@@ -1,5 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from './guards/jwt-auth.guard';
+import {FINANCIAL_COLLECTION_STATUSES} from './financial-collection-status';
 
 type AssignedReceiptCollector = { id: string; oracleCollectorNo: number | null; user: { fullName: string } };
 type UnassignedReceiptCollector = { id: null; oracleCollectorNo: null; user: { fullName: string } };
@@ -55,7 +56,7 @@ export async function oracleReceiptActivity(prisma: PrismaService, actor: AuthUs
   const byCode = new Map(customers.map((c) => [c.externalCustomerCode, c]));
   const receiptKeys = [...new Set(rows.map((row) => row.documentSerial?.trim() || row.documentNumber?.trim()).filter(Boolean) as string[])];
   const existing = receiptKeys.length ? await prisma.collection.findMany({
-    where: { customer: { organizationId: actor.organizationId }, status: 'recorded',
+    where: { customer: { organizationId: actor.organizationId }, status: {in:FINANCIAL_COLLECTION_STATUSES},
       OR: [{ referenceNumber: { in: receiptKeys } }, { receiptNumber: { in: receiptKeys } }] },
     select: { referenceNumber: true, receiptNumber: true, customerId: true, currencyCode: true },
   }) : [];

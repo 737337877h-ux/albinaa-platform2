@@ -1,6 +1,7 @@
 import {oracleReceiptActivity} from '../common/oracle-receipt-activity';
 import {performanceRange,collectorPerformance,periodTarget} from './collector-performance';
 import {Prisma} from '@prisma/client';
+import {FINANCIAL_COLLECTION_STATUSES} from '../common/financial-collection-status';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
@@ -32,7 +33,7 @@ export class ReportsService {
     const collectorScope={user:{organizationId:actor.organizationId},...(!team?{userId:actor.id}:{})};
     const collectors=await this.prisma.collector.findMany({where:collectorScope,orderBy:[{oracleCollectorNo:'asc'},{user:{fullName:'asc'}}],select:{id:true,userId:true,oracleCollectorNo:true,active:true,user:{select:{fullName:true}}}});
     const ids=collectors.map(c=>c.id),userIds=collectors.map(c=>c.userId);
-    const rows=await this.prisma.collection.findMany({where:{customer:{organizationId:actor.organizationId},collector:collectorScope,status:'recorded',collectedAt},select:{id:true,collectorId:true,customerId:true,currencyCode:true,amount:true,status:true,collector:{select:{user:{select:{fullName:true}}}}}});
+    const rows=await this.prisma.collection.findMany({where:{customer:{organizationId:actor.organizationId},collector:collectorScope,status:{in:FINANCIAL_COLLECTION_STATUSES},collectedAt},select:{id:true,collectorId:true,customerId:true,currencyCode:true,amount:true,status:true,collector:{select:{user:{select:{fullName:true}}}}}});
     const scopedActor=team?actor:{...actor,permissions:actor.permissions.filter(p=>p!=='customers.read_all')};
     const oracleRows=(await oracleReceiptActivity(this.prisma,scopedActor,undefined,{includeInactiveCollectors:true})).filter(row=>{const date=new Date(row.collectedAt);return ids.includes(row.collector.id)&&date>=collectedAt.gte&&date<collectedAt.lt;}).map(row=>({...row,collectorId:row.collector.id}));
     const dateRange={gte:new Date(from+'T00:00:00Z'),lte:new Date(to+'T00:00:00Z')};

@@ -1,5 +1,6 @@
 import {BadRequestException} from '@nestjs/common';
 import {Prisma} from '@prisma/client';
+import {FINANCIAL_COLLECTION_STATUSES} from '../common/financial-collection-status';
 export function performanceRange(from:string,to:string){
  const valid=(s:string)=>/^\d{4}-\d{2}-\d{2}$/.test(s??'')&&Number.isFinite(Date.parse(s+'T00:00:00Z'))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
  if(!valid(from)||!valid(to)||to<from)throw new BadRequestException('حدد فترة صحيحة من تاريخ إلى تاريخ');
@@ -10,7 +11,7 @@ export function performanceRange(from:string,to:string){
 export function collectorPerformance(rows:any[]){
  const totals=new Map<string,Prisma.Decimal>(),groups=new Map<string,{collectorId:string;collectorName:string;currency:string;amount:Prisma.Decimal;receipts:number;customers:Set<string>}>(),seen=new Set<string>();
  for(const r of rows){
-  if(r.status!=='recorded'||new Prisma.Decimal(r.amount).lte(0))continue;
+  if(!FINANCIAL_COLLECTION_STATUSES.includes(r.status)||new Prisma.Decimal(r.amount).lte(0))continue;
   if(r.id&&seen.has(r.id))continue;
   if(r.id)seen.add(r.id);
   const currency=r.currencyCode,id=r.collectorId+'|'+currency,amount=new Prisma.Decimal(r.amount).toDecimalPlaces(4);

@@ -1,4 +1,5 @@
 import { durableOracleRequest, DurableOracleRequest, mergeOracleRequestRecords, OracleRequestAuditRow, platformCurrencyCode } from './oracle-request-audit';
+import {FINANCIAL_COLLECTION_STATUSES} from './financial-collection-status';
 
 export type FinalReceipt = {
   id: string; referenceNumber: string; currencyCode: string; amount: number;
@@ -34,7 +35,7 @@ export function recordedLocalReceiptFinals(rows: Array<{
 }>): FinalReceipt[] {
   return rows.flatMap(row => {
     const amount = Number(row.amount);
-    if (row.status !== 'recorded' || !Number.isFinite(amount) || amount <= 0) return [];
+    if (!FINANCIAL_COLLECTION_STATUSES.includes(row.status) || !Number.isFinite(amount) || amount <= 0) return [];
     return [{ id: row.id, customerId: row.customerId, currencyCode: platformCurrencyCode(row.currencyCode), amount,
       collectedAt: row.collectedAt, referenceNumber: row.referenceNumber?.trim() || row.receiptNumber?.trim() || '',
       referenceAliases: [row.referenceNumber, row.receiptNumber].filter((value): value is string => Boolean(value?.trim())),

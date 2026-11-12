@@ -12,6 +12,10 @@ function setup(){
  return {db,service:new ReportsService(db as any,{} as any,{} as any)};
 }
 beforeEach(()=>{(oracleReceiptActivity as jest.Mock).mockReset().mockResolvedValue([]);});
+it('continues counting a recorded receipt through cashier matching and approval without duplicating it',()=>{
+ const row={id:'one',collectorId:'a',customerId:'c',currencyCode:'YER',amount:'100.0001',collector:{user:{fullName:'A'}}};
+ for(const status of ['recorded','handed_to_cashier','matched','approved'])expect(collectorPerformance([{...row,status},{...row,status}]).totals).toEqual([{currency:'YER',amount:'100.0001'}]);
+});
 it('uses inclusive Aden days and rejects impossible or oversized ranges',()=>{
  const range=performanceRange('2026-11-01','2026-11-01');
  expect(range.gte.toISOString()).toBe('2026-10-31T21:00:00.000Z');expect(range.lt.toISOString()).toBe('2026-11-01T21:00:00.000Z');
@@ -32,7 +36,7 @@ it('restricts all reads and the Oracle projection to the authenticated organizat
  const {db,service}=setup();
  const own={...actor,roles:['المحصل'],permissions:['reports.read','customers.read_all']};
  await service.collectorPerformance(own,'2026-11-01','2026-11-30');
- expect(db.collection.findMany.mock.calls[0][0].where).toMatchObject({customer:{organizationId:'org'},collector:{user:{organizationId:'org'},userId:'u1'},status:'recorded'});
+ expect(db.collection.findMany.mock.calls[0][0].where).toMatchObject({customer:{organizationId:'org'},collector:{user:{organizationId:'org'},userId:'u1'},status:{in:['recorded','handed_to_cashier','matched','approved']}});
  expect(db.followup.findMany.mock.calls[0][0].where.customer.organizationId).toBe('org');
  expect((oracleReceiptActivity as jest.Mock).mock.calls[0][1].permissions).not.toContain('customers.read_all');
 });
