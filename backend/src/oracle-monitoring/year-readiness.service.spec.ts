@@ -24,4 +24,11 @@ describe('read-only 2027 preparation',()=>{
   fetcher.mockRejectedValue(Error('offline'));
   expect((await service.inspect('org')).ready).toBe(false);
  });
+ it('distinguishes a connected legacy gateway without source metadata from an outage',async()=>{
+  fetcher.mockResolvedValue({ok:true,json:async()=>({status:'ok',mode:'SELECT_ONLY',capabilities:['request-catalog']})} as any);
+  const check=(await service.inspect('org')).checks.find(c=>c.id==='current-gateway');
+  expect(check?.status).toBe('review');
+  expect(check?.message).toContain('الاتصال متاح للقراءة فقط');
+  expect(check?.message).toContain('لا تعرض اسم المصدر');
+ });
 });

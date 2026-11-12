@@ -9,12 +9,13 @@ export class YearReadinessService {
  constructor(private readonly db:PrismaService,private readonly config:ConfigService){}
  private async gateway(schema:string){
   const base=this.config.get<string>('ORACLE_READ_API_URL')?.trim().replace(/\/$/,''),key=this.config.get<string>('ORACLE_READ_API_KEY');
-  if(!base)return {ready:false,readOnly:false};
+  if(!base)return {ready:false,readOnly:false,connected:false,reportedSchema:null as string|null};
   try{
    const response=await fetch(`${base}/health`,{headers:key?{Authorization:`Bearer ${key}`}:{},signal:AbortSignal.timeout(3500)});
    const data=await response.json() as any;
-   return {ready:response.ok&&data.status==='ok'&&data.mode==='SELECT_ONLY'&&data.schema===schema,readOnly:data.mode==='SELECT_ONLY'};
-  }catch{return {ready:false,readOnly:false};}
+   const connected=response.ok&&data.status==='ok'&&data.mode==='SELECT_ONLY';
+   return {ready:connected&&data.schema===schema,readOnly:data.mode==='SELECT_ONLY',connected,reportedSchema:typeof data.schema==='string'?data.schema:null};
+  }catch{return {ready:false,readOnly:false,connected:false,reportedSchema:null as string|null};}
  }
  async inspect(organizationId:string){
   const schema=this.config.get<string>('ORACLE_READ_SCHEMA')?.trim().toUpperCase()||'IAS20261';
@@ -25,7 +26,7 @@ export class YearReadinessService {
   const gateway=await this.gateway(schema),attendance=policy?.startDate.toISOString().slice(0,10)==='2027-01-01';
   const currentYear=Number(/^IAS(\d{4})\d*$/.exec(schema)?.[1]??0)||null;
   const checks:Check[]=[
-   {id:'current-gateway',title:'بوابة المصدر الحالي',status:gateway.ready?'ready':'review',message:gateway.ready?'الاتصال متاح للقراءة فقط والمصدر مطابق للإعداد':'تحتاج البوابة إلى مراجعة الاتصال أو تطابق المصدر'},
+   {id:'current-gateway',title:'بوابة المصدر الحالي',status:gateway.ready?'ready':'review',message:gateway.ready?'الاتصال متاح للقراءة فقط والمصدر مطابق للإعداد':gateway.connected&&!gateway.reportedSchema?'الاتصال متاح للقراءة فقط؛ البوابة لا تعرض اسم المصدر للتحقق من مطابقته':gateway.connected?'الاتصال متاح لكن اسم المصدر المعلن لا يطابق الإعداد':'تحتاج البوابة إلى مراجعة الاتصال أو وضع القراءة فقط'},
    {id:'customers',title:'لقطة العملاء والأرصدة الحالية',status:customer?'ready':'review',message:customer?'توجد لقطة منشورة للمصدر الحالي':'لم تُعثر على لقطة منشورة للمصدر الحالي',checkedAt:customer?.publishedAt??customer?.startedAt},
    {id:'inventory',title:'لقطة المخزون الحالية',status:inventory?'ready':'review',message:inventory?'توجد لقطة مخزون فعالة':'تحتاج لقطة المخزون الفعالة إلى مراجعة',checkedAt:inventory?.activatedAt},
    {id:'movements',title:'لقطة الحركات الحالية',status:movements?'ready':'review',message:movements?'توجد لقطة حركات منشورة':'تحتاج لقطة الحركات إلى مراجعة',checkedAt:movements?.publishedAt??movements?.startedAt},
