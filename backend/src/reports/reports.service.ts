@@ -1,5 +1,6 @@
 import {oracleReceiptActivity} from '../common/oracle-receipt-activity';
-import {performanceRange,collectorPerformance} from './collector-performance';
+import {performanceRange,collectorPerformance,periodTarget} from './collector-performance';
+import {Prisma} from '@prisma/client';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
@@ -26,9 +27,53 @@ export class ReportsService {
 
   async collectorPerformance(actor:AuthUser,from:string,to:string){
     const collectedAt=performanceRange(from,to);
-    const rows=await this.prisma.collection.findMany({where:{customer:{organizationId:actor.organizationId},collector:{user:{organizationId:actor.organizationId},...(actor.permissions.includes('customers.read_all')?{}:{userId:actor.id})},status:{not:'reversed'},collectedAt},select:{collectorId:true,customerId:true,currencyCode:true,amount:true,status:true,collector:{select:{user:{select:{fullName:true}}}}}});
-    const oracleRows=(await oracleReceiptActivity(this.prisma,actor)).filter(row=>{const date=new Date(row.collectedAt);return date>=collectedAt.gte&&date<collectedAt.lt;}).map(row=>({...row,collectorId:row.collector.id}));
-    return {from,to,timeZone:'Asia/Aden',generatedAt:new Date(),sources:{platform:rows.length,oracleMirror:oracleRows.length},...collectorPerformance([...rows,...oracleRows])};
+    const roles=actor.roles??[],collectorOnly=roles.includes('المحصل')&&!roles.some(r=>['مدير النظام','مدير المديونية','المحاسب'].includes(r));
+    const team=actor.permissions.includes('customers.read_all')&&!collectorOnly;
+    const collectorScope={user:{organizationId:actor.organizationId},...(!team?{userId:actor.id}:{})};
+    const collectors=await this.prisma.collector.findMany({where:collectorScope,orderBy:[{oracleCollectorNo:'asc'},{user:{fullName:'asc'}}],select:{id:true,userId:true,oracleCollectorNo:true,active:true,user:{select:{fullName:true}}}});
+    const ids=collectors.map(c=>c.id),userIds=collectors.map(c=>c.userId);
+    const rows=await this.prisma.collection.findMany({where:{customer:{organizationId:actor.organizationId},collector:collectorScope,status:'recorded',collectedAt},select:{id:true,collectorId:true,customerId:true,currencyCode:true,amount:true,status:true,collector:{select:{user:{select:{fullName:true}}}}}});
+    const scopedActor=team?actor:{...actor,permissions:actor.permissions.filter(p=>p!=='customers.read_all')};
+    const oracleRows=(await oracleReceiptActivity(this.prisma,scopedActor,undefined,{includeInactiveCollectors:true})).filter(row=>{const date=new Date(row.collectedAt);return ids.includes(row.collector.id)&&date>=collectedAt.gte&&date<collectedAt.lt;}).map(row=>({...row,collectorId:row.collector.id}));
+    const dateRange={gte:new Date(from+'T00:00:00Z'),lte:new Date(to+'T00:00:00Z')};
+    // Sequential reads avoid exhausting the small production connection pool.
+    const followups=await this.prisma.followup.findMany({where:{customer:{organizationId:actor.organizationId},user:{organizationId:actor.organizationId},userId:{in:userIds},deletedAt:null,followupAt:collectedAt},select:{userId:true,customerId:true}});
+    const promises=await this.prisma.paymentPromise.findMany({where:{customer:{organizationId:actor.organizationId},collectorId:{in:ids},OR:[{promiseDate:dateRange},{dueDate:dateRange}]},select:{collectorId:true,currencyCode:true,promiseDate:true,dueDate:true,status:true}});
+    const targets=await this.prisma.collectorTarget.findMany({where:{collectorId:{in:ids},month:{gte:new Date(from.slice(0,7)+'-01T00:00:00Z'),lte:dateRange.lte}},select:{collectorId:true,currencyCode:true,month:true,targetAmount:true}});
+    const assignments=await this.prisma.customerAssignment.findMany({where:{collectorId:{in:ids},effectiveTo:null,customer:{organizationId:actor.organizationId,status:'active',mergedIntoId:null}},select:{collectorId:true,customerId:true}});
+    const snapshot=await this.prisma.oracleMovementSyncRun.findFirst({where:{organizationId:actor.organizationId,sourceSchema:'IAS20261',status:'published'},orderBy:{startedAt:'desc'},select:{startedAt:true}});
+    const report=collectorPerformance([...rows,...oracleRows]);
+    const currencies=[...new Set([...report.totals.map(t=>t.currency),...promises.map(p=>p.currencyCode),...targets.map(t=>t.currencyCode)])].sort();
+    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Aden',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const inRange=(date:Date)=>date>=dateRange.gte&&date<=dateRange.lte;
+    const activity=collectors.map(c=>{
+      const calls=followups.filter(f=>f.userId===c.userId),due=promises.filter(p=>p.collectorId===c.id&&inRange(p.dueDate)&&p.status!=='cancelled_approved');
+      return {collectorId:c.id,collectorName:c.user.fullName,collectorNo:c.oracleCollectorNo,active:c.active,followups:calls.length,followedCustomers:new Set(calls.map(f=>f.customerId)).size,assignedCustomers:new Set(assignments.filter(a=>a.collectorId===c.id).map(a=>a.customerId)).size,promisesCreated:promises.filter(p=>p.collectorId===c.id&&inRange(p.promiseDate)).length,promisesDue:due.length,promisesFulfilled:due.filter(p=>p.status==='fulfilled').length,promisesOverdue:due.filter(p=>p.dueDate.toISOString().slice(0,10)<today&&!['fulfilled','cancelled_approved'].includes(p.status)).length};
+    });
+    const financial=collectors.flatMap(c=>currencies.map(currency=>{
+      const amount=report.rows.find(r=>r.collectorId===c.id&&r.currency===currency),target=periodTarget(targets.filter(t=>t.collectorId===c.id&&t.currencyCode===currency),from,to);
+      return {collectorId:c.id,collectorName:c.user.fullName,collectorNo:c.oracleCollectorNo,currency,amount:amount?.amount??'0.0000',receipts:amount?.receipts??0,customers:amount?.customers??0,sharePercent:team?(amount?.sharePercent??(report.totals.some(t=>t.currency===currency)?'0.00':null)):null,target,targetAttainment:target&&new Prisma.Decimal(target).gt(0)?new Prisma.Decimal(amount?.amount??0).div(target).mul(100).toFixed(2):null};
+    }));
+    return {from,to,timeZone:'Asia/Aden',generatedAt:new Date(),scope:team?'team':'self',oracleSnapshotAt:snapshot?.startedAt??null,sources:{platform:rows.length,oracleMirror:oracleRows.length},targetBasis:'proportional_calendar_days',totals:report.totals,rows:financial,activity};
+  }
+
+  async collectorPerformanceWorkbook(actor:AuthUser,from:string,to:string){
+    const report=await this.collectorPerformance(actor,from,to),book=new ExcelJS.Workbook();
+    const make=(name:string,headers:string[])=>{
+      const sheet=book.addWorksheet(name,{views:[{rightToLeft:true,state:'frozen',ySplit:1}]});
+      sheet.columns=headers.map((header,i)=>({header,width:i===1?34:23,style:{numFmt:'@',font:{name:'Arial',size:11},alignment:{horizontal:'right',readingOrder:'rtl',wrapText:true}}}));
+      sheet.getRow(1).font={name:'Arial',bold:true,color:{argb:'FFFFFFFF'}};
+      sheet.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF004B40'}};return sheet;
+    };
+    const meta=make('الفترة والمصادر',['البيان','القيمة']);
+    meta.addRows([['من',from],['إلى',to],['التوقيت','عدن'],['النطاق',report.scope==='team'?'المحصلون ضمن صلاحياتك':'المحصل الحالي فقط'],['لقطة Oracle',report.oracleSnapshotAt?.toISOString()??'غير متاحة'],['تحصيلات المنصة المعتمدة',String(report.sources.platform)],['سندات Oracle الإضافية',String(report.sources.oracleMirror)],['الاحتساب','طلبات القبض غير المرحلة مستبعدة؛ لا تُجمع العملات'],['الهدف','هدف شهري موزع بنسبة أيام الفترة التقويمية؛ الهدف الناقص غير متاح'],['الوعود','الحالة الحالية للوعود ذات مواعيد استحقاق ضمن الفترة']]);
+    for(const total of report.totals)meta.addRow(['الإجمالي '+total.currency,total.amount]);
+    const money=make('التحصيل والأهداف',['رقم المحصل','المحصل','العملة','التحصيل','السندات','العملاء','المساهمة %','الهدف النسبي للفترة','الإنجاز %']);
+    for(const r of report.rows)money.addRow([String(r.collectorNo??''),r.collectorName,r.currency,r.amount,String(r.receipts),String(r.customers),r.sharePercent??'',r.target??'',r.targetAttainment??'']);
+    const work=make('المتابعات والوعود',['رقم المحصل','المحصل','المتابعات','العملاء المتابَعون','المسندون حاليًا','الوعود المنشأة','وعود تستحق بالفترة','الوعود المنفذة','الوعود المتأخرة']);
+    for(const r of report.activity)work.addRow([String(r.collectorNo??''),r.collectorName,...[r.followups,r.followedCustomers,r.assignedCustomers,r.promisesCreated,r.promisesDue,r.promisesFulfilled,r.promisesOverdue].map(String)]);
+    for(const sheet of [money,work])sheet.autoFilter={from:{row:1,column:1},to:{row:sheet.rowCount,column:9}};
+    return Buffer.from(await book.xlsx.writeBuffer());
   }
 
   async summary(actor: AuthUser, accountClass: 'customer' | 'advance' = 'customer') {

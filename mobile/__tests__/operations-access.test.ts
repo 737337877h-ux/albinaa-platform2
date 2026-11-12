@@ -3,7 +3,7 @@ import { canOpenOperationsRoute, isOperationsNotification } from '../src/utils/o
 
 describe('operations application boundary', () => {
   const admin = ['customers.read_all', 'customers.read', 'balances.read', 'tasks.manage', 'users.manage', 'collections.create', 'sales_order_drafts.manage', 'sales_order_drafts.read', 'inventory_transfers.create', 'oracle_test_requests.inventory_count.create'];
-  test.each(['Customer360', 'CollectionsList', 'NewCollection', 'AssignTask', 'CollectionKpi', 'ManageCollectors', 'ManageAssignments', 'RequestVoucher'])('never exposes collection route %s even to an administrator', route => {
+  test.each(['Customer360', 'CollectionsList', 'NewCollection', 'AssignTask', 'CollectionKpi','CollectorPerformance','CustomersWithoutPhones', 'ManageCollectors', 'ManageAssignments', 'RequestVoucher'])('never exposes collection route %s even to an administrator', route => {
     expect(canOpenOperationsRoute(route, admin)).toBe(false);
   });
   test('preserves create vs read permissions and always provides personal employee services', () => {

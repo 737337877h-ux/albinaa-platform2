@@ -1,5 +1,14 @@
 import { oracleReceiptActivity } from './oracle-receipt-activity';
 
+it('includes inactive collectors only for an explicitly requested, authorized historical report',async()=>{
+ const db:any={oracleMovementSyncRun:{findFirst:jest.fn().mockResolvedValue({id:'run'})},collector:{findMany:jest.fn().mockResolvedValue([])}};
+ const actor:any={id:'u',organizationId:'org',permissions:['reports.read']};
+ await oracleReceiptActivity(db,actor,undefined,{includeInactiveCollectors:true});
+ expect(db.collector.findMany.mock.calls[0][0].where.active).toBeUndefined();
+ await oracleReceiptActivity(db,{...actor,permissions:[]},undefined,{includeInactiveCollectors:true});
+ expect(db.collector.findMany.mock.calls[1][0].where.active).toBe(true);
+});
+
 it('uses document currency and collector mapping without adding a balance ledger entry', async () => {
   const prisma: any = {
     oracleMovementSyncRun: { findFirst: jest.fn().mockResolvedValue({ id: 'run' }) },

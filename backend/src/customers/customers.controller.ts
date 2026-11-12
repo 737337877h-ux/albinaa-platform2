@@ -14,6 +14,8 @@ import { AssignCollectorDto } from './dto/assign-collector.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { CustomerStatusDto } from './dto/customer-status.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
+import {MissingPhonesDto} from './dto/missing-phones.dto';
+import {missingPhonesWorkbook} from './missing-phones';
 import { ReviewDuplicateDto } from './dto/review-duplicate.dto';
 import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import { ReverseCustomerMergeDto } from './dto/reverse-customer-merge.dto';
@@ -58,6 +60,19 @@ export class CustomersController {
     res.setHeader('Content-Type','text/csv; charset=utf-8');
     res.setHeader('Content-Disposition',`attachment; filename="albinaa-customers-${day}.csv"`);
     res.send(customerExportCsv(rows));
+  }
+
+  @Get('without-phones') @RequirePermissions('customers.read')
+  withoutPhones(@CurrentUser() user:AuthUser,@Query() q:MissingPhonesDto){return this.customers.withoutPhones(user,q);}
+
+  @Get('without-phones.xlsx') @RequirePermissions('customers.read','reports.export')
+  @Throttle({ default: { ttl:60_000,limit:10 } })
+  async withoutPhonesExcel(@CurrentUser() user:AuthUser,@Query() q:MissingPhonesDto,@Res() res:Response){
+    const report=await this.customers.withoutPhones(user,q,true);
+    const buffer=await missingPhonesWorkbook(report.items);
+    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition','attachment; filename="customers-without-phones.xlsx"');
+    res.send(buffer);
   }
 
   @Get('duplicates')

@@ -8,6 +8,8 @@ import { BRANDING_KEYS } from '../common/branding';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { isSignificantBalance } from '../common/debt-followup-policy';
 import { smartSearchTerms } from '../common/smart-search';
+import {MissingPhonesDto} from './dto/missing-phones.dto';
+import {hasUsableContact} from './missing-phones';
 import { normalizeUploadedFilename } from '../common/uploaded-filename';
 import { NotificationsService } from '../notifications/notifications.service';
 import { queueAssignmentNotification } from '../notifications/assignment-notification';
@@ -1354,6 +1356,27 @@ export class CustomersService {
         },
       },
     });
+  }
+
+  async withoutPhones(user:AuthUser,q:MissingPhonesDto,exportAll=false){
+    const scope=await this.scopeWhere(user);
+    if(scope.id==='no-access')scope.id='00000000-0000-0000-0000-000000000000';
+    const account=q.accountClass==='advance'?{customerType:'advance'}:{OR:[{customerType:null},{customerType:{not:'advance'}}]};
+    const where:Prisma.CustomerWhereInput={AND:[scope,account,{mergedIntoId:null,status:q.status==='all'?{in:['active','inactive']}:(q.status??'active')}]};
+    const customers=await this.prisma.customer.findMany({
+      where,orderBy:[{externalCustomerCode:'asc'},{id:'asc'}],
+      select:{
+        id:true,name:true,externalCustomerCode:true,accountNumber:true,phonePrimary:true,phoneSecondary:true,whatsapp:true,region:true,status:true,
+        branch:{select:{name:true}},
+        assignments:{where:{effectiveTo:null},orderBy:{effectiveFrom:'desc'},take:1,select:{collector:{select:{id:true,user:{select:{fullName:true}}}}}},
+      },
+    });
+    const missing=customers.filter(c=>!hasUsableContact([c.phonePrimary,c.phoneSecondary,c.whatsapp])).map(c=>({id:c.id,name:c.name,externalCustomerCode:c.externalCustomerCode,accountNumber:c.accountNumber,region:c.region,status:c.status,branch:c.branch?.name??null,collectorId:c.assignments[0]?.collector.id??null,collectorName:c.assignments[0]?.collector.user.fullName??null,reason:[c.phonePrimary,c.phoneSecondary,c.whatsapp].some(v=>v?.trim())?'لا يوجد رقم قابل للاستخدام':'لا توجد أرقام مسجلة'}));
+    const collectors=[...new Map(missing.filter(c=>c.collectorId).map(c=>[c.collectorId!,{id:c.collectorId!,name:c.collectorName!}])).values()];
+    const terms=smartSearchTerms(q.search);
+    const filtered=missing.filter(c=>(!q.collectorId||(q.collectorId==='unassigned'?!c.collectorId:c.collectorId===q.collectorId))&&terms.every(term=>smartSearchTerms([c.name,c.externalCustomerCode,c.accountNumber,c.region].join(' '),100).some(word=>word.includes(term))));
+    const page=q.page??1,limit=q.limit??25;
+    return {generatedAt:new Date(),page,limit,total:filtered.length,totalPages:Math.ceil(filtered.length/limit),collectors,items:exportAll?filtered:filtered.slice((page-1)*limit,page*limit)};
   }
 
   // --------------------------------------------------------------------------

@@ -16,12 +16,12 @@ export type OracleHistoryReceipt = OracleReceiptProjection<AssignedReceiptCollec
 
 // Assigned-only callers retain their non-null collector contract. The history
 // option is additionally permission-checked at runtime, including non-HTTP calls.
-export function oracleReceiptActivity(prisma: PrismaService, actor: AuthUser, day?: string): Promise<AssignedOracleReceipt[]>;
+export function oracleReceiptActivity(prisma: PrismaService, actor: AuthUser, day?: string, options?:{includeInactiveCollectors?:true}): Promise<AssignedOracleReceipt[]>;
 export function oracleReceiptActivity(prisma: PrismaService, actor: AuthUser, day: string | undefined,
-  options: { includeUnassigned: true }): Promise<OracleHistoryReceipt[]>;
+  options: { includeUnassigned: true; includeInactiveCollectors?:true }): Promise<OracleHistoryReceipt[]>;
 /** Reporting projection only: Oracle movements already affect the balance import. */
 export async function oracleReceiptActivity(prisma: PrismaService, actor: AuthUser, day?: string,
-  options?: { includeUnassigned: true }): Promise<OracleHistoryReceipt[]> {
+  options?: { includeUnassigned?: true; includeInactiveCollectors?:true }): Promise<OracleHistoryReceipt[]> {
   const includeUnassigned = options?.includeUnassigned === true && actor.permissions.includes('customers.read_all');
   const run = await prisma.oracleMovementSyncRun.findFirst({
     where: { organizationId: actor.organizationId, sourceSchema: 'IAS20261', status: 'published' },
@@ -29,7 +29,7 @@ export async function oracleReceiptActivity(prisma: PrismaService, actor: AuthUs
   });
   if (!run) return [];
   const collectors = await prisma.collector.findMany({
-    where: { active: true, user: { organizationId: actor.organizationId },
+    where: { ...(options?.includeInactiveCollectors&&actor.permissions.includes('reports.read')?{}:{active: true}), user: { organizationId: actor.organizationId },
       ...(actor.permissions.includes('customers.read_all') ? {} : { userId: actor.id }) },
     select: { id: true, oracleCollectorNo: true, user: { select: { fullName: true } } },
   });
@@ -55,7 +55,7 @@ export async function oracleReceiptActivity(prisma: PrismaService, actor: AuthUs
   const byCode = new Map(customers.map((c) => [c.externalCustomerCode, c]));
   const receiptKeys = [...new Set(rows.map((row) => row.documentSerial?.trim() || row.documentNumber?.trim()).filter(Boolean) as string[])];
   const existing = receiptKeys.length ? await prisma.collection.findMany({
-    where: { customer: { organizationId: actor.organizationId }, status: { not: 'reversed' },
+    where: { customer: { organizationId: actor.organizationId }, status: 'recorded',
       OR: [{ referenceNumber: { in: receiptKeys } }, { receiptNumber: { in: receiptKeys } }] },
     select: { referenceNumber: true, receiptNumber: true, customerId: true, currencyCode: true },
   }) : [];

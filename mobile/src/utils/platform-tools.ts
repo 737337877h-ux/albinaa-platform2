@@ -3,6 +3,8 @@ export const platformTools=[
  {route:'AssignTask',title:'إسناد مهمة تحصيل جديدة',path:'/tasks',permission:'tasks.manage',icon:'add-circle-outline'},
  {route:'AssignHrTask',title:'إسناد مهمة لموظف',path:'/hr/tasks',permission:'hr.tasks.manage',icon:'clipboard-outline'},
  {route:'CollectionKpi',title:'مؤشرات أداء التحصيل',path:'/reports/kpi',permission:'reports.read',icon:'stats-chart-outline'},
+ {route:'CollectorPerformance',title:'أداء المحصلين حسب الفترة',path:'/reports/collector-performance',permission:'reports.read',icon:'analytics-outline'},
+ {route:'CustomersWithoutPhones',title:'العملاء دون أرقام هاتف',path:'/reports/customers-without-phones',permission:'customers.read',icon:'call-outline'},
  {route:'ManageUsers',title:'المستخدمون',path:'/admin/users',permission:'users.manage',icon:'people-outline'},
  {route:'ManageRoles',title:'الأدوار والصلاحيات',path:'/admin/roles',permission:'users.manage',icon:'shield-checkmark-outline'},
  {route:'ManageCollectors',title:'المحصلون',path:'/admin/collectors',permission:'users.manage',icon:'person-outline'},

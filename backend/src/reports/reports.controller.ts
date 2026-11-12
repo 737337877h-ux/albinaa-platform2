@@ -16,6 +16,15 @@ export class ReportsController {
   @Get('collector-performance') @RequirePermissions('reports.read')
   collectorPerformance(@CurrentUser() user:AuthUser,@Query('from') from:string,@Query('to') to:string){return this.reports.collectorPerformance(user,from,to);}
 
+  @Get('collector-performance.xlsx') @RequirePermissions('reports.read','reports.export')
+  @Throttle({ default: { ttl:60_000,limit:10 } })
+  async collectorPerformanceExcel(@CurrentUser() user:AuthUser,@Query('from') from:string,@Query('to') to:string,@Res() res:Response){
+    const buffer=await this.reports.collectorPerformanceWorkbook(user,from,to);
+    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',`attachment; filename="collector-performance-${from}-${to}.xlsx"`);
+    res.send(buffer);
+  }
+
   @Get('summary') @RequirePermissions('reports.read')
   @ApiOperation({ summary: 'ملخص شامل مفصول بالعملة: المديونية، أعلى المدينين، الحجوزات، المحصلون، والتعتيق' })
   summary(@CurrentUser() user: AuthUser, @Query('accountClass') accountClass?: string) {

@@ -142,6 +142,7 @@ export default function CustomersPage() {
   return (
     <div className="space-y-5">
       <PageHeader title="العملاء" action={<div className="flex flex-wrap gap-2"><Button variant="secondary" loading={exporting} onClick={()=>void exportCustomers()}><Download className="h-4 w-4" />تصدير قاعدة العملاء Excel</Button>{canWrite ? <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" />إضافة عميل</Button> : null}</div>} />
+      <Link className="inline-block underline" href="/reports/customers-without-phones">تقرير العملاء دون أرقام هاتف</Link>
 
       <Card>
         {/* شريط البحث والفلاتر */}

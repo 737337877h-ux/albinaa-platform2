@@ -6,7 +6,9 @@ import AssignHrTask from './assign-hr-task';
 import NativeBarcode from './native-barcode';
 import NativeAssignments from './native-assignments';
 import NativeCollectionKpi from './native-collection-kpi';
+import CollectorPerformance from './collector-performance';
+import CustomersWithoutPhones from './customers-without-phones';
 import {NativeUsers,NativeRoles,NativeCollectors} from './native-administration';
 import NewTask from './new-task';
-export const nativeToolScreens={AssignHrTask,BarcodeDesign:NativeBarcode,ManageAssignments:NativeAssignments,CollectionKpi:NativeCollectionKpi,ManageUsers:NativeUsers,ManageRoles:NativeRoles,ManageCollectors:NativeCollectors,AssignTask:NewTask};
+export const nativeToolScreens={CollectorPerformance,CustomersWithoutPhones,AssignHrTask,BarcodeDesign:NativeBarcode,ManageAssignments:NativeAssignments,CollectionKpi:NativeCollectionKpi,ManageUsers:NativeUsers,ManageRoles:NativeRoles,ManageCollectors:NativeCollectors,AssignTask:NewTask};
 export default function NativePlatformTool(props:any){const {user}=useAuth(),tool=platformTools.find(t=>t.route===props.route.name);if(!tool||!user?.permissions.includes(tool.permission))return <ToolPage title="غير مصرح"><ToolText>لا تملك صلاحية هذه الشاشة. حدّث الصلاحيات من الإعدادات إذا غيّرها المسؤول.</ToolText></ToolPage>;const Screen=nativeToolScreens[tool.route];return <Screen key={`${user.id}:${tool.route}`} {...props}/>;}

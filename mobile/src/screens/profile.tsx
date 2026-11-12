@@ -4,6 +4,7 @@ import { useAuth } from '../store/auth-context';
 import { APP_VERSION } from '../utils/constants';
 import { colors, radius, shadow } from '../theme';
 import { canUseMobileFeature } from '../utils/mobile-permissions';
+import {canOpenAppRoute} from '../utils/app-access';
 
 export default function ProfileScreen({ navigation }: any) {
   const { user } = useAuth();
@@ -34,6 +35,8 @@ export default function ProfileScreen({ navigation }: any) {
         {canUseMobileFeature(permissions, 'mobile.promises.view', 'promises.create') && <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('PromisesList')}><Text style={styles.quickText}>وعود السداد</Text></TouchableOpacity>}
       </View>
       {canUseMobileFeature(permissions, 'mobile.messages.view', 'followups.create') && <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('MessageTemplates')}><Text style={styles.templatesText}>قوالب واتساب والرسائل النصية</Text></TouchableOpacity>}
+      {canOpenAppRoute('CustomersWithoutPhones',permissions)&&<TouchableOpacity style={styles.templatesBtn} onPress={()=>navigation.navigate('CustomersWithoutPhones')}><Text style={styles.templatesText}>العملاء دون أرقام هاتف</Text></TouchableOpacity>}
+      {canOpenAppRoute('CollectorPerformance',permissions)&&<TouchableOpacity style={styles.templatesBtn} onPress={()=>navigation.navigate('CollectorPerformance')}><Text style={styles.templatesText}>أداء المحصلين حسب الفترة</Text></TouchableOpacity>}
 
       <View style={styles.section}>
         <InfoRow label="إصدار التطبيق" value={APP_VERSION} />
