@@ -8,6 +8,7 @@ function fixture() {
     prisma[name]={findMany:jest.fn().mockResolvedValue([])};
   }
   prisma.collector={findUnique:jest.fn().mockResolvedValue({id:'collector-1'}),findMany:jest.fn().mockResolvedValue([{id:'collector-1',oracleCollectorNo:1,user:{fullName:'المحصل الأول'}}])};
+  prisma.attachment={findMany:jest.fn().mockResolvedValue([])};
   prisma.oracleMovementSyncRun={findFirst:jest.fn().mockResolvedValue({id:'run'})};
   prisma.oracleCustomerMovementMirror={findMany:jest.fn().mockResolvedValue([{externalCustomerCode:'90001',collectorNo:'1',documentSerial:'',documentNumber:'7001',
     currencyCode:'YR',creditForeign:123400,debitForeign:0,creditLocal:772.857,debitLocal:0,documentDate:new Date('2026-10-25'),description:'دفعة من الحساب'}])};
@@ -55,6 +56,32 @@ it('replaces a request with a posted receipt only when its serial matches exactl
     newValue:{kind:'voucher',requestKind:'receipt',requestSerial:serial,requestNo:'7001',amount:123400,currencyCode:'YR',platformCustomerId:'customer'}}]);
   const result=await service.sync(actor);
   expect(result.collections).toHaveLength(1);expect(result.collections[0].id).toContain('oracle-direct:');
+});
+
+it('keeps the uploaded request image after an exactly matched Oracle receipt replaces the request',async()=>{
+  const {service,actor,prisma}=fixture();const serial='12345678901234567890';
+  const rows=await prisma.oracleCustomerMovementMirror.findMany();
+  prisma.oracleCustomerMovementMirror.findMany.mockResolvedValue([{...rows[0],documentSerial:serial}]);
+  prisma.auditLog.findMany.mockResolvedValue([{id:'audit',entityId:serial,createdAt:new Date('2026-10-25'),
+    newValue:{kind:'receipt',requestSerial:serial,requestNo:'7001',amount:123400,currencyCode:'YR',platformCustomerId:'customer'}}]);
+  prisma.attachment.findMany.mockResolvedValue([{id:'photo',entityId:'audit',fileName:'receipt.jpg',uploadedAt:new Date('2026-10-25')}]);
+  const result=await service.sync(actor);
+  expect(result.collections).toHaveLength(1);
+  expect(result.collections[0].receiptAttachment).toMatchObject({id:'photo'});
+  expect(prisma.attachment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where:{entityTable:'oracle_request:receipt:audit',entityId:{in:['audit']}},
+  }));
+});
+
+it('includes an uploaded image with a pending Oracle request without requiring a local collection',async()=>{
+  const {service,actor,prisma}=fixture();
+  prisma.oracleCustomerMovementMirror.findMany.mockResolvedValue([]);
+  prisma.auditLog.findMany.mockResolvedValue([{id:'audit',entityId:'12345678901234567890',createdAt:new Date('2026-10-25'),
+    newValue:{kind:'receipt',requestSerial:'12345678901234567890',requestNo:'7001',amount:123400,currencyCode:'YR',platformCustomerId:'customer'}}]);
+  prisma.attachment.findMany.mockResolvedValue([{id:'photo',entityId:'audit',fileName:'receipt.jpg',uploadedAt:new Date('2026-10-25')}]);
+  const result=await service.sync(actor);
+  expect(result.collections).toHaveLength(1);
+  expect(result.collections[0]).toMatchObject({source:'oracle_receipt_request',receiptAttachment:{id:'photo'}});
 });
 
 it('does not count a request again when the final is already a recorded local collection',async()=>{

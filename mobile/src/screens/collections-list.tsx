@@ -60,7 +60,7 @@ export default function CollectionsListScreen({ navigation }: any) {
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>التحصيلات</Text>
-          <Text style={styles.subtitle}>اليوم: {todayCollections.length.toLocaleString('en-US')} سجل</Text>
+          <Text style={styles.subtitle}>اليوم: {todayCollections.length.toLocaleString('en-US', { maximumFractionDigits: 4 })} سجل</Text>
         </View>
         {canCreate && <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('NewCollection')}>
           <Text style={styles.addBtnText}>+ تحصيل</Text>
@@ -94,7 +94,7 @@ function SummaryAmounts({ label, totals, tone }: { label: string; totals: Record
   return <View style={styles.summaryRow}>
     <Text style={[styles.summaryLabel, tone === 'confirmed' && styles.confirmedStatus]}>{label}</Text>
     <View style={styles.summaryAmounts}>{Object.entries(totals).length
-      ? Object.entries(totals).map(([currency, amount]) => <Text style={styles.summaryAmount} key={currency}>{amount.toLocaleString('en-US')} {currency}</Text>)
+      ? Object.entries(totals).map(([currency, amount]) => <Text style={styles.summaryAmount} key={currency}>{amount.toLocaleString('en-US', { maximumFractionDigits: 4 })} {currency}</Text>)
       : <Text style={styles.summaryAmount}>—</Text>}</View>
   </View>;
 }
@@ -111,7 +111,7 @@ function CollectionItem({ item, navigation, canViewReceipts, onPreviewReceipt }:
         <View style={styles.itemHeader}>
           <Text style={styles.itemTitle}>{item.customerName || 'عميل'}</Text>
           <Text style={styles.itemAmount}>
-            {Number(item.amount || 0).toLocaleString('en-US')} {item.currencyCode || ''}
+            {Number(item.amount || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })} {item.currencyCode || ''}
           </Text>
         </View>
         <View style={styles.statusRow}>

@@ -621,20 +621,37 @@ export class MobileService {
     const currentReceiptStates = reconcileReceiptRequests(rawOracleReceiptActivities as any[],
       [...directOracleReceipts, ...recordedLocalReceiptFinals(rawCollections)],
       canViewCollections ? await this.oracleRequests?.receiptStatuses?.().catch(()=>[]) ?? [] : []);
+    // Uploads for Oracle requests are linked to the authorized creation audit,
+    // rather than a local Collection. Preserve the photo when a posted receipt replaces its request.
+    const requestAttachments = rawOracleReceiptActivities.length ? await this.prisma.attachment.findMany({
+      where: { entityTable: 'oracle_request:receipt:audit', entityId: { in: rawOracleReceiptActivities.map(row => row.id) } },
+      select: { id: true, entityId: true, fileName: true, uploadedAt: true },
+      orderBy: { uploadedAt: 'desc' },
+    }) : [];
+    const receiptByAudit = new Map<string, typeof requestAttachments[number]>();
+    for (const attachment of requestAttachments) {
+      if (!receiptByAudit.has(attachment.entityId)) receiptByAudit.set(attachment.entityId, attachment);
+    }
+    for (const state of currentReceiptStates) {
+      const attachment = receiptByAudit.get(state.auditId);
+      if (state.finalReceiptId && attachment && !receiptByCollection.has(state.finalReceiptId)) {
+        receiptByCollection.set(state.finalReceiptId, attachment);
+      }
+    }
     const stateByAudit = new Map(currentReceiptStates.map(request=>[request.auditId,request]));
     const customerByCode = new Map<string,any>(customers.map((customer:any)=>[customer.externalCustomerCode,customer] as [string,any]));
     const oracleReceiptCollections = (rawOracleReceiptActivities as any[]).flatMap((activity) => {
       const request = stateByAudit.get(activity.id);
       if (request && !request.platformCustomerId && request.platformCustomerCode) request.platformCustomerId = (customerByCode.get(request.platformCustomerCode) as any)?.id ?? null;
       const collection = mobileOracleReceiptCollection(activity, customerNameById, request);
-      return collection ? [collection] : [];
+      return collection ? [{ ...collection, receiptAttachment: receiptByAudit.get(activity.id) ?? null }] : [];
     });
     const directReceiptCollections = directOracleReceipts.map(receipt => ({
       id: receipt.id, customerId: receipt.customerId, customerName: receipt.customer.name,
       amount: receipt.amount, currencyCode: receipt.currencyCode, methodName: receipt.method.name,
       status: 'recorded', source: 'oracle_direct_receipt', statusVerified: true,
       notes: `سند قبض Oracle رقم ${receipt.receiptNumber ?? receipt.referenceNumber}${receipt.notes ? ` — ${receipt.notes}` : ''}`,
-      collectedAt: receipt.collectedAt, receiptAttachment: null, location: null,
+      collectedAt: receipt.collectedAt, receiptAttachment: receiptByCollection.get(receipt.id) ?? null, location: null,
     }));
     const customerAlertsSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const alertCustomers = (customers as any[]).filter((customer) => customer.customerType !== 'advance');

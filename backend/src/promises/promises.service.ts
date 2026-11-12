@@ -161,7 +161,7 @@ export class PromisesService {
           createdBy: actor.id,
           taskType: 'promise_due',
           dueDate,
-          priorityReason: 'وعد سداد مستحق',
+          priorityReason: status === 'upcoming' ? 'متابعة وعد سداد قادم' : 'وعد سداد مستحق',
           expectedAmount: dto.expectedAmount,
           expectedCurrency: dto.currencyCode,
           sourcePromiseId: created.id,
@@ -170,9 +170,11 @@ export class PromisesService {
       return created;
     });
     // الإشعار بعد نجاح المعاملة (غير حرج — لا يترك بيانات جزئية)
-    await this.notifications.notifyUser(collector.userId, 'promise_due', {
+    if (status === 'due_today') await this.notifications.notifyUser(collector.userId, 'promise_due', {
       promiseId: promise.id, customerId: dto.customerId, customerName: customer.name,
       dueDate: dto.dueDate, amount: dto.expectedAmount, currency: dto.currencyCode,
+      reminderKey: `${promise.id}|${orgCalendarDayUtc().toISOString().slice(0, 10)}`,
+      reminderDate: orgCalendarDayUtc().toISOString().slice(0, 10),
     });
 
     await this.audit.log({

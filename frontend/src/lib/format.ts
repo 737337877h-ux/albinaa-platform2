@@ -1,6 +1,6 @@
 /** تنسيقات عربية موحدة — الأرقام لاتينية (0-9) لتطابق كشوف النظام المحاسبي. */
 export const fmtMoney = (v: number | string | null | undefined) =>
-  new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number(v ?? 0));
+  new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 }).format(Number(v ?? 0));
 
 export const ORG_TIME_ZONE = 'Asia/Aden';
 export const ORG_UTC_OFFSET = '+03:00';

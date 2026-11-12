@@ -14,7 +14,7 @@ export function reminderBalanceText(rows: BalanceRow[]) {
     totals.set(currency, (totals.get(currency) || 0) + amount);
   }
   const debts = [...totals].filter(([, amount]) => amount > 0.001);
-  const amount = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const amount = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 4 });
   const summary = debts.map(([currency, value]) => `${amount(value)} ${names[currency] || currency}`).join('، ');
   // Existing and custom templates use the pair {balance} {currency}.
   // With multiple currencies the first token includes each amount and its unit.

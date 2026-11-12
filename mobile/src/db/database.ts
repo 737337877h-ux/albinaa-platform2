@@ -806,8 +806,8 @@ export async function getCustomerOffline360(id: string): Promise<any | null> {
   ]);
   const timeline = [
     ...followups.map((item) => ({ at: item.followupAt, type: 'followup', title: `متابعة — ${item.resultName || item.typeName || ''}` })),
-    ...promises.map((item) => ({ at: item.dueDate, type: 'payment_promise', title: `وعد سداد ${Number(item.expectedAmount || 0).toLocaleString('en-US')} ${item.currencyCode || ''}` })),
-    ...collections.map((item) => ({ at: item.collectedAt, type: 'collection', title: `تحصيل ${Number(item.amount || 0).toLocaleString('en-US')} ${item.currencyCode || ''}` })),
+    ...promises.map((item) => ({ at: item.dueDate, type: 'payment_promise', title: `وعد سداد ${Number(item.expectedAmount || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })} ${item.currencyCode || ''}` })),
+    ...collections.map((item) => ({ at: item.collectedAt, type: 'collection', title: `تحصيل ${Number(item.amount || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })} ${item.currencyCode || ''}` })),
   ].sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))).slice(0, 20);
   return { ...customer, timeline, recentFollowups: followups, recentPromises: promises, recentCollections: collections };
 }

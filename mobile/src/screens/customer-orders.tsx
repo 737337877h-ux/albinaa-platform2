@@ -70,12 +70,12 @@ export default function CustomerOrdersScreen({ navigation }: any) {
       <View style={styles.notice}><Ionicons name="phone-portrait-outline" size={20} color={colors.success} /><Text style={styles.noticeText}>طلبات ARST003 تسبق فاتورة المبيعات وتعمل هنا من قاعدة الهاتف بلا اتصال. النقدي يكفيه الاسم، والآجل يجب أن يحمل رقم العميل.</Text></View>
       <TextInput value={search} onChangeText={setSearch} placeholder="ابحث برقم الطلب أو العميل أو الاسم" style={styles.search} textAlign="right" />
       <View style={styles.filters}>{(['all','cash','credit','other'] as Kind[]).map((value) => <TouchableOpacity key={value} onPress={() => setKind(value)} style={[styles.filter, kind === value && styles.filterActive]}><Text style={[styles.filterText, kind === value && styles.filterTextActive]}>{value === 'all' ? 'الكل' : kindLabel[value]}</Text></TouchableOpacity>)}</View>
-      <Text style={styles.count}>إجمالي {total.toLocaleString('en-US')} طلب محفوظ محليًا · المعروض {items.length.toLocaleString('en-US')}</Text>
+      <Text style={styles.count}>إجمالي {total.toLocaleString('en-US', { maximumFractionDigits: 4 })} طلب محفوظ محليًا · المعروض {items.length.toLocaleString('en-US', { maximumFractionDigits: 4 })}</Text>
       {items.map((item) => <View key={item.id} style={styles.card}>
         <View style={styles.top}><View style={styles.kind}><Text style={styles.kindText}>{kindLabel[item.orderKind] ?? 'أخرى'}</Text></View><Text style={styles.order}>طلب {item.sourceOrderNo || item.sourceOrderSerial}</Text></View>
         <Text style={styles.customer}>{item.proposedCustomerName || item.sourceCustomerName || 'اسم غير محدد'}</Text>
         <Text style={styles.meta}>{item.proposedCustomerCode || item.sourceCustomerCode ? `رقم العميل: ${item.proposedCustomerCode || item.sourceCustomerCode}` : 'طلب نقدي بالاسم فقط'}</Text>
-        <Text style={styles.meta}>{Number(item.sourceAmount || 0).toLocaleString('en-US')} {item.currencyCode || ''} · {String(item.sourceOrderDate || '').slice(0, 10)}</Text>
+        <Text style={styles.meta}>{Number(item.sourceAmount || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })} {item.currencyCode || ''} · {String(item.sourceOrderDate || '').slice(0, 10)}</Text>
         <View style={styles.actions}><TouchableOpacity style={styles.secondary} onPress={() => openEdit(item)}><Text style={styles.secondaryText}>تعديل الربط</Text></TouchableOpacity><TouchableOpacity style={styles.primary} onPress={() => process(item)}><Text style={styles.primaryText}>{item.status === 'ready_for_approval' ? 'مجدول للمراجعة' : 'إرسال للمراجعة'}</Text></TouchableOpacity></View>
       </View>)}
       {items.length < total && <TouchableOpacity style={styles.loadMore} onPress={() => setVisibleLimit((value) => value + 100)}><Text style={styles.loadMoreText}>عرض 100 طلب إضافي</Text></TouchableOpacity>}

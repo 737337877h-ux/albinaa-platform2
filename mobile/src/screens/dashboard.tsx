@@ -114,11 +114,11 @@ export default function DashboardScreen({ navigation }: any) {
           </View>
           <View style={styles.customerAlertsRow}>
             <TouchableOpacity style={[styles.customerAlert, styles.customerAlertWarning]} onPress={() => navigation.navigate('Customers', { alertFilter: 'unassigned', createdSince: undefined })}>
-              <Text style={styles.customerAlertCount}>{Number(data.customerAlerts.unassigned || 0).toLocaleString('en-US')}</Text>
+              <Text style={styles.customerAlertCount}>{Number(data.customerAlerts.unassigned || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })}</Text>
               <Text style={styles.customerAlertLabel}>دون محصّل</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.customerAlert, styles.customerAlertNew]} onPress={() => navigation.navigate('Customers', { alertFilter: 'new', createdSince: data.customerAlerts.since })}>
-              <Text style={styles.customerAlertCount}>{Number(data.customerAlerts.newCustomers || 0).toLocaleString('en-US')}</Text>
+              <Text style={styles.customerAlertCount}>{Number(data.customerAlerts.newCustomers || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })}</Text>
               <Text style={styles.customerAlertLabel}>عملاء جدد</Text>
             </TouchableOpacity>
           </View>
@@ -132,7 +132,7 @@ export default function DashboardScreen({ navigation }: any) {
             <Text style={styles.neverFollowedTitle}>لم تُسجّل لهم متابعة</Text>
             <Text style={styles.neverFollowedSubtitle}>لم تُسجّل أي متابعة لهذه الحسابات</Text>
           </View>
-          <Text style={styles.neverFollowedCount}>{neverFollowedCustomers.length.toLocaleString('en-US')}</Text>
+          <Text style={styles.neverFollowedCount}>{neverFollowedCustomers.length.toLocaleString('en-US', { maximumFractionDigits: 4 })}</Text>
         </TouchableOpacity>
       )}
 
@@ -175,7 +175,7 @@ function Metric({ icon, label, value, detail, tone, onPress }: any) {
   return (
     <TouchableOpacity style={styles.metric} onPress={onPress}>
       <View style={[styles.metricIcon, { backgroundColor: `${toneStyle[tone]}16` }]}><Ionicons name={icon} size={21} color={toneStyle[tone]} /></View>
-      <Text style={styles.metricValue}>{typeof value === 'number' ? value.toLocaleString('en-US') : value}</Text>
+      <Text style={styles.metricValue}>{typeof value === 'number' ? value.toLocaleString('en-US', { maximumFractionDigits: 4 }) : value}</Text>
       <Text style={styles.metricLabel}>{label}</Text>
       {!!detail && <Text style={styles.metricDetail}>{detail}</Text>}
     </TouchableOpacity>
@@ -186,7 +186,7 @@ function ReservationMetric({summary,onPress}:{summary:ReturnType<typeof reservat
  const labels:Record<string,string>={YER:'ريال يمني',SAR:'ريال سعودي'};
  return <TouchableOpacity accessibilityRole="button" accessibilityLabel="فتح حجوزات البضاعة" style={styles.reservationMetric} onPress={onPress}>
   <View style={{flexDirection:'row-reverse',alignItems:'center',gap:8}}><Ionicons name="bookmark-outline" size={24} color={colors.warning}/><Text style={{flex:1,textAlign:'right',fontFamily:'TajawalBold',fontSize:18,color:colors.ink}}>حجوزات البضاعة</Text><Ionicons name="chevron-back" size={20} color={colors.primary}/></View>
-  <Text style={styles.reservationTons}>{summary.count.toLocaleString('en-US')} حجز فعّال · الكمية المتبقية</Text>
+  <Text style={styles.reservationTons}>{summary.count.toLocaleString('en-US', { maximumFractionDigits: 4 })} حجز فعّال · الكمية المتبقية</Text>
   {Object.entries(summary.quantities).map(([unit,value])=><Text key={unit} style={styles.reservationTons}>{formatBalance(value)} {unit}</Text>)}
   {!summary.count&&<Text style={styles.reservationTons}>لا توجد حجوزات فعّالة</Text>}
   {Object.entries(summary.totals).map(([currency,value])=><Text key={currency} style={styles.reservationValue}>{formatBalance(value)} {labels[currency]||currency}</Text>)}
@@ -206,7 +206,7 @@ function PortfolioAccount({ title, count, totals, creditorTotals, icon, onPress,
       <TouchableOpacity style={styles.portfolioHead} onPress={onPress} activeOpacity={0.78}>
         <View style={styles.portfolioIdentity}>
           <View style={styles.summaryIcon}><Ionicons name={icon} size={21} color={colors.gold} /></View>
-          <View><Text style={styles.summaryTitle}>{title}</Text><Text style={styles.summaryCount}>{count.toLocaleString('en-US')} حساب نشط</Text></View>
+          <View><Text style={styles.summaryTitle}>{title}</Text><Text style={styles.summaryCount}>{count.toLocaleString('en-US', { maximumFractionDigits: 4 })} حساب نشط</Text></View>
         </View>
         <Ionicons name="chevron-back" size={20} color={colors.muted} />
       </TouchableOpacity>
@@ -253,7 +253,7 @@ function NewDebtCard({ value, onPress }: { value: any | null; onPress: () => voi
         return (
           <View key={currency} style={styles.debtCurrencyRow}>
             <View style={styles.debtNet}><Text style={[styles.debtNetValue, net < 0 && styles.debtDecrease]}>{formatBalance(Math.abs(net))}</Text><Text style={styles.debtCurrency}>{currency} · {net > 0 ? 'صافي زيادة' : net < 0 ? 'صافي انخفاض' : 'بدون تغير'}</Text></View>
-            <View style={styles.debtDetail}><Text style={styles.debtIncrease}>وارد + {formatBalance(Number(row.positiveIncreases || 0))}</Text><Text style={styles.debtDecrease}>منصرف − {formatBalance(Number(row.decreases || 0))}</Text><Text style={styles.debtAffected}>{Number(row.affectedCount || 0).toLocaleString('en-US')} حساب</Text></View>
+            <View style={styles.debtDetail}><Text style={styles.debtIncrease}>وارد + {formatBalance(Number(row.positiveIncreases || 0))}</Text><Text style={styles.debtDecrease}>منصرف − {formatBalance(Number(row.decreases || 0))}</Text><Text style={styles.debtAffected}>{Number(row.affectedCount || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })} حساب</Text></View>
           </View>
         );
       })}

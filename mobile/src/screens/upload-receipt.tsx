@@ -4,10 +4,12 @@ import { useMutation } from '@tanstack/react-query';
 import { uploadReceipt } from '../api/endpoints';
 import { pickFromCamera, pickFromGallery } from '../utils/image';
 import { colors, radius, shadow } from '../theme';
+import { useSync } from '../store/sync-context';
 
 export default function UploadReceiptScreen({ route, navigation }: any) {
   const collectionId = route.params?.collectionId || '';
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const { triggerSync } = useSync();
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -15,6 +17,7 @@ export default function UploadReceiptScreen({ route, navigation }: any) {
       return uploadReceipt(imageUri, collectionId);
     },
     onSuccess: () => {
+      void triggerSync();
       Alert.alert('تم', 'تم رفع السند بنجاح');
       navigation.goBack();
     },

@@ -7,6 +7,13 @@ const at=(t:string)=>new Date(date+'T'+t+':00+03:00');
 const record=(t='06:50')=>({workDate:date,checkIn:at(t),breakOut:at('13:00'),breakIn:at('14:25'),checkOut:at('22:00')});
 const charge=(r:any,leaves:any[]=[],review:any=null,p:any=policy)=>dayCharge(employee,date,scheduleFor(employee,date),r,leaves,review,p,now);
 describe('effective attendance deduction policy',()=>{
+ it('postpones absence and lateness to the policy start without disabling the January rules',()=>{
+  const deferred={...policy,startDate:'2027-01-01'};
+  expect(charge(null,[],null,deferred)).toMatchObject({absence:false,lateMinutes:0});
+  expect(charge(record(),[],null,deferred)).toMatchObject({absence:false,lateMinutes:0});
+  const day='2027-01-03',end=new Date(day+'T22:00:00+03:00');
+  expect(dayCharge(employee,day,{workDay:true,start:day+'T06:30:00+03:00',end:end.toISOString()},null,[],null,deferred,new Date(end.getTime()+60000)).absence).toBe(true);
+ });
  it('charges only excess grace for both starts',()=>expect(charge(record())).toMatchObject({absence:false,morningMinutes:5,returnMinutes:10,lateMinutes:15,needsReview:false}));
  it('keeps grace boundaries inclusive',()=>expect(charge({...record('06:45'),breakIn:at('14:15')}).lateMinutes).toBe(0));
  it('excludes approved leave inclusively; charges following workdays until attendance',()=>{

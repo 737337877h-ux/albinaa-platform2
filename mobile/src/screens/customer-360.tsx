@@ -340,7 +340,7 @@ export default function Customer360Screen({ route, navigation }: any) {
       Alert.alert('لا يوجد رصيد مدين', 'لا يمكن تقديم طلب خصم أو تصفية لحساب صفري أو دائن.');
       return;
     }
-    setFinancialAmount('');
+    setFinancialAmount(String(Number(debtor.operationalBalance ?? debtor.balance ?? debtor.accountingBalance ?? 0)));
     setFinancialReason('');
     setFinancialRequestType('discount');
     setFinancialRequestOpen(true);
@@ -450,12 +450,12 @@ export default function Customer360Screen({ route, navigation }: any) {
             <View key={`${currency}-${i}`} style={styles.balanceCard}>
               <View style={styles.balanceHeader}>
                 <Text style={styles.balanceCurrency}>{currency}</Text>
-                <View style={styles.balanceDirection}><Text style={[styles.balanceValue, operational < 0 && styles.creditBalance]}>{Number.isFinite(operational) ? Math.abs(operational).toLocaleString('en-US') : '0'}</Text><Text style={[styles.balanceDirectionLabel, operational < 0 && styles.creditBalance]}>{operational < 0 ? 'دائن · له' : 'مدين · عليه'}</Text></View>
+                <View style={styles.balanceDirection}><Text style={[styles.balanceValue, operational < 0 && styles.creditBalance]}>{Number.isFinite(operational) ? Math.abs(operational).toLocaleString('en-US', { maximumFractionDigits: 4 }) : '0'}</Text><Text style={[styles.balanceDirectionLabel, operational < 0 && styles.creditBalance]}>{operational < 0 ? 'دائن · له' : 'مدين · عليه'}</Text></View>
               </View>
               {showAccounting && (
                 <View style={styles.balanceSubRow}>
                   <Text style={styles.balanceSubLabel}>الرصيد المحاسبي</Text>
-                  <Text style={styles.balanceSubValue}>{Number.isFinite(accounting) ? accounting.toLocaleString('en-US') : '0'}</Text>
+                  <Text style={styles.balanceSubValue}>{Number.isFinite(accounting) ? accounting.toLocaleString('en-US', { maximumFractionDigits: 4 }) : '0'}</Text>
                 </View>
               )}
             </View>
@@ -489,7 +489,7 @@ export default function Customer360Screen({ route, navigation }: any) {
             const point = parseJsonField<any>(collection.location, collection.location || null);
             return (
               <View key={collection.id} style={styles.collectionMediaRow}>
-                <Text style={styles.collectionMediaLabel}>{Number(collection.amount || 0).toLocaleString('en-US')} {collection.currencyCode || ''}</Text>
+                <Text style={styles.collectionMediaLabel}>{Number(collection.amount || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })} {collection.currencyCode || ''}</Text>
                 <View style={styles.collectionMediaActions}>
                   {attachment?.id && <TouchableOpacity style={styles.mediaMiniBtn} onPress={() => previewCollectionReceipt(collection)}><Text style={styles.mediaMiniText}>معاينة الإيصال</Text></TouchableOpacity>}
                   {point?.latitude && point?.longitude && <TouchableOpacity style={styles.mediaMiniBtn} onPress={() => openLink(`https://www.google.com/maps?q=${point.latitude},${point.longitude}`, 'تعذر فتح الخريطة')}><Text style={styles.mediaMiniText}>فتح الموقع</Text></TouchableOpacity>}

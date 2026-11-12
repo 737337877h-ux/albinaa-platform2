@@ -149,7 +149,7 @@ export function grossTotalsByCurrencySide(accounts: any[], side: BalanceSide): R
 }
 
 export function formatBalance(value: number): string {
-  return Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 4 });
 }
 
 export function searchableCustomerText(customer: any): string {

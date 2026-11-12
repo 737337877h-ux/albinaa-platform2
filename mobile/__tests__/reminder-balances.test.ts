@@ -2,6 +2,9 @@ import { describe, it, expect } from '@jest/globals';
 import { reminderBalanceText } from '../src/utils/reminder-balances';
 
 describe('payment reminder currencies', () => {
+  it('retains Oracle fractions rather than rounding the account to two decimals', () => {
+    expect(reminderBalanceText([{balance:446105.077,currency:'SAR'}]).summary).toContain('446,105.077');
+  });
   it('includes debts in both currencies without comparing their nominal amounts', () => {
     expect(reminderBalanceText([
       { balance: 80000, currency: 'YER' }, { balance: 1500.25, currency: 'SAR' },
