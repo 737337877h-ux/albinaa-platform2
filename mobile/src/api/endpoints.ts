@@ -1,7 +1,7 @@
 import {inventoryCostAccess} from '../utils/inventory-cost-access';
 import { isOperationsApp } from '../config/product';
 import {getCachedUser} from '../utils/secure-storage';
-import { getClient } from './client';
+import { getClient,getClientForOwner } from './client';
 import { AppState,Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
@@ -68,8 +68,8 @@ export interface ReservationUnit {
   weightKg: number | null;
 }
 
-export async function fetchSync(lastSyncToken?: string) {
-  const client = await getClient();
+export async function fetchSync(lastSyncToken?: string,expectedOwner?:string) {
+  const client = expectedOwner?await getClientForOwner(expectedOwner):await getClient();
   const startedAt = Date.now();
   const inventoryCatalogVersion = await hasInventoryCatalogOffline()
     ? (await getMeta('inventoryCatalogVersion') || undefined) : undefined;
@@ -99,8 +99,8 @@ export async function fetchSync(lastSyncToken?: string) {
   return response;
 }
 
-export async function uploadGps(points: GpsPoint[]) {
-  const client = await getClient();
+export async function uploadGps(points: GpsPoint[],expectedOwner?:string) {
+  const client = expectedOwner?await getClientForOwner(expectedOwner):await getClient();
   if (points.length === 1) {
     return client.post('/mobile/gps', points[0]);
   }

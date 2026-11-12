@@ -14,3 +14,7 @@ export class SessionGate {
 const activityListeners = new Set<() => void>();
 export function reportUserActivity() { activityListeners.forEach(listener => listener()); }
 export function listenUserActivity(listener: () => void) { activityListeners.add(listener); return () => { activityListeners.delete(listener); }; }
+
+let workValidator:(()=>boolean)|undefined;
+export function registerSessionWorkValidator(check:()=>boolean){workValidator=check;return()=>{if(workValidator===check)workValidator=undefined;};}
+export function sessionAllowsWorkInMemory(){return workValidator?.();}

@@ -1,8 +1,10 @@
 import {syncAttendance} from './attendance-offline';
-import { fetchQuotationsOfflineSnapshot } from '../api/quotations';
 import { submitQueuedQuotation } from './quotation-sync';
-import { fetchCustomerOrdersOfflineSnapshot, fetchSync, uploadGps } from '../api/endpoints';
-import { getClient } from '../api/client';
+import { fetchSync, uploadGps } from '../api/endpoints';
+import { getClientForOwner } from '../api/client';
+import {assertBusinessSession,isSessionAccessError} from './business-session';
+import {withQueueLease} from './queue-lease';
+import {westernDigits} from './date-input';
 import {
   applySyncSnapshot, blockMutation, getMeta, getMutationQueueStats,
   getPendingMutations, getUnsyncedGps, hasInventoryCatalogOffline, incrementRetry,
@@ -106,16 +108,23 @@ async function executeQueuedRequest(client: any, mutation: any, rawPayload: any)
   return response;
 }
 
-export async function processPendingMutationQueue(): Promise<number> {
+export async function processPendingMutationQueue(expectedOwner?:string): Promise<number> {
+ return (await withQueueLease(async(owner,check)=>{
   await syncAttendance().catch(() => undefined);
+  await check();
   const mutations = await getPendingMutations();
   if (mutations.length === 0) return 0;
-  const client = await getClient();
+  const client = await getClientForOwner(owner);
   let accepted = 0;
   for (const mutation of mutations) {
     try {
+      await check();
       const rawPayload = JSON.parse(mutation.payload);
+      if(String(mutation.endpoint).startsWith('/oracle-test-requests/')){
+        for(const key of ['referenceNo','noticeNo'])if(typeof rawPayload[key]==='string')rawPayload[key]=westernDigits(rawPayload[key]);
+      }
       const response = await executeQueuedRequest(client, mutation, rawPayload);
+      await check();
       if (Number.isFinite(rawPayload?.gpsLatitude) && Number.isFinite(rawPayload?.gpsLongitude)) {
         await saveGpsPoint({
           latitude: rawPayload.gpsLatitude, longitude: rawPayload.gpsLongitude,
@@ -128,6 +137,7 @@ export async function processPendingMutationQueue(): Promise<number> {
       await removeMutation(mutation.id);
       accepted += 1;
     } catch (error: any) {
+      if(isSessionAccessError(error))break;
       const message = syncErrorMessage(error);
       const httpStatus = error?.response?.status;
       if (retryableSyncStatus(httpStatus)) {
@@ -140,39 +150,43 @@ export async function processPendingMutationQueue(): Promise<number> {
     }
   }
   return accepted;
+ },expectedOwner))??0;
 }
 
-export async function syncPendingGpsQueue(): Promise<number> {
+export async function syncPendingGpsQueue(expectedOwner?:string): Promise<number> {
+  const {owner}=await assertBusinessSession(expectedOwner);
   const points = await getUnsyncedGps();
   if (points.length === 0) return 0;
   await uploadGps(points.map((point: any) => ({
     latitude: point.latitude, longitude: point.longitude, accuracy: point.accuracy,
     entityTable: point.entityTable, entityId: point.entityId, recordedAt: point.recordedAt,
-  })));
+  })),owner);
+  await assertBusinessSession(owner);
   await markGpsSynced(points.map((point: any) => point.id));
   return points.length;
 }
 
-export async function pullLatestMobileSnapshot(): Promise<void> {
+export async function pullLatestMobileSnapshot(expectedOwner?:string): Promise<void> {
+  const {owner}=await assertBusinessSession(expectedOwner);
   const [lastToken, hasOfflineInventory] = await Promise.all([getMeta('syncToken'), hasInventoryCatalogOffline()]);
-  const response = await fetchSync(hasOfflineInventory ? (lastToken || undefined) : undefined);
+  const response = await fetchSync(hasOfflineInventory ? (lastToken || undefined) : undefined,owner);
   const data = response.data;
   await applySyncSnapshot({
     inventoryCatalogVersion: data.inventoryCatalogVersion,
     customers: data.customers || [], tasks: data.tasks || [], followups: data.followups || [],
     promises: data.promises || [], collections: data.collections || [], reservations: data.reservations || [],
     references: data.references || {}, newDebt: data.newDebt ?? null, customerAlerts: data.customerAlerts ?? null,
-  }, data.syncToken);
-  try { await fetchCustomerOrdersOfflineSnapshot(); } catch { /* preserve last valid local snapshot */ }
-      try { await fetchQuotationsOfflineSnapshot(); } catch { /* preserve last complete quotation snapshot */ }
+  }, data.syncToken,owner);
+  await assertBusinessSession(owner);
   try { await rescheduleOfflineReminders(); } catch (error) { console.warn('[BackgroundSync] reminders unavailable', error); }
 }
 
-export async function backgroundSyncOnce(): Promise<{ uploaded: number; gps: number; pending: number; blocked: number }> {
-  const uploaded = await processPendingMutationQueue();
+export async function backgroundSyncOnce(expectedOwner?:string): Promise<{ uploaded: number; gps: number; pending: number; blocked: number }> {
+  const {owner}=await assertBusinessSession(expectedOwner);
+  const uploaded = await processPendingMutationQueue(owner);
   let gps = 0;
-  try { gps = await syncPendingGpsQueue(); } catch { /* GPS never blocks business sync */ }
-  await pullLatestMobileSnapshot();
+  try { gps = await syncPendingGpsQueue(owner); } catch { /* GPS never blocks business sync */ }
+  await pullLatestMobileSnapshot(owner);
   const queue = await getMutationQueueStats();
   return { uploaded, gps, pending: queue.pending, blocked: queue.blocked };
 }

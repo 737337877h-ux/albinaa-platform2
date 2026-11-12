@@ -15,6 +15,11 @@ describe('operations application boundary', () => {
     expect(canOpenOperationsRoute('NewInventoryCount', ['mobile.inventory_count.create'])).toBe(true);
   });
   test('honors explicitly configured mobile inventory access', () => {
+    expect(canOpenOperationsRoute('RequestInventoryTransfer',['mobile.inventory_transfers.create'])).toBe(true);
+    expect(canOpenOperationsRoute('RequestInventoryTransfer',['mobile.inventory.view','inventory_transfers.create'])).toBe(false);
+    expect(canOpenOperationsRoute('RequestInventoryTransfer',['inventory_transfers.create'])).toBe(true);
+    expect(canOpenOperationsRoute('YearReadiness',['settings.manage'])).toBe(true);
+    expect(canOpenOperationsRoute('YearReadiness',['reports.read'])).toBe(false);
     expect(canOpenOperationsRoute('Inventory', ['mobile.tasks.view', 'reports.read'])).toBe(false);
     expect(canOpenOperationsRoute('Inventory', ['mobile.inventory.view'])).toBe(true);
   });

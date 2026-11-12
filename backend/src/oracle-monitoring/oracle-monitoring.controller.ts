@@ -7,13 +7,17 @@ import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { ReviewOracleExceptionDto } from './dto/review-oracle-exception.dto';
 import { OracleExceptionReviewService } from './oracle-exception-review.service';
 import { OracleMonitoringService } from './oracle-monitoring.service';
+import {YearReadinessService} from './year-readiness.service';
 
 @ApiTags('Oracle Mirror Monitoring')
 @ApiBearerAuth('access-token')
 @RequirePermissions('settings.manage')
 @Controller('oracle-monitoring')
 export class OracleMonitoringController {
-  constructor(private readonly monitoring: OracleMonitoringService, private readonly exceptions: OracleExceptionReviewService) {}
+  constructor(private readonly monitoring: OracleMonitoringService, private readonly exceptions: OracleExceptionReviewService,private readonly readiness:YearReadinessService) {}
+
+  @Get('year-readiness')
+  yearReadiness(@CurrentUser() actor:AuthUser){return this.readiness.inspect(actor.organizationId);}
 
   @Get('summary')
   @ApiOperation({ summary: 'Oracle mirror health and recent read-only sync runs' })

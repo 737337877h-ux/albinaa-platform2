@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { AppState, View } from 'react-native';
-import { SessionGate, sessionExpired, listenUserActivity } from '../utils/session-lock';
+import { SessionGate, sessionExpired, listenUserActivity,registerSessionWorkValidator } from '../utils/session-lock';
 import { verifyBiometric } from '../utils/biometric-unlock';
 import { AuthUser, login as apiLogin, logout as apiLogout, getMe } from '../api/auth';
 import {
@@ -60,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (Date.now() - lastPersisted.current >= 15000) persistActivity(gate.current.lastActivity);
   }, [lockSession, persistActivity]);
   useEffect(() => listenUserActivity(touchActivity), [touchActivity]);
+  useEffect(()=>registerSessionWorkValidator(()=>gate.current.accepts(gate.current.version)),[]);
   useEffect(() => {
     const check = () => { if (gate.current.active && sessionExpired(gate.current.lastActivity)) lockSession(); };
     const timer = setInterval(check, 1000);

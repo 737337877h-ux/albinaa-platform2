@@ -7,7 +7,7 @@ export const collectorRoutes = [
   'NewCollection','FollowupsList','CollectionsList','NewTask','UploadReceipt',
   'CustomerLocationPicker','MessageTemplates','PromisesList','DebtChangeDetails',
   'RequestCenter','RequestVoucher','RequestJournal','AssignTask','CollectionKpi','CollectorPerformance','CustomersWithoutPhones',
-  'ManageUsers','ManageRoles','ManageCollectors','ManageAssignments',
+  'ManageUsers','ManageRoles','ManageCollectors','ManageAssignments','YearReadiness',
   'HrCenter','HrAttendance','HrRequests','HrTasks','HrMyPayroll',
 ] as const;
 export function canOpenCollectorRoute(route:string):boolean {
@@ -15,6 +15,7 @@ export function canOpenCollectorRoute(route:string):boolean {
 }
 export function canOpenAppRoute(route:string,permissions:readonly string[]):boolean {
   if(isOperationsApp)return canOpenOperationsRoute(route,permissions);
+  if(route==='YearReadiness')return permissions.includes('settings.manage');
   if(route==='CustomersWithoutPhones')return permissions.includes('customers.read')&&canUseMobileFeature(permissions,'mobile.customers.view','customers.read');
   if(route==='CollectorPerformance')return permissions.includes('reports.read');
   if(route==='Reservations')return canUseMobileFeature(permissions,'mobile.reservations.view','reservations.read');

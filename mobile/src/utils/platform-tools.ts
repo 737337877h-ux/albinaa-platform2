@@ -1,4 +1,5 @@
 export const platformTools=[
+ {route:'YearReadiness',title:'الاستعداد لسنة 2027',path:'/admin/year-readiness',permission:'settings.manage',icon:'calendar-outline'},
  {route:'BarcodeDesign',title:'تصميم وطباعة الباركود',path:'/inventory/barcodes',permission:'inventory.read',icon:'barcode-outline'},
  {route:'AssignTask',title:'إسناد مهمة تحصيل جديدة',path:'/tasks',permission:'tasks.manage',icon:'add-circle-outline'},
  {route:'AssignHrTask',title:'إسناد مهمة لموظف',path:'/hr/tasks',permission:'hr.tasks.manage',icon:'clipboard-outline'},

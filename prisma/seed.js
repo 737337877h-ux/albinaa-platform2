@@ -183,6 +183,7 @@ async function main() {
     ['mobile.inventory.view', 'تطبيق الهاتف: عرض الأصناف والمخزون'],
     ['mobile.inventory.cost.view', 'تطبيق الهاتف: عرض التكلفة للمخزون والأصناف'],
     ['mobile.inventory_count.create', 'تطبيق الهاتف: إنشاء مسودة جرد في IAS20191'],
+    ['mobile.inventory_transfers.create', 'تطبيق الهاتف: إنشاء وفحص وإرسال طلب تحويل مخزني خاص بالمستخدم'],
     ['mobile.receipts.view', 'تطبيق الهاتف: معاينة صور الإيصالات'],
     ['mobile.receipts.upload', 'تطبيق الهاتف: رفع صورة إيصال'],
     ['mobile.location.view', 'تطبيق الهاتف: عرض الموقع'],

@@ -21,6 +21,9 @@ import {
 import { rescheduleOfflineReminders } from '../utils/local-notifications';
 import { resolveCustomerOrderEndpoint, submitQueuedCustomerOrder, submitQueuedOracleCustomerOrder } from '../utils/customer-order-sync';
 import { westernDigits } from '../utils/date-input';
+import {withQueueLease} from '../utils/queue-lease';
+import {assertBusinessSession,isSessionAccessError} from '../utils/business-session';
+import {businessBackgroundSyncEnabled} from '../utils/background-sync';
 
 const GATEWAY_REQUEST_TIMEOUT_MS = 120_000;
 
@@ -193,16 +196,20 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     setStatus((current) => ({ ...current, ...queue, lastSyncAt, lanOnly }));
   }, []);
 
-  const processQueue = useCallback(async () => {
+  const processQueue = useCallback(async (expectedOwner?:string) => {
+    await withQueueLease(async(owner,check)=>{
     await syncAttendance().catch(() => undefined);
+    await check();
     const mutations = await getPendingMutations();
     if (mutations.length === 0) return;
-    const { getClient } = await import('../api/client');
-    const client = await getClient();
+    const { getClientForOwner } = await import('../api/client');
+    const client = await getClientForOwner(owner);
     for (const mutation of mutations) {
       try {
+        await check();
         const rawPayload = JSON.parse(mutation.payload);
         const response = await executeQueuedRequest(client, mutation, rawPayload);
+        await check();
         if (Number.isFinite(rawPayload?.gpsLatitude) && Number.isFinite(rawPayload?.gpsLongitude)) {
           await saveGpsPoint({
             latitude: rawPayload.gpsLatitude,
@@ -215,6 +222,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         await markOfflineRequestResult(mutation.operationId, 'synced');
         await removeMutation(mutation.id);
       } catch (error: any) {
+        if(isSessionAccessError(error))break;
         const message = errorMessage(error);
         const httpStatus = error?.response?.status;
         if (retryableStatus(httpStatus)) {
@@ -226,9 +234,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         }
       }
     }
+    },expectedOwner);
   }, []);
 
   const syncGps = useCallback(async () => {
+    const {owner}=await assertBusinessSession();
     const points = await getUnsyncedGps();
     if (points.length === 0) return;
     const batch = points.map((point: any) => ({
@@ -239,7 +249,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       entityId: point.entityId,
       recordedAt: point.recordedAt,
     }));
-    await uploadGps(batch);
+    await uploadGps(batch,owner);
+    await assertBusinessSession(owner);
     await markGpsSynced(points.map((point: any) => point.id));
   }, []);
 
@@ -250,6 +261,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     stage('فحص الاتصال');
     setStatus((current) => ({ ...current, phase: 'syncing', lastError: null }));
     try {
+      const {owner}=await assertBusinessSession();
       const lanOnly = await getLanOnlySync();
       const health = await prepareOnlineRoute(3_500);
       if (!health.ok) {
@@ -260,7 +272,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
       // Push first so a subsequent pull contains the accepted server records.
       stage('إرسال العمليات المحلية');
-      await processQueue();
+      await processQueue(owner);
       stage('إرسال المواقع');
       try { await syncGps(); } catch { /* GPS must not block business data */ }
 
@@ -272,7 +284,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       // a recent sync token from the previous release. Omitting that token
       // once asks the server for the full Oracle catalog needed to seed them.
       stage('تنزيل البيانات');
-      const response = await fetchSync(!isOperationsApp || hasOfflineInventory ? (lastToken || undefined) : undefined);
+      const response = await fetchSync(!isOperationsApp || hasOfflineInventory ? (lastToken || undefined) : undefined,owner);
       const data = response.data;
       stage('حفظ البيانات على الهاتف');
       await applySyncSnapshot({
@@ -286,7 +298,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         references: data.references || {},
         newDebt: data.newDebt ?? null,
         customerAlerts: data.customerAlerts ?? null,
-      }, data.syncToken);
+      }, data.syncToken,owner);
       // Also refresh an open screen after a background task replaced SQLite.
       void queryClient.invalidateQueries({ predicate: query =>
         String(query.queryKey[0]).startsWith('mobile-inventory-') || query.queryKey[0] === 'barcode-items',
@@ -350,6 +362,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     intervalRef.current = setInterval(triggerSync, SYNC_INTERVAL_MS);
     const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') triggerSync();
+      else void businessBackgroundSyncEnabled().then(enabled=>{if(enabled)void triggerSync();}).catch(()=>undefined);
     });
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);

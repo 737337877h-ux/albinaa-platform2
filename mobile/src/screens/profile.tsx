@@ -37,6 +37,7 @@ export default function ProfileScreen({ navigation }: any) {
       {canUseMobileFeature(permissions, 'mobile.messages.view', 'followups.create') && <TouchableOpacity style={styles.templatesBtn} onPress={() => navigation.navigate('MessageTemplates')}><Text style={styles.templatesText}>قوالب واتساب والرسائل النصية</Text></TouchableOpacity>}
       {canOpenAppRoute('CustomersWithoutPhones',permissions)&&<TouchableOpacity style={styles.templatesBtn} onPress={()=>navigation.navigate('CustomersWithoutPhones')}><Text style={styles.templatesText}>العملاء دون أرقام هاتف</Text></TouchableOpacity>}
       {canOpenAppRoute('CollectorPerformance',permissions)&&<TouchableOpacity style={styles.templatesBtn} onPress={()=>navigation.navigate('CollectorPerformance')}><Text style={styles.templatesText}>أداء المحصلين حسب الفترة</Text></TouchableOpacity>}
+      {canOpenAppRoute('YearReadiness',permissions)&&<TouchableOpacity style={styles.templatesBtn} onPress={()=>navigation.navigate('YearReadiness')}><Text style={styles.templatesText}>الاستعداد لسنة 2027</Text></TouchableOpacity>}
 
       <View style={styles.section}>
         <InfoRow label="إصدار التطبيق" value={APP_VERSION} />

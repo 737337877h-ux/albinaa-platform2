@@ -7,16 +7,17 @@ export const operationsRoutes = [
   'CustomerOrders', 'NewCustomerOrder', 'RequestPurchase', 'RequestInventoryTransfer',
   'NewInventoryCount', 'Inventory', 'InventoryItem', 'Reservations', 'NewReservation',
   'HrCenter', 'HrAttendance', 'HrRequests', 'HrTasks', 'HrTaskReview', 'HrRequestReview', 'HrMyPayroll',
-  'AssignHrTask', 'BarcodeDesign', 'ManageUsers', 'ManageRoles',
+  'AssignHrTask', 'BarcodeDesign', 'ManageUsers', 'ManageRoles','YearReadiness',
 ] as const;
 export function canOpenOperationsRoute(route: string, permissions: readonly string[]): boolean {
   if (!(operationsRoutes as readonly string[]).includes(route)) return false;
   const any = (...codes: string[]) => codes.some(p => permissions.includes(p));
+  if(route==='YearReadiness')return any('settings.manage');
   if (['Main', 'Settings', 'Notifications', 'HrCenter', 'HrAttendance', 'HrRequests', 'HrTasks', 'HrMyPayroll'].includes(route)) return true;
   if (['Quotations', 'CustomerOrders'].includes(route)) return any('sales_order_drafts.read');
   if (['NewQuotation', 'NewCustomerOrder'].includes(route)) return any('sales_order_drafts.manage');
   if (route === 'RequestPurchase') return any('oracle_test_requests.purchase.create');
-  if (route === 'RequestInventoryTransfer') return any('inventory_transfers.create');
+  if (route === 'RequestInventoryTransfer') return canUseMobileFeature(permissions,'mobile.inventory_transfers.create','inventory_transfers.create');
   if (route === 'NewInventoryCount') return any('oracle_test_requests.inventory_count.create', 'mobile.inventory_count.create');
   if (route === 'Inventory' || route === 'InventoryItem') return canUseMobileFeature(permissions, 'mobile.inventory.view', 'reports.read');
   if (route === 'Reservations') return canUseMobileFeature(permissions, 'mobile.reservations.view', 'reservations.read');

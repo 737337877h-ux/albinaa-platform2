@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.3.78",
+  "version": "1.3.79",
   "main": "index.ts",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -13,6 +13,7 @@
     "expo": "~57.0.11",
     "expo-audio": "~57.0.4",
     "expo-background-fetch": "~57.0.8",
+    "expo-background-task": "~57.0.23",
     "expo-camera": "~57.0.4",
     "expo-constants": "~57.0.9",
     "expo-contacts": "~57.0.3",

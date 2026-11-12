@@ -19,6 +19,10 @@ beforeEach(async () => {
  };
 });
 afterEach(()=>jest.restoreAllMocks());
+test('a retained client cannot send the next queued request under a new login',async()=>{
+ const previous=await getClient();await resetClient();await setTokens('other-access','other-refresh');
+ await expect(previous.get('/old-work')).rejects.toMatchObject({code:'SESSION_CHANGED'});
+});
 test('concurrent unauthorized requests share one refresh and both finish',async()=>{
  const pending=deferred();post.mockReturnValue(pending.promise);
  const c=await getClient();const results=Promise.all([c.get('/one'),c.get('/two')]);

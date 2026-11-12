@@ -28,10 +28,11 @@ export class InventoryTransfersService {
   ) {}
 
   private include = { lines: { orderBy: { lineNo: 'asc' as const } } };
+  private mobileOnly(actor:AuthUser,permission:string){return actor.permissions.includes('mobile.inventory_transfers.create')&&!actor.permissions.includes(permission);}
 
-  private async scoped(actor: AuthUser, id: string) {
+  private async scoped(actor: AuthUser, id: string,ownOnly=false) {
     const row = await this.prisma.inventoryTransferRequest.findFirst({
-      where: { id, organizationId: actor.organizationId }, include: this.include,
+      where: { id, organizationId: actor.organizationId,...(ownOnly?{createdBy:actor.id}:{}) }, include: this.include,
     });
     if (!row) throw new NotFoundException('طلب التحويل غير موجود');
     return row;
@@ -51,7 +52,7 @@ export class InventoryTransfersService {
 
   async list(actor: AuthUser) {
     const rows = await this.prisma.inventoryTransferRequest.findMany({
-      where: { organizationId: actor.organizationId }, include: this.include,
+      where: { organizationId: actor.organizationId,...(this.mobileOnly(actor,'inventory_transfers.read')?{createdBy:actor.id}:{}) }, include: this.include,
       orderBy: { createdAt: 'desc' },
     });
     return this.attachItemNames(actor, rows);
@@ -82,7 +83,7 @@ export class InventoryTransfersService {
   }
 
   async get(actor: AuthUser, id: string) {
-    const [row] = await this.attachItemNames(actor, [await this.scoped(actor, id)]);
+    const [row] = await this.attachItemNames(actor, [await this.scoped(actor, id,this.mobileOnly(actor,'inventory_transfers.read'))]);
     return row;
   }
 
@@ -96,6 +97,7 @@ export class InventoryTransfersService {
       include: this.include,
     });
     if (existing) {
+      if(this.mobileOnly(actor,'inventory_transfers.create')&&existing.createdBy!==actor.id)throw new NotFoundException('طلب التحويل غير موجود');
       const same = existing.sourceWarehouseCode === source
         && existing.destinationWarehouseCode === destination
         && existing.oracleSourceTransferSerial === (dto.oracleSourceTransferSerial?.trim() || null)
@@ -122,7 +124,8 @@ export class InventoryTransfersService {
   }
 
   async submit(actor: AuthUser, id: string, req: Request) {
-    const row = await this.scoped(actor, id);
+    const row = await this.scoped(actor, id,this.mobileOnly(actor,'inventory_transfers.create'));
+    if(['pending_approval','approved'].includes(row.status)&&row.submittedBy===actor.id)return row;
     if (!(EDITABLE_STATUSES as readonly string[]).includes(row.status)) throw new ConflictException('حالة الطلب لا تسمح بالإرسال للاعتماد');
     const updated = await this.prisma.inventoryTransferRequest.update({
       where: { id }, data: { status: 'pending_approval', submittedBy: actor.id, submittedAt: new Date(), reviewedBy: null, reviewedAt: null, reviewNote: null },
@@ -133,7 +136,7 @@ export class InventoryTransfersService {
   }
 
   async dryRun(actor: AuthUser, id: string, req?: Request) {
-    const row = await this.scoped(actor, id);
+    const row = await this.scoped(actor, id,this.mobileOnly(actor,'inventory_transfers.dry_run')&&!actor.permissions.includes('inventory_transfers.approve'));
     const issues: TransferValidationIssue[] = [];
     if (row.sourceWarehouseCode === row.destinationWarehouseCode) issues.push({ code: 'SAME_WAREHOUSE', severity: 'error', message: 'المصدر والوجهة متطابقان' });
     const [sourceExists, destinationExists] = await Promise.all([
@@ -298,7 +301,7 @@ export class InventoryTransfersService {
   }
 
   async refreshOracleStatus(actor: AuthUser, id: string, req: Request) {
-    const row = await this.scoped(actor, id);
+    const row = await this.scoped(actor, id,this.mobileOnly(actor,'inventory_transfers.read'));
     let sourceTransferSerial = row.oracleSourceTransferSerial;
     if (!sourceTransferSerial) {
       if (!row.oracleOutReqSer) {

@@ -17,11 +17,16 @@ const mockAdapter: any = {
   },
 };
 jest.mock('expo-sqlite', () => ({ openDatabaseAsync: async () => mockAdapter }));
-import {getDb,setMeta,saveAttendanceLocal,attendanceRows,attendanceResult,getMutationQueueStats} from '../src/db/database';
+import {getDb,setMeta,saveAttendanceLocal,attendanceRows,attendanceResult,getMutationQueueStats,applySyncSnapshot,getMeta} from '../src/db/database';
 describe('attendance SQLite durability',()=>{
  beforeEach(async()=>{await getDb();mockSql.exec('DELETE FROM attendance_outbox; DELETE FROM mutation_queue; DELETE FROM sync_metadata;');await setMeta('dataOwner','org:user');});
  afterAll(()=>mockSql.close());
  it('persists the timestamp and only one copy of a retried operation',async()=>{const p={operationId:'op',recordedAt:123456789,action:'in'};await saveAttendanceLocal('org:user',p);await saveAttendanceLocal('org:user',p);const rows=await attendanceRows('org:user');expect(rows).toHaveLength(1);expect(JSON.parse(rows[0].payload)).toEqual(p);expect(await getMutationQueueStats()).toEqual({pending:1,blocked:0});});
  it('keeps rejected movements visible and counts them separately',async()=>{await saveAttendanceLocal('org:user',{operationId:'op'});await attendanceResult('op','rejected','reason');expect((await attendanceRows('org:user'))[0].error).toBe('reason');expect(await getMutationQueueStats()).toEqual({pending:0,blocked:1});});
  it('prevents writing under another account and isolates its rows',async()=>{await expect(saveAttendanceLocal('org:other',{operationId:'op'})).rejects.toThrow();expect(await attendanceRows('org:other')).toHaveLength(0);});
+ it('rejects an old-account snapshot inside the SQLite transaction and keeps the current sync token',async()=>{
+  await setMeta('syncToken','current-token');
+  await expect(applySyncSnapshot({} as any,'old-token','org:other')).rejects.toMatchObject({code:'SESSION_CHANGED'});
+  expect(await getMeta('syncToken')).toBe('current-token');expect(await getMeta('dataOwner')).toBe('org:user');
+ });
 });

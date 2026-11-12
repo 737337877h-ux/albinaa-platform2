@@ -934,7 +934,7 @@ async function replaceInventoryCatalog(
  * closed during this operation SQLite rolls everything back, so the same
  * server page is requested again on the next launch.
  */
-export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: string): Promise<void> {
+export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: string,expectedOwner?:string): Promise<void> {
   const previous = ownerTransition;
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });
@@ -943,6 +943,10 @@ export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: strin
   try {
     const d = await openDb();
     await d.withExclusiveTransactionAsync(async (tx) => {
+    if(expectedOwner){
+      const identity=await tx.getFirstAsync<{value:string}>("SELECT value FROM sync_metadata WHERE key='dataOwner'");
+      if(identity?.value!==expectedOwner){const error:any=new Error('تغير حساب بيانات الهاتف');error.code='SESSION_CHANGED';throw error;}
+    }
     await tx.runAsync(`
       CREATE TEMP TABLE IF NOT EXISTS sync_seen_ids (
         tableName TEXT NOT NULL,

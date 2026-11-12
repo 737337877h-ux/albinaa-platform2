@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import BackgroundSyncStatus from '../components/background-sync-status';
 import { isOperationsApp, product } from '../config/product';
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View,
@@ -276,6 +277,7 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </View>
 
+      <BackgroundSyncStatus/>
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>التنبيهات</Text>
         {isOperationsApp ? <Text style={styles.hint}>{product.pushConfigured ? 'تصلك إشعارات الطلبات ومهام الموظفين عند السماح بالإشعارات في إعدادات الهاتف، وتجد سجلها في شاشة الإشعارات داخل التطبيق.' : 'تجد إشعارات الطلبات ومهام الموظفين في شاشة الإشعارات داخل التطبيق. الإشعارات البعيدة لهذه النسخة ما زالت قيد التجهيز.'}</Text> : <>

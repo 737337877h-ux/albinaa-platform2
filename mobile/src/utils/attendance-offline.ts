@@ -1,4 +1,5 @@
-import {getClient} from '../api/client';
+import {getClientForOwner} from '../api/client';
+import {isSessionAccessError} from './business-session';
 import {attendanceRows,attendanceResult,getMeta,setMeta} from '../db/database';
 export const attendanceCacheKey=(scope:string)=>`attendance-snapshot:${scope}`;
 export const actionField:Record<string,string>={in:'checkIn',out:'checkOut',break_out:'breakOut',break_in:'breakIn'};
@@ -25,7 +26,7 @@ export function syncAttendance(){
 async function run(){
  const scope=await getMeta('dataOwner');if(!scope)return;
  const rows=await attendanceRows(scope);if(!rows.some(r=>r.status!=='synced'))return;
- const client=await getClient();
+ const client=await getClientForOwner(scope);
  for(const row of rows){
   if(row.status==='synced')continue;
   if(row.status==='rejected')break;
@@ -42,6 +43,7 @@ async function run(){
    }
    await attendanceResult(row.operationId,'synced');
   }catch(e:any){
+   if(isSessionAccessError(e))break;
    const status=e.response?.status;
    const retry=!status||[401,408,425,429].includes(status)||status>=500;
    await attendanceResult(row.operationId,retry?'pending':'rejected',e.response?.data?.message?.toString()||e.message||'تعذر الاتصال');

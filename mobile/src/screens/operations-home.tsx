@@ -28,6 +28,7 @@ const services: Entry[] = [
   { title: 'مراجعة طلبات الموظفين', route: 'HrRequestReview', icon: 'checkmark-circle-outline' },
   { title: 'المستخدمون', route: 'ManageUsers', icon: 'people-outline' },
   { title: 'الأدوار والصلاحيات', route: 'ManageRoles', icon: 'shield-checkmark-outline' },
+  { title: 'الاستعداد لسنة 2027', route: 'YearReadiness', icon: 'calendar-outline' },
   { title: 'الإعدادات والمزامنة', route: 'Settings', icon: 'settings-outline' },
 ];
 

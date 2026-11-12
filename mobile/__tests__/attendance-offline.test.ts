@@ -1,7 +1,7 @@
 import {beforeEach,describe,expect,it,jest} from '@jest/globals';
 const mockRows:any[]=[],mockStore=new Map<string,string>();
 const mockPost=jest.fn<(...args:any[])=>Promise<any>>();
-jest.mock('../src/api/client',()=>({getClient:async()=>({post:mockPost,get:async()=>{throw Error('offline');}})}));
+jest.mock('../src/api/client',()=>({getClientForOwner:async()=>({post:mockPost,get:async()=>{throw Error('offline');}})}));
 jest.mock('../src/db/database',()=>({
  attendanceRows:async()=>mockRows,
  attendanceResult:async(id:string,status:string)=>{mockRows.find(r=>r.operationId===id).status=status;},

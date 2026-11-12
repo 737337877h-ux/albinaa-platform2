@@ -157,6 +157,7 @@ const MOBILE_PERMISSION_GROUPS: PermissionGroup[] = [
     { code: 'mobile.inventory.view', label: 'عرض الأصناف والمخزون' },
     { code: 'mobile.inventory.cost.view', label: 'عرض التكلفة للمخزون والأصناف' },
     { code: 'mobile.inventory_count.create', label: 'إنشاء مسودة جرد من الهاتف' },
+    { code: 'mobile.inventory_transfers.create', label: 'إنشاء وفحص وإرسال طلب تحويل مخزني من الهاتف' },
     { code: 'mobile.receipts.view', label: 'معاينة صور الإيصالات' },
     { code: 'mobile.receipts.upload', label: 'رفع صورة إيصال' },
     { code: 'mobile.location.view', label: 'عرض الموقع' },

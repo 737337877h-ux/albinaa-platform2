@@ -101,6 +101,7 @@ const ADMIN_NAV = [
     perm: 'analytical_accounts.read',
   },
   { href: '/admin/branches', label: 'الفروع', icon: GitBranch, perm: 'settings.manage' },
+  { href: '/admin/year-readiness', label: 'الاستعداد لسنة 2027', icon: CalendarClock, perm: 'settings.manage' },
   { href: '/admin/currencies', label: 'العملات', icon: CircleDollarSign, perm: 'settings.manage' },
   { href: '/admin/settings', label: 'الإعدادات', icon: Settings, perm: 'settings.manage' },
   { href: '/admin/accounting-periods', label: 'الفترات المحاسبية', icon: CalendarClock, perm: 'periods.manage' },

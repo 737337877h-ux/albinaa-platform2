@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 import { canRetryOnAlternateRoute } from './route-retry';
 import { activateRuntimeBaseUrl, getBaseUrl, getBaseUrlCandidates, pingServer } from '../config/api';
 import { getAccessToken, getRefreshToken, setTokens, clearTokens } from '../utils/secure-storage';
+import {assertBusinessSession,SessionAccessError} from '../utils/business-session';
 
 let client: AxiosInstance | null = null;
 let clientBuild: Promise<AxiosInstance> | null = null;
@@ -9,6 +10,7 @@ let sessionGeneration = 0;
 let refreshFlight: Promise<string> | null = null;
 
 async function buildClient(): Promise<AxiosInstance> {
+  const clientGeneration=sessionGeneration;
   const baseURL = await getBaseUrl();
   // Let Axios use React Native's native XHR transport. The explicit Axios fetch
   // adapter fails before sending POST requests on some Android builds even when
@@ -16,11 +18,13 @@ async function buildClient(): Promise<AxiosInstance> {
   const c = axios.create({ baseURL, timeout: 15_000 });
 
   c.interceptors.request.use(async (config) => {
+    if(clientGeneration!==sessionGeneration)throw new SessionAccessError('SESSION_CHANGED');
     const generation = sessionGeneration;
     if ((config as any)._sessionGeneration !== undefined && (config as any)._sessionGeneration !== generation) throw new Error('تغيرت جلسة الدخول');
     config.baseURL = await getBaseUrl();
     c.defaults.baseURL = config.baseURL;
-    const token = await getAccessToken();
+    const expectedOwner=(config as any)._expectedDataOwner as string|undefined;
+    const token = expectedOwner ? (await assertBusinessSession(expectedOwner)).token : await getAccessToken();
     if (generation !== sessionGeneration) throw new Error('تغيرت جلسة الدخول');
     (config as any)._sessionGeneration = generation;
     if (token) config.headers.Authorization = `Bearer ${token}`;
@@ -49,6 +53,7 @@ async function buildClient(): Promise<AxiosInstance> {
       }
       if (error.response?.status !== 401 || !req || req._retry || /\/auth\/(login|refresh)/.test(req.url ?? '')) return Promise.reject(error);
       req._retry = true;
+      if(req._expectedDataOwner)await assertBusinessSession(req._expectedDataOwner);
       const generation = sessionGeneration;
       if (req._sessionGeneration !== generation) throw new Error('تغيرت جلسة الدخول؛ أعد فتح الصفحة');
       const currentToken = await getAccessToken();
@@ -92,8 +97,10 @@ async function buildClient(): Promise<AxiosInstance> {
 export async function getClient(): Promise<AxiosInstance> {
   if (client) return client;
   if (!clientBuild) {
-    clientBuild = buildClient().then((built) => { client = built; return built; })
-      .finally(() => { clientBuild = null; });
+    const generation=sessionGeneration;
+    const build=buildClient().then(built=>{if(generation!==sessionGeneration)return getClient();client=built;return built;})
+      .finally(()=>{if(clientBuild===build)clientBuild=null;});
+    clientBuild=build;
   }
   return clientBuild;
 }
@@ -107,8 +114,23 @@ export async function resetClient(): Promise<AxiosInstance> {
   // rejected request queue from the previous session.
   sessionGeneration += 1;
   refreshFlight = null;
+  client=null;clientBuild=null;
   client = await buildClient();
   return client;
+}
+
+/** Bind queued work to its original identity, including nested POST/GET helpers. */
+export async function getClientForOwner(owner:string):Promise<AxiosInstance>{
+ const target=await getClient(),config=(value:any)=>({...value,_expectedDataOwner:owner});
+ return new Proxy(target,{
+  apply(fn,_context,args){return typeof args[0]==='string'?fn(args[0],config(args[1])):fn(config(args[0]));},
+  get(fn,property){
+   if(['post','put','patch'].includes(String(property)))return (url:string,data:any,options:any)=>fn[property as 'post'](url,data,config(options));
+   if(['get','delete','head','options'].includes(String(property)))return (url:string,options:any)=>fn[property as 'get'](url,config(options));
+   if(property==='request')return (options:any)=>fn.request(config(options));
+   return Reflect.get(fn,property);
+  },
+ });
 }
 
 export default new Proxy({} as AxiosInstance, {
