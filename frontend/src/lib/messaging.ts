@@ -76,7 +76,7 @@ export function significantDebtBalances(items: { currency: string; balance: numb
 
 export function formatDebtBalances(items: { currency: string; balance: number }[]) {
   return significantDebtBalances(items)
-    .map((item) => `${item.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${CURRENCY_NAMES[item.currency] ?? item.currency}`)
+    .map((item) => `${item.balance.toLocaleString('en-US', { maximumFractionDigits: 4 })} ${CURRENCY_NAMES[item.currency] ?? item.currency}`)
     .join(' + ');
 }
 
@@ -87,7 +87,7 @@ export function renderMessageTemplate(body: string, variables: TemplateVariables
     balance: variables.balance == null
       ? '—'
       : typeof variables.balance === 'number'
-        ? variables.balance.toLocaleString('en-US', { maximumFractionDigits: 2 })
+        ? variables.balance.toLocaleString('en-US', { maximumFractionDigits: 4 })
         : variables.balance,
     currency: variables.currency || '',
     debtAgeDays: variables.debtAgeDays == null ? '—' : String(variables.debtAgeDays),

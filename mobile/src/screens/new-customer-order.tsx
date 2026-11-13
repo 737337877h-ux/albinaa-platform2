@@ -32,7 +32,7 @@ type OrderLine = {
 
 const newLine = (): OrderLine => ({ id: `${Date.now()}-${Math.random()}`, units: [], quantity: '1', unitPrice: '0', expanded: true });
 const today = () => new Date().toISOString().slice(0, 10);
-const amount = (value: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value || 0);
+const amount = (value: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 }).format(value || 0);
 
 export default function NewCustomerOrderScreen({ navigation, route }: any) {
   const {automatic,keyboardVisible,setAutomatic}=useBarcodeEntrySetting();

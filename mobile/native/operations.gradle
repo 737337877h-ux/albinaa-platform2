@@ -11,14 +11,15 @@ android.defaultConfig {
     manifestPlaceholders.alraqiRoundIcon = operations ? '@mipmap/operations_launcher' : '@mipmap/ic_launcher_round'
     if (operations) {
         applicationId 'com.alraqi.operations'
-        versionCode 15
-        versionName '1.0.14'
+        versionCode 18
+        versionName '1.0.17'
     }
 }
 
 // Product resources overlay Expo's generated main resources. Adding both to
 // main gives them equal priority and duplicates notification sounds on prebuild.
 android.buildTypes.configureEach { buildType ->
+    android.sourceSets.getByName(buildType.name).res.srcDir('../../native/common-res')
     android.sourceSets.getByName(buildType.name).res.srcDir(
         operations ? '../../native/operations-res' : '../../native/collector-res'
     )

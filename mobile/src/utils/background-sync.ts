@@ -7,7 +7,8 @@ import {getMeta,setMeta} from '../db/database';
 import {assertBusinessSession,isSessionAccessError} from './business-session';
 import {backgroundSyncOnce} from './sync-operations';
 
-export const BACKGROUND_SYNC_TASK='albinaa-background-business-sync-v2';
+export const BACKGROUND_SYNC_TASK='albinaa-background-business-sync-v3';
+export const PREVIOUS_BACKGROUND_SYNC_TASK='albinaa-background-business-sync-v2';
 export const LEGACY_BACKGROUND_SYNC_TASK='albinaa-background-business-sync';
 const ENABLED='albinaa.background_sync.enabled';
 let epoch=0,running:Promise<BackgroundTask.BackgroundTaskResult>|null=null;
@@ -36,6 +37,12 @@ export function runBusinessBackgroundSync(){
  const job=run().finally(()=>{if(running===job)running=null;});running=job;return job;
 }
 TaskManager.defineTask(BACKGROUND_SYNC_TASK,({error})=>error?Promise.resolve(BackgroundTask.BackgroundTaskResult.Failed):runBusinessBackgroundSync());
+// Cancel the old WorkRequest: its persisted CONNECTED constraint requires
+// Android-validated Internet, even when the office server is reachable on LAN.
+TaskManager.defineTask(PREVIOUS_BACKGROUND_SYNC_TASK,async()=>{
+ await BackgroundTask.unregisterTaskAsync(PREVIOUS_BACKGROUND_SYNC_TASK).catch(()=>undefined);
+ return BackgroundTask.BackgroundTaskResult.Success;
+});
 // Older optional releases used BackgroundFetch; retire their registration on upgrade.
 TaskManager.defineTask(LEGACY_BACKGROUND_SYNC_TASK,async()=>{
  await BackgroundFetch.unregisterTaskAsync(LEGACY_BACKGROUND_SYNC_TASK).catch(()=>undefined);
@@ -44,6 +51,7 @@ TaskManager.defineTask(LEGACY_BACKGROUND_SYNC_TASK,async()=>{
 export async function registerBusinessBackgroundSync():Promise<boolean>{
  const version=epoch;
  if(!await TaskManager.isAvailableAsync())return false;
+ if(await TaskManager.isTaskRegisteredAsync(PREVIOUS_BACKGROUND_SYNC_TASK))await BackgroundTask.unregisterTaskAsync(PREVIOUS_BACKGROUND_SYNC_TASK);
  if(await TaskManager.isTaskRegisteredAsync(LEGACY_BACKGROUND_SYNC_TASK))await BackgroundFetch.unregisterTaskAsync(LEGACY_BACKGROUND_SYNC_TASK);
  if(!await businessBackgroundSyncEnabled())return false;
  if(await BackgroundTask.getStatusAsync()!==BackgroundTask.BackgroundTaskStatus.Available)return false;
@@ -59,6 +67,7 @@ export async function unregisterBusinessBackgroundSync(){
  epoch++;
  if(!await TaskManager.isAvailableAsync())return;
  if(await TaskManager.isTaskRegisteredAsync(BACKGROUND_SYNC_TASK))await BackgroundTask.unregisterTaskAsync(BACKGROUND_SYNC_TASK);
+ if(await TaskManager.isTaskRegisteredAsync(PREVIOUS_BACKGROUND_SYNC_TASK))await BackgroundTask.unregisterTaskAsync(PREVIOUS_BACKGROUND_SYNC_TASK);
  if(await TaskManager.isTaskRegisteredAsync(LEGACY_BACKGROUND_SYNC_TASK))await BackgroundFetch.unregisterTaskAsync(LEGACY_BACKGROUND_SYNC_TASK);
 }
 export async function setBusinessBackgroundSyncEnabled(enabled:boolean){

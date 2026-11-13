@@ -70,7 +70,7 @@ export default function NewReservationScreen({ route, navigation }: any) {
         <View style={styles.currencyRow}>
           {([['YER', 'ريال يمني'], ['SAR', 'ريال سعودي']] as const).map(([code, label]) => <TouchableOpacity key={code} style={[styles.currencyButton, currencyCode === code && styles.currencyButtonActive]} onPress={() => setCurrencyCode(code)}><Text style={[styles.currencyText, currencyCode === code && styles.currencyTextActive]}>{label}</Text><Text style={[styles.currencyCode, currencyCode === code && styles.currencyTextActive]}>{code}</Text></TouchableOpacity>)}
         </View>
-        {Number(totalTons) > 0 && Number(unitPrice) > 0 && <View style={styles.totalCard}><Text style={styles.totalLabel}>إجمالي قيمة الحجز</Text><Text style={styles.totalValue}>{new Intl.NumberFormat('en-US',{maximumFractionDigits:2}).format(Number(totalTons) * Number(unitPrice))} {currencyCode}</Text></View>}
+        {Number(totalTons) > 0 && Number(unitPrice) > 0 && <View style={styles.totalCard}><Text style={styles.totalLabel}>إجمالي قيمة الحجز</Text><Text style={styles.totalValue}>{new Intl.NumberFormat('en-US',{maximumFractionDigits:4}).format(Number(totalTons) * Number(unitPrice))} {currencyCode}</Text></View>}
         <Field label="رقم المستند (اختياري)" value={documentNumber} onChangeText={setDocumentNumber} />
         <Text style={styles.label}>ملاحظات</Text>
         <TextInput style={styles.notes} value={notes} onChangeText={setNotes} multiline textAlign="right" placeholder="أي تفاصيل إضافية..." placeholderTextColor={colors.muted} />

@@ -80,7 +80,7 @@ export default function ReservationsScreen({ navigation }: any) {
             <Metric label="الكمية المتبقية" value={`${Number(item.remainingQty || 0).toLocaleString('en-US')} ${item.unitName || ''}`} />
             <Metric label="قيمة الحجز المتبقية" value={`${Number(item.totalAmount || 0).toLocaleString('en-US')} ${item.currencyCode || ''}`} />
           </View>
-          {item.averageTonPrice != null && <Text style={styles.ton}>متوسط سعر الطن: {Number(item.averageTonPrice).toLocaleString('en-US', { maximumFractionDigits: 2 })} {item.currencyCode}</Text>}
+          {item.averageTonPrice != null && <Text style={styles.ton}>متوسط سعر الطن: {Number(item.averageTonPrice).toLocaleString('en-US', { maximumFractionDigits: 4 })} {item.currencyCode}</Text>}
         </TouchableOpacity>
       )}
     />

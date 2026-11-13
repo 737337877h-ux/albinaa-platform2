@@ -46,6 +46,13 @@ if (alraqiFirebaseFile.exists()) {
     .replace('android:scheme="albinaa"', 'android:scheme="${alraqiScheme}"')
     .replace('android:icon="@mipmap/ic_launcher"', 'android:icon="${alraqiIcon}"')
     .replace('android:roundIcon="@mipmap/ic_launcher_round"', 'android:roundIcon="${alraqiRoundIcon}"');
+  // Local Expo notifications and background FCM notifications use separate
+  // metadata keys. Bind both to the shared brand vector, never Expo's mark.
+  for (const key of ['com.google.firebase.messaging.default_notification_icon', 'expo.modules.notifications.default_notification_icon']) {
+    const pattern = new RegExp('(<meta-data\\b(?=[^>]*android:name="' + key.replace(/\./g, '\\.') + '")[^>]*android:resource=")[^"]+"');
+    if (!pattern.test(manifest)) throw new Error('Notification metadata missing: ' + key);
+    manifest = manifest.replace(pattern, '$1@drawable/alraqi_notification"');
+  }
   fs.writeFileSync(manifestPath, manifest);
 
   const javaDir = path.join(appDir, 'src/main/java');

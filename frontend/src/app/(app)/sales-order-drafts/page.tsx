@@ -85,7 +85,7 @@ const issueLabels: Record<string, string> = {
 };
 
 function money(value: string, currency: string) {
-  return `${new Intl.NumberFormat('ar-YE', { maximumFractionDigits: 2 }).format(Number(value))} ${currency}`;
+  return `${new Intl.NumberFormat('ar-YE', { maximumFractionDigits: 4 }).format(Number(value))} ${currency}`;
 }
 
 export default function SalesOrderDraftsPage() {

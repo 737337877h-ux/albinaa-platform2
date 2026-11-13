@@ -1,6 +1,10 @@
 import { DEFAULT_MESSAGE_TEMPLATES, formatDebtBalances, parseMessageTemplates, renderMessageTemplate } from './messaging';
 
 describe('message templates', () => {
+  it('keeps Oracle fractions in single and multi-currency reminder text', () => {
+    expect(renderMessageTemplate('{balance} {currency}', {balance:446105.077,currency:'YER'})).toBe('446,105.077 YER');
+    expect(formatDebtBalances([{currency:'YER',balance:446105.077},{currency:'SAR',balance:123.0041}])).toBe('446,105.077 ريال يمني + 123.0041 ريال سعودي');
+  });
   it('renders supported customer and balance variables', () => {
     expect(renderMessageTemplate('{customerName}: {balance} {currency} / {debtAgeDays}', {
       customerName: 'أحمد', balance: 12500, currency: 'YER', debtAgeDays: 8,

@@ -1,15 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { product } from '../config/product';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Alert,
-  KeyboardAvoidingView, Platform, Modal, ActivityIndicator, ScrollView, Image,
+  KeyboardAvoidingView, Platform, Modal, ActivityIndicator, ScrollView, Image, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/auth-context';
 import {
   getBaseUrl, getStoredBaseUrl, getDefaultBaseUrl,
   setStoredBaseUrl, clearStoredBaseUrl, pingServer, isValidBaseUrl, ServerHealth,
-  prepareOnlineRoute,
+  prepareOnlineRoute, getLanOnlySync, setLanOnlySync,
 } from '../config/api';
 import { resetClient } from '../api/client';
 import {
@@ -152,7 +152,7 @@ export default function LoginScreen() {
 
       <ServerSettingsModal
         visible={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => { setSettingsOpen(false); void getBaseUrl().then(setCurrentUrl).catch(() => undefined); }}
         currentUrl={currentUrl}
         storedUrl={storedUrl}
         defaultUrl={defaultUrl}
@@ -175,22 +175,46 @@ interface SettingsProps {
   onSaved: (newUrl: string) => void;
 }
 
-function ServerSettingsModal({ visible, onClose, currentUrl, storedUrl, defaultUrl, onSaved }: SettingsProps) {
+export function ServerSettingsModal({ visible, onClose, currentUrl, storedUrl, defaultUrl, onSaved }: SettingsProps) {
   const [draft, setDraft] = useState(currentUrl);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<ServerHealth | null>(null);
   const [autoResult, setAutoResult] = useState<ServerHealth | null>(null);
+  const [routeUrl, setRouteUrl] = useState(currentUrl);
+  const [lanOnly, setLanOnly] = useState<boolean | null>(null);
+  const [changingNetwork, setChangingNetwork] = useState(false);
+  const healthEpoch = useRef(0);
 
   useEffect(() => {
     if (visible) {
+      const version = ++healthEpoch.current;
       setDraft(currentUrl);
+      setRouteUrl(currentUrl);
+      setLanOnly(null);
       setResult(null);
+      void getLanOnlySync().then(value => { if (version === healthEpoch.current) setLanOnly(value); }).catch(() => undefined);
       // auto-test current URL when opening
       setTesting(true);
-      pingServer(currentUrl).then((h) => { setTesting(false); setAutoResult(h); });
+      pingServer(currentUrl).then((h) => { if (version === healthEpoch.current) { setTesting(false); setAutoResult(h); } });
     }
+    return () => { healthEpoch.current++; };
   }, [visible, currentUrl]);
+
+  const changeNetworkMode = async (enabled: boolean) => {
+    if (changingNetwork || lanOnly === null) return;
+    setChangingNetwork(true);
+    try {
+      await setLanOnlySync(enabled);
+      setLanOnly(enabled);
+      healthEpoch.current++;
+      setAutoResult(null);
+      setTesting(false);
+      setRouteUrl(await getBaseUrl());
+    } catch {
+      Alert.alert('تعذر تغيير الشبكة', 'لم يُحفظ إعداد الاتصال؛ أعد المحاولة.');
+    } finally { setChangingNetwork(false); }
+  };
 
   const handleTest = async () => {
     if (!isValidBaseUrl(draft)) {
@@ -251,7 +275,7 @@ function ServerSettingsModal({ visible, onClose, currentUrl, storedUrl, defaultU
           <Text style={styles.cardTitle}>الحالة</Text>
           <StatusRow
             label="الحالي"
-            value={currentUrl}
+            value={routeUrl}
             health={autoResult}
             loading={testing && !result}
           />
@@ -262,6 +286,16 @@ function ServerSettingsModal({ visible, onClose, currentUrl, storedUrl, defaultU
           )}
           <InfoRow label="الافتراضي" value={defaultUrl} />
           <InfoRow label="إصدار التطبيق" value={APP_VERSION} />
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.statusRow}>
+            <Text style={[styles.cardTitle, { flex: 1 }]}>المزامنة عبر الشبكة المحلية فقط</Text>
+            <Switch accessibilityLabel="المزامنة عبر الشبكة المحلية فقط" value={lanOnly ?? true}
+              disabled={lanOnly === null || changingNetwork || saving} onValueChange={changeNetworkMode} />
+          </View>
+          <Text style={styles.note}>فعّله للعمل داخل شبكة المكتب فقط. عطّله للسماح بالاتصال بالخادم المعتمد عبر الإنترنت عند وجودك خارج المكتب.</Text>
+          <Text style={styles.note}>تغيير هذا الخيار يحفظ بياناتك والعمليات التي تنتظر الإرسال؛ ويظل تسجيل الدخول مطلوبًا.</Text>
         </View>
 
         {/* Editor */}

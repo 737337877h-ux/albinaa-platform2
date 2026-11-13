@@ -23,7 +23,7 @@ export default function InventoryItemScreen({ route, navigation }: any) {
   const activity = item.activity ?? {};
   const pricing = item.pricing ?? {};
   const priceList = (rows: any[] | undefined, fallback: unknown) => Array.isArray(rows) && rows.length
-    ? rows.map((row) => `${Number(row.price).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${row.currencyCode}${row.unitName ? ` / ${row.unitName}` : ''}`).join(' · ')
+    ? rows.map((row) => `${Number(row.price).toLocaleString('en-US', { maximumFractionDigits: 4 })} ${row.currencyCode}${row.unitName ? ` / ${row.unitName}` : ''}`).join(' · ')
     : fallback;
   const openBarcode = async (value: string) => {
     setScannerVisible(false);
@@ -78,7 +78,7 @@ export default function InventoryItemScreen({ route, navigation }: any) {
 function Metric({ label, value, empty = '0' }: { label: string; value: unknown; empty?: string }) {
   const number = Number(value);
   const shown = value === null || value === undefined || value === '' || !Number.isFinite(number)
-    ? empty : number.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    ? empty : number.toLocaleString('en-US', { maximumFractionDigits: 4 });
   return <View style={styles.metric}><Text style={styles.metricValue}>{shown}</Text><Text style={styles.metricLabel}>{label}</Text></View>;
 }
 
