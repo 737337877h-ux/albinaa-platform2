@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { mobileSyncCompression } from './common/middleware/mobile-sync-compression';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -16,6 +17,7 @@ async function bootstrap() {
 
   // requestId لكل طلب (يُستخدم في الأخطاء الموحدة وسجل التدقيق)
   app.use(new RequestIdMiddleware().use);
+  app.use(mobileSyncCompression());
 
   // ---- التحقق من المدخلات: يمنع Mass Assignment ---------------------------
   app.useGlobalPipes(
