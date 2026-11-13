@@ -5,6 +5,8 @@ import { getClientForOwner } from '../api/client';
 import {assertBusinessSession,isSessionAccessError} from './business-session';
 import {withQueueLease} from './queue-lease';
 import {westernDigits} from './date-input';
+import {isOperationsApp} from '../config/product';
+import {syncSnapshotBatch} from './sync-snapshot';
 import {
   applySyncSnapshot, blockMutation, getMeta, getMutationQueueStats,
   getPendingMutations, getUnsyncedGps, hasInventoryCatalogOffline, incrementRetry,
@@ -169,14 +171,11 @@ export async function syncPendingGpsQueue(expectedOwner?:string): Promise<number
 export async function pullLatestMobileSnapshot(expectedOwner?:string): Promise<void> {
   const {owner}=await assertBusinessSession(expectedOwner);
   const [lastToken, hasOfflineInventory] = await Promise.all([getMeta('syncToken'), hasInventoryCatalogOffline()]);
-  const response = await fetchSync(hasOfflineInventory ? (lastToken || undefined) : undefined,owner);
-  const data = response.data;
-  await applySyncSnapshot({
-    inventoryCatalogVersion: data.inventoryCatalogVersion,
-    customers: data.customers || [], tasks: data.tasks || [], followups: data.followups || [],
-    promises: data.promises || [], collections: data.collections || [], reservations: data.reservations || [],
-    references: data.references || {}, newDebt: data.newDebt ?? null, customerAlerts: data.customerAlerts ?? null,
-  }, data.syncToken,owner);
+  for(let attempt=0;attempt<2;attempt++){
+    const {data}=await fetchSync(!isOperationsApp||hasOfflineInventory?(lastToken||undefined):undefined,owner);
+    try{await applySyncSnapshot(syncSnapshotBatch(data),data.syncToken,owner);break;}
+    catch(error:any){if(error?.code!=='SYNC_BASE_CHANGED'||attempt===1)throw error;}
+  }
   await assertBusinessSession(owner);
   try { await rescheduleOfflineReminders(); } catch (error) { console.warn('[BackgroundSync] reminders unavailable', error); }
 }

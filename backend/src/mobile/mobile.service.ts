@@ -24,6 +24,7 @@ import { OracleTestRequestsService } from '../oracle-test-requests/oracle-test-r
 import { durableOracleRequest } from '../common/oracle-request-audit';
 import { NotificationsService } from '../notifications/notifications.service';
 import { inventoryCostAccess } from './inventory-cost-access';
+import {mobileSyncDelta} from './mobile-sync-delta';
 
 /** Keep task history on the server while showing one actionable card per customer. */
 export function collapseMobileTasksByCustomer<T extends {
@@ -405,7 +406,7 @@ export class MobileService {
     return rows.map(({ name, ...row }) => ({ ...row, fullName: name }));
   }
 
-  async sync(user: AuthUser, lastSyncToken?: string, operationsOnly = false, collectionOnly = false, inventoryCatalogVersion?: string) {
+  async sync(user: AuthUser, lastSyncToken?: string, operationsOnly = false, collectionOnly = false, inventoryCatalogVersion?: string, syncSectionVersions?:Record<string,string>) {
     const collector = await this.prisma.collector.findUnique({ where: { userId: user.id } });
     const collectorId = collector?.id;
 
@@ -665,7 +666,7 @@ export class MobileService {
       since: customerAlertsSince,
     } : null;
 
-    return {
+    return mobileSyncDelta({
       serverTime: syncToken,
       syncToken,
       snapshot: 'full',
@@ -762,7 +763,7 @@ export class MobileService {
           reservedAt: r.reservedAt, expiresAt: r.expiresAt, status: r.status,
         };
       }),
-    };
+    },user,operationsOnly?'operations':collectionOnly?'collection':'all',syncSectionVersions);
   }
 
   async findCustomers(user: AuthUser, filterActionable = true) {

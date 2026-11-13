@@ -847,6 +847,7 @@ function normalizeRecord(table: BusinessTable, record: Record<string, any>): Rec
 }
 
 export interface MobileSyncBatch {
+  syncSectionVersions?: Record<string,string>;
   inventoryCatalogVersion?: string;
   customers?: Record<string, any>[];
   tasks?: Record<string, any>[];
@@ -947,6 +948,15 @@ export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: strin
       const identity=await tx.getFirstAsync<{value:string}>("SELECT value FROM sync_metadata WHERE key='dataOwner'");
       if(identity?.value!==expectedOwner){const error:any=new Error('تغير حساب بيانات الهاتف');error.code='SESSION_CHANGED';throw error;}
     }
+    const savedVersions=await tx.getFirstAsync<{value:string}>("SELECT value FROM sync_metadata WHERE key='syncSectionVersions'");
+    let versions:Record<string,string>={};
+    try{versions=JSON.parse(savedVersions?.value||'{}');}catch{/* The next full section seeds its revision. */}
+    for(const [key,hash]of Object.entries(batch.syncSectionVersions||{})){
+      const incoming=key.startsWith('references.')?batch.references?.[key.slice('references.'.length)]:batch[key as keyof MobileSyncBatch];
+      // Foreground and headless requests may finish out of order. Never mark
+      // an omitted section current unless this transaction still has its base.
+      if(incoming===undefined&&versions[key]!==hash){const error:any=new Error('تغيرت البيانات أثناء المزامنة؛ ستتم إعادة تنزيل اللقطة');error.code='SYNC_BASE_CHANGED';throw error;}
+    }
     await tx.runAsync(`
       CREATE TEMP TABLE IF NOT EXISTS sync_seen_ids (
         tableName TEXT NOT NULL,
@@ -1036,6 +1046,12 @@ export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: strin
       try {
         await materializeQueuedMutation(tx, item.operationId, item.endpoint, JSON.parse(item.payload));
       } catch { /* malformed queued data remains available in queue diagnostics */ }
+    }
+    if(batch.syncSectionVersions){
+      await tx.runAsync('INSERT OR REPLACE INTO sync_metadata (key,value) VALUES (?,?)',
+        'syncSectionVersions',JSON.stringify({...versions,...batch.syncSectionVersions}));
+    }else{
+      await tx.runAsync("DELETE FROM sync_metadata WHERE key='syncSectionVersions'");
     }
     await tx.runAsync(
       'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',

@@ -7,6 +7,7 @@ jest.mock('../src/utils/attendance-offline',()=>({syncAttendance:async()=>{}}));
 jest.mock('../src/utils/local-notifications',()=>({rescheduleOfflineReminders:async()=>0}));
 jest.mock('../src/utils/customer-order-sync',()=>({resolveCustomerOrderEndpoint:async(endpoint:string)=>endpoint}));
 jest.mock('../src/utils/quotation-sync',()=>({submitQueuedQuotation:jest.fn()}));
+jest.mock('../src/config/product',()=>({isOperationsApp:false}));
 jest.mock('../src/utils/queue-lease',()=>({withQueueLease:async(work:any)=>work('org:u1',mockCheck)}));
 jest.mock('../src/db/database',()=>({getPendingMutations:async()=>mockRows,removeMutation:(...args:any[])=>mockRemove(...args),incrementRetry:(...args:any[])=>mockRetry(...args),blockMutation:(...args:any[])=>mockBlock(...args),markOfflineRequestResult:async()=>{},saveGpsPoint:async()=>{}}));
 import {processPendingMutationQueue} from '../src/utils/sync-operations';

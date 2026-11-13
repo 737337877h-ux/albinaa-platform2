@@ -17,19 +17,21 @@ import {
   replaceCustomerOrdersSnapshot,
 } from '../db/database';
 import { matchesSmartSearch } from '../utils/search';
+import {parseSyncVersions} from '../utils/sync-snapshot';
 
 export interface SyncResponse {
   syncToken: string;
   serverTime: string;
-  snapshot: 'full';
+  snapshot: 'full' | 'delta';
   schemaVersion: number;
+  syncSectionVersions?: Record<string,string>;
   inventoryCatalogVersion?: string;
-  tasks: any[];
-  customers: any[];
-  followups: any[];
-  promises: any[];
-  collections: any[];
-  reservations: any[];
+  tasks?: any[];
+  customers?: any[];
+  followups?: any[];
+  promises?: any[];
+  collections?: any[];
+  reservations?: any[];
   newDebt: any | null;
   customerAlerts?: { unassigned: number; newCustomers: number; since: string } | null;
   references: {
@@ -76,11 +78,24 @@ export async function fetchSync(lastSyncToken?: string,expectedOwner?:string) {
   // The first offline snapshot includes the complete Oracle item/unit catalog.
   // It is intentionally larger than ordinary API calls and can exceed the
   // client's 15-second default while still progressing normally on the LAN.
-  const response = await client.post<SyncResponse>(
-    isOperationsApp ? '/mobile/operations-sync' : '/mobile/collection-sync',
-    { lastSyncToken, inventoryCatalogVersion },
-    { timeout: 90_000 },
-  );
+  const syncSectionVersions=parseSyncVersions(await getMeta('syncSectionVersions'));
+  const endpoint=isOperationsApp?'/mobile/operations-sync':'/mobile/collection-sync';
+  console.info('[SyncHttp] request prepared '+(Date.now()-startedAt)+'ms');
+  let response;
+  try{
+    try{
+      response=await client.post<SyncResponse>(endpoint,{lastSyncToken,inventoryCatalogVersion,syncSectionVersions},{timeout:90_000});
+    }catch(error:any){
+      const messages=error?.response?.data?.message;
+      if(error?.response?.status!==400||!String(JSON.stringify(messages)||'').includes('property syncSectionVersions should not exist'))throw error;
+      // A server rollback must retain compatibility with existing snapshots.
+      response=await client.post<SyncResponse>(endpoint,{lastSyncToken,inventoryCatalogVersion},{timeout:90_000});
+    }
+  }catch(error:any){
+    console.warn('[SyncHttp] '+JSON.stringify({ms:Date.now()-startedAt,code:error?.code,status:error?.response?.status,readyState:error?.request?.readyState}));
+    throw error;
+  }
+  console.info('[SyncHttp] received '+(Date.now()-startedAt)+'ms '+response.data.snapshot);
   const key = 'albinaa.device-id';
   let deviceId = await SecureStore.getItemAsync(key);
   if (!deviceId) {
@@ -95,7 +110,8 @@ export async function fetchSync(lastSyncToken?: string,expectedOwner?:string) {
     lastSyncedAt: new Date().toISOString(),
     responseMs: Date.now() - startedAt,
     foreground:AppState.currentState==='active',
-  }).catch(() => undefined);
+  },{timeout:3_000}).catch(() => undefined);
+  console.info('[SyncHttp] completed '+(Date.now()-startedAt)+'ms');
   return response;
 }
 

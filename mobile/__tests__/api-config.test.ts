@@ -12,7 +12,7 @@ jest.mock('expo-secure-store', () => ({
 const mockFetch: any = jest.fn();
 global.fetch = mockFetch;
 
-import { getStoredBaseUrl, isLocalNetworkUrl, isValidBaseUrl, pingServer, getBaseUrlCandidates, prepareOnlineRoute, PUBLIC_API_URL } from '../src/config/api';
+import { getBaseUrl, setStoredBaseUrl, getStoredBaseUrl, isLocalNetworkUrl, isValidBaseUrl, pingServer, getBaseUrlCandidates, prepareOnlineRoute, PUBLIC_API_URL } from '../src/config/api';
 
 describe('api config', () => {
   beforeEach(() => {
@@ -62,6 +62,27 @@ describe('api config', () => {
     mockStore['albinaa.api_base_url'] = PUBLIC_API_URL;
     mockFetch.mockRejectedValue(new Error('offline'));
     expect(await prepareOnlineRoute()).toMatchObject({ok:false});
+  });
+  it('uses a healthy office LAN without waiting for a slow public probe, and ignores its late result',async()=>{
+    await setStoredBaseUrl(PUBLIC_API_URL);let finish!:(value:any)=>void;
+    mockFetch.mockImplementation((url:string)=>url.startsWith(PUBLIC_API_URL)?new Promise(resolve=>{finish=resolve;}):Promise.resolve({ok:true,status:200,json:async()=>({})}));
+    expect(await prepareOnlineRoute()).toMatchObject({ok:true,route:'lan'});
+    finish({ok:true,status:200,json:async()=>({})});await Promise.resolve();await Promise.resolve();
+    expect(await getBaseUrl()).toBe('http://192.168.1.5:18002');
+  });
+  it('uses public Internet promptly outside the office without waiting for the LAN timeout',async()=>{
+    await setStoredBaseUrl(PUBLIC_API_URL);let finish!:(value:any)=>void;
+    mockFetch.mockImplementation((url:string)=>url.startsWith(PUBLIC_API_URL)?Promise.resolve({ok:true,status:200,json:async()=>({})}):new Promise(resolve=>{finish=resolve;}));
+    expect(await prepareOnlineRoute()).toMatchObject({ok:true,route:'public'});
+    finish({ok:false,status:503,json:async()=>({})});await Promise.resolve();
+    expect(await getBaseUrl()).toBe(PUBLIC_API_URL);
+  });
+  it('does not activate an old health result after the operator changes servers',async()=>{
+    await setStoredBaseUrl('http://acceptance.local:18003');let finish!:(value:any)=>void;
+    mockFetch.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    const pending=prepareOnlineRoute();while(!finish)await Promise.resolve();
+    await setStoredBaseUrl('http://other.local:18003');finish({ok:true,status:200,json:async()=>({})});
+    expect(await pending).toMatchObject({ok:false});expect(await getBaseUrl()).toBe('http://other.local:18003');
   });
 
   it('preserves an explicitly selected isolated 18003 endpoint', async () => {

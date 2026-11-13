@@ -16,8 +16,8 @@ describe('independent application identities', () => {
   test('collector source configuration works without private Firebase files', () => {
     jest.spyOn(fs, 'existsSync').mockReturnValue(false);
     const result = factory({ config: configFile.expo });
-    expect(result.version).toBe('1.3.82');
-    expect(result.android).toMatchObject({ package: 'com.albinaa.collector', versionCode: 86 });
+    expect(result.version).toBe('1.3.83');
+    expect(result.android).toMatchObject({ package: 'com.albinaa.collector', versionCode: 87 });
     expect(result.android.googleServicesFile).toBeUndefined();
   });
   test('operations uses its own package, version, scheme and notification sound', () => {

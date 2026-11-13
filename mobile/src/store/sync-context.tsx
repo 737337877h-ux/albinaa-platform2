@@ -24,6 +24,7 @@ import { westernDigits } from '../utils/date-input';
 import {withQueueLease} from '../utils/queue-lease';
 import {assertBusinessSession,isSessionAccessError} from '../utils/business-session';
 import {businessBackgroundSyncEnabled} from '../utils/background-sync';
+import {syncSnapshotBatch} from '../utils/sync-snapshot';
 
 const GATEWAY_REQUEST_TIMEOUT_MS = 120_000;
 
@@ -71,6 +72,8 @@ function retryableStatus(status?: number): boolean {
 function errorMessage(error: any): string {
   const serverMessage = error?.response?.data?.message;
   if (Array.isArray(serverMessage)) return serverMessage.join('، ');
+  if(!serverMessage&&(error?.code==='ERR_NETWORK'||error?.message==='Network Error'))return 'انقطع الاتصال بالخادم أثناء المزامنة. بياناتك وعملياتك محفوظة؛ تحقق من الشبكة وأعد المحاولة.';
+  if(!serverMessage&&['ECONNABORTED','ETIMEDOUT'].includes(error?.code))return 'انتهت مهلة تنزيل البيانات؛ تحقق من جودة الاتصال أو شبكة المكتب ثم أعد المزامنة.';
   return serverMessage || error?.message || 'تعذر الاتصال بالخادم المحلي';
 }
 
@@ -284,21 +287,12 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       // a recent sync token from the previous release. Omitting that token
       // once asks the server for the full Oracle catalog needed to seed them.
       stage('تنزيل البيانات');
-      const response = await fetchSync(!isOperationsApp || hasOfflineInventory ? (lastToken || undefined) : undefined,owner);
-      const data = response.data;
-      stage('حفظ البيانات على الهاتف');
-      await applySyncSnapshot({
-        inventoryCatalogVersion: data.inventoryCatalogVersion,
-        customers: data.customers || [],
-        tasks: data.tasks || [],
-        followups: data.followups || [],
-        promises: data.promises || [],
-        collections: data.collections || [],
-        reservations: data.reservations || [],
-        references: data.references || {},
-        newDebt: data.newDebt ?? null,
-        customerAlerts: data.customerAlerts ?? null,
-      }, data.syncToken,owner);
+      for(let attempt=0;attempt<2;attempt++){
+        const {data}=await fetchSync(!isOperationsApp||hasOfflineInventory?(lastToken||undefined):undefined,owner);
+        stage('حفظ البيانات على الهاتف');
+        try{await applySyncSnapshot(syncSnapshotBatch(data),data.syncToken,owner);break;}
+        catch(error:any){if(error?.code!=='SYNC_BASE_CHANGED'||attempt===1)throw error;stage('تحديث اللقطة بعد مزامنة الخلفية');}
+      }
       // Also refresh an open screen after a background task replaced SQLite.
       void queryClient.invalidateQueries({ predicate: query =>
         String(query.queryKey[0]).startsWith('mobile-inventory-') || query.queryKey[0] === 'barcode-items',

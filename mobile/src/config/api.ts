@@ -17,6 +17,7 @@ const APPROVED_TAILNET_DNS_SUFFIXES = ['.tail16c86c.ts.net'] as const;
  * يُستخدم فقط داخل هذه الوحدة — لا تستورد من process.env مباشرة في الشاشات.
  */
 let cachedBaseUrl: string | null = null;
+let configurationRevision = 0;
 
 function defaultFromEnv(): string {
   const fromBuild = process.env.EXPO_PUBLIC_API_URL;
@@ -45,11 +46,13 @@ export async function setStoredBaseUrl(url: string): Promise<void> {
     await SecureStore.deleteItemAsync(STORAGE_KEY);
   }
   cachedBaseUrl = null;
+  configurationRevision++;
 }
 
 export async function clearStoredBaseUrl(): Promise<void> {
   await SecureStore.deleteItemAsync(STORAGE_KEY);
   cachedBaseUrl = null;
+  configurationRevision++;
 }
 
 export async function getBaseUrl(): Promise<string> {
@@ -82,20 +85,31 @@ export interface OnlineRouteResult {
 /**
  * Resolves the online route without ever exposing a database port to the phone.
  * An explicitly selected acceptance server (such as 3004/18003) is authoritative.
- * Production prefers public HTTPS and falls back to the office LAN.
+ * Production checks both approved routes together and uses the first healthy
+ * one. A slow/offline public connection must not delay an available office LAN.
  */
 export async function prepareOnlineRoute(timeoutMs = 3500): Promise<OnlineRouteResult> {
-  let failure: OnlineRouteResult = { ok:false, error:'تعذر الاتصال بالخادم؛ تحقق من الإنترنت أو الشبكة المحلية وإعداد المحلية فقط.' };
-  for (const url of await getBaseUrlCandidates()) {
-    const route = url === PUBLIC_API_URL ? 'public' : url === DEFAULT_PROD_URL ? 'lan' : 'explicit';
-    const health = await pingServer(url, timeoutMs);
-    if (health.ok) {
-      activateRuntimeBaseUrl(url);
-      return { ok:true, route, url };
-    }
-    failure = { ok:false, route, url, error:health.error };
-  }
-  return failure;
+  const revision = configurationRevision;
+  const candidates = await getBaseUrlCandidates();
+  if (!candidates.length) return {ok:false,error:'تعذر الاتصال بالخادم؛ تحقق من الشبكة وإعداد المحلية فقط.'};
+  return new Promise(resolve => {
+    let settled = false, remaining = candidates.length;
+    const failures: OnlineRouteResult[] = [];
+    candidates.forEach((url, index) => {
+      const route = url === PUBLIC_API_URL ? 'public' : url === DEFAULT_PROD_URL ? 'lan' : 'explicit';
+      void pingServer(url, timeoutMs).then(health => {
+        if (settled) return;
+        if (revision !== configurationRevision) {
+          settled = true; resolve({ok:false,error:'تغيرت إعدادات الاتصال؛ أعد المزامنة.'}); return;
+        }
+        if (health.ok) {
+          settled = true; activateRuntimeBaseUrl(url); resolve({ok:true,route,url}); return;
+        }
+        failures[index] = {ok:false,route,url,error:health.error};
+        if (--remaining === 0) { settled = true; resolve(failures[candidates.length - 1]); }
+      });
+    });
+  });
 }
 
 export function activateRuntimeBaseUrl(url: string): void {
@@ -139,6 +153,7 @@ export async function getLanOnlySync(): Promise<boolean> {
 export async function setLanOnlySync(enabled: boolean): Promise<void> {
   await SecureStore.setItemAsync(LAN_ONLY_KEY, enabled ? 'true' : 'false');
   cachedBaseUrl = null;
+  configurationRevision++;
 }
 
 export interface ServerHealth {

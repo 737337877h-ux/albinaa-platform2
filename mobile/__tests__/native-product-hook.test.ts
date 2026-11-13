@@ -14,7 +14,7 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'alraqi-native-'));
   write('android/app/build.gradle', 'android { }\n');
   write('android/build.gradle', 'buildscript { dependencies { } }');
-  write('android/app/src/main/AndroidManifest.xml', '<application android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round"><data android:scheme="albinaa"/></application>');
+  write('android/app/src/main/AndroidManifest.xml', '<application android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round"><data android:scheme="albinaa"/><meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/notification_icon"/><meta-data android:name="expo.modules.notifications.default_notification_icon" android:resource="@drawable/notification_icon"/></application>');
   write('android/app/src/main/java/com/albinaa/collector/MainApplication.kt', 'val packages = PackageList(this).packages.apply {\n}\n');
   write('native/android/StatementSharePackage.kt', 'package com.albinaa.collector\nclass StatementSharePackage');
 });
@@ -32,6 +32,8 @@ test('installs the native share bridge and product selection once after a clean 
   expect(fs.readFileSync(path.join(root, 'android/build.gradle'), 'utf8')).not.toContain('com.google.gms:');
   const main = fs.readFileSync(path.join(root, 'android/app/src/main/java/com/albinaa/collector/MainApplication.kt'), 'utf8');
   expect(main.match(/add\(com.albinaa.collector.StatementSharePackage\(\)\)/g)).toHaveLength(1);
+  const manifest=fs.readFileSync(path.join(root,'android/app/src/main/AndroidManifest.xml'),'utf8');
+  expect(manifest.match(/@drawable\/alraqi_notification/g)).toHaveLength(2);
   expect(fs.existsSync(path.join(root, 'android/app/src/main/java/com/albinaa/collector/StatementSharePackage.kt'))).toBe(true);
 });
 test('adds the Google Services build dependency once when private registration exists', () => {
