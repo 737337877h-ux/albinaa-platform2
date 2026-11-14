@@ -84,3 +84,15 @@ export function promiseSummary(rows: PromiseState[], today: string): Record<Prom
   }
   return summary;
 }
+
+/** Display grouping never merges promises, amounts, statuses, or receipt allocations. */
+export function groupPromiseRows<T extends PromiseState & {id:string;customerId?:string;currencyCode?:string}>(rows:T[]){
+  const groups=new Map<string,{key:string;items:T[]}>();
+  for(const row of rows){
+    const key=row.customerId?`${row.customerId}|${row.currencyCode??''}`:`promise:${row.id}`;
+    if(!groups.has(key))groups.set(key,{key,items:[]});
+    groups.get(key)!.items.push(row);
+  }
+  return [...groups.values()].map(group=>({...group,items:group.items.sort((a,b)=>
+    String(b.dueDate??'').localeCompare(String(a.dueDate??''))||a.id.localeCompare(b.id))}));
+}

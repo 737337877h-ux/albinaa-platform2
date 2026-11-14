@@ -44,6 +44,24 @@ describe('promise receipt settlement planner', () => {
     expect(result.review[0].code).toBe('overlapping_promises');
   });
 
+  it('a confirmed operator selection resolves only its own overlap without reusing a receipt',()=>{
+    const rows=[promise(),promise({id:'p2'})];
+    const selected=planPromiseSettlements(rows,[receipt()],[],now,['p2'],'p2');
+    expect(selected.changes.map(row=>row.promiseId)).toEqual(['p2']);
+    expect(selected.review).toContainEqual(expect.objectContaining({code:'overlap_selected_by_operator',promiseIds:['p1','p2']}));
+    const again=planPromiseSettlements([rows[0],promise({id:'p2',status:'fulfilled',fulfilledAmount:'15000'})],
+      [receipt()],selected.allocations,now,['p1'],'p1');
+    expect(again.allocations).toEqual([]);
+    expect(()=>planPromiseSettlements(rows,[receipt()],[],now,['p1'],'p2')).toThrow('exactly one');
+  });
+
+  it('does not let a promise created after a timestamped receipt block an older eligible promise',()=>{
+    const rows=[promise({promiseDate:'2026-08-17',createdAt:'2026-08-17T11:54:40Z',expectedAmount:'21000'}),
+      promise({id:'p2',promiseDate:'2026-08-26',createdAt:'2026-08-26T14:13:32Z'})];
+    const result=planPromiseSettlements(rows,[receipt({amount:'6000',receiptDate:'2026-08-26',precision:'timestamp',occurredAt:'2026-08-26T14:06:26Z'})],[],now);
+    expect(result.allocations).toEqual([expect.objectContaining({promiseId:'p1',amount:'6000.0000'})]);
+  });
+
   it('does not reuse a fully allocated receipt for another promise', () => {
     const first = promise({ status: 'fulfilled', fulfilledAmount: '15000' });
     const other = promise({ id: 'p2', promiseDate: '2026-10-07', createdAt: '2026-10-07T08:00:00Z' });

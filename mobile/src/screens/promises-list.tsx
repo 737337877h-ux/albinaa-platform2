@@ -1,8 +1,8 @@
 import React from 'react';
 import {Alert} from 'react-native';
 import {useAuth} from '../store/auth-context';
-import {getClient} from '../api/client';
-import {generateIdempotencyKey} from '../utils/constants';
+import {applyPromiseCompletion,previewPromiseCompletion} from '../utils/promise-completion';
+import {apiErrorMessage} from '../utils/errors';
 import { FlatList, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -11,7 +11,7 @@ import { colors, radius } from '../theme';
 import { useSync } from '../store/sync-context';
 import { displayDateFromIso } from '../utils/date-input';
 import { localDateKey } from '../utils/local-date';
-import { matchesPromiseFilter, PROMISE_FILTER_LABELS, PromiseFilter, promiseBucket, promiseSettledLate, promiseStatusLabel, promiseSummary } from '../utils/promises';
+import { groupPromiseRows,matchesPromiseFilter, PROMISE_FILTER_LABELS, PromiseFilter, promiseBucket, promiseSettledLate, promiseStatusLabel, promiseSummary } from '../utils/promises';
 
 const FILTERS: PromiseFilter[] = ['active', 'upcoming', 'today', 'overdue', 'fulfilled', 'cancelled', 'all'];
 const filterValue = (value: unknown): PromiseFilter => FILTERS.includes(value as PromiseFilter) ? value as PromiseFilter : 'active';
@@ -28,12 +28,15 @@ const FILTER_HINTS: Record<PromiseFilter, string> = {
 
 export default function PromisesListScreen({ navigation, route }: any) {
   const [rows, setRows] = React.useState<any[]>([]);
+  const [customers,setCustomers]=React.useState<Record<string,any>>({});
+  const [expanded,setExpanded]=React.useState<Record<string,boolean>>({});
   const [filter, setFilter] = React.useState<PromiseFilter>(filterValue(route?.params?.initialFilter));
   const [search, setSearch] = React.useState('');
   const { status,triggerSync } = useSync();
   const {user}=useAuth();
   const [checking,setChecking]=React.useState<string|null>(null);
-  const load = React.useCallback(() => getAll('promises').then(setRows), []);
+  const load = React.useCallback(async () => {const [promises,people]=await Promise.all([getAll('promises'),getAll('customers')]);
+    setRows(promises);setCustomers(Object.fromEntries(people.map(person=>[person.id,person])));}, []);
   useFocusEffect(React.useCallback(() => { void load(); }, [load]));
   React.useEffect(() => {
     if (status.phase === 'synced' && status.lastSyncAt) void load();
@@ -45,18 +48,34 @@ export default function PromisesListScreen({ navigation, route }: any) {
   const counts = promiseSummary(rows, today);
   const query = search.trim().toLowerCase();
   const visibleRows = rows.filter(item => matchesPromiseFilter(item, filter, today)
-    && (!query || String(item.customerName || '').toLowerCase().includes(query)));
+    && (!query || [item.customerName,customers[item.customerId]?.externalCustomerCode].some(value=>String(value??'').toLowerCase().includes(query))));
   visibleRows.sort((a, b) => {
     const aDate = String(filter === 'fulfilled' ? a.settlementDate || a.dueDate || '' : a.dueDate || '');
     const bDate = String(filter === 'fulfilled' ? b.settlementDate || b.dueDate || '' : b.dueDate || '');
     return filter === 'fulfilled' || filter === 'all' ? bDate.localeCompare(aDate) : aDate.localeCompare(bDate);
   });
+  const groups=groupPromiseRows(visibleRows);
+  const complete=async(item:any)=>{
+    setChecking(item.id);
+    try{
+      const preview=await previewPromiseCompletion(item.id);
+      if(preview.completed){await triggerSync();await load();Alert.alert('تم الوفاء بالوعد','الوعد منفذ بالفعل.');return;}
+      if(!preview.canApply){Alert.alert('المطابقة تحتاج مراجعة',`${preview.reason}\nالمتبقي لهذا الوعد: ${Number(preview.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`);return;}
+      const details=preview.receipts.map(receipt=>`سند ${receipt.reference} · ${dateLabel(receipt.date)}\n${Number(receipt.amount).toLocaleString('en-US',{maximumFractionDigits:4})} ${receipt.currencyCode}`).join('\n\n');
+      Alert.alert('تأكيد مطابقة السداد',`${item.customerName}\nاستحقاق الوعد: ${dateLabel(item.dueDate)}\n\n${details}\n\n${preview.overlappingPromises?`توجد ${preview.overlappingPromises} وعود أخرى متداخلة.\n`:''}${preview.reason}\nالمتبقي بعد الربط: ${Number(preview.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`,
+        [{text:'إلغاء',style:'cancel'},{text:'تأكيد الربط',onPress:async()=>{setChecking(item.id);try{
+          const data=await applyPromiseCompletion(item.id,preview);
+          try{await triggerSync();await load();}catch{/* A committed settlement must not be presented as a failed apply. */}
+          Alert.alert(data.completed?'تم الوفاء بالوعد':'تم تسجيل سداد جزئي',data.completed?'رُبط السداد بهذا الوعد، وحُفظ السجل السابق.':`المتبقي: ${Number(data.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`);
+        }catch(error){Alert.alert('تعذر تأكيد المطابقة',apiErrorMessage(error,'أعد معاينة السندات وحاول مجددًا'));}finally{setChecking(null);}}}]);
+    }catch(error){Alert.alert('تعذر التحقق',apiErrorMessage(error,'تحقق من الاتصال وحاول مجددًا'));}finally{setChecking(null);}
+  };
 
   return <View style={styles.screen}>
     <View style={styles.hero}><Text style={styles.title}>وعود السداد</Text><Text style={styles.subtitle}>{counts.active.toLocaleString('en-US')} قيد المتابعة · {counts.all.toLocaleString('en-US')} في السجل</Text></View>
     <View style={styles.search}>
       <Ionicons name="search-outline" size={20} color={colors.muted} />
-      <TextInput value={search} onChangeText={setSearch} style={styles.searchInput} placeholder="ابحث باسم العميل..." placeholderTextColor={colors.muted} textAlign="right" returnKeyType="search" />
+      <TextInput value={search} onChangeText={setSearch} style={styles.searchInput} placeholder="ابحث باسم العميل أو كوده..." placeholderTextColor={colors.muted} textAlign="right" returnKeyType="search" />
       {!!search && <TouchableOpacity accessibilityLabel="مسح البحث" onPress={() => setSearch('')}><Ionicons name="close-circle" size={20} color={colors.muted} /></TouchableOpacity>}
     </View>
     <View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
@@ -64,15 +83,21 @@ export default function PromisesListScreen({ navigation, route }: any) {
         <Text style={[styles.filterText, filter === value && styles.filterTextActive]}>{PROMISE_FILTER_LABELS[value]} · {counts[value].toLocaleString('en-US')}</Text>
       </TouchableOpacity>)}
     </ScrollView></View>
-    <Text style={styles.hint}>{FILTER_HINTS[filter]}</Text>
-    {!!query && <Text style={styles.searchCount}>{visibleRows.length.toLocaleString('en-US')} نتيجة</Text>}
-    <FlatList data={visibleRows} keyExtractor={(item) => item.id} contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled" ListEmptyComponent={<Text style={styles.empty}>{query ? 'لا توجد وعود تطابق البحث' : `لا توجد وعود في «${PROMISE_FILTER_LABELS[filter]}»`}</Text>} renderItem={({ item }) => {
+    <Text style={styles.hint}>{FILTER_HINTS[filter]} يُعرض أحدث وعد لكل عميل وعملة؛ الوعود الأخرى محفوظة تحت «عرض الوعود».</Text>
+    {!!query && <Text style={styles.searchCount}>{new Set(visibleRows.map(row=>row.customerId||row.id)).size.toLocaleString('en-US')} عميل · {visibleRows.length.toLocaleString('en-US')} وعد</Text>}
+    <FlatList data={groups} keyExtractor={(group) => group.key} contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled" ListEmptyComponent={<Text style={styles.empty}>{query ? 'لا توجد وعود تطابق البحث' : `لا توجد وعود في «${PROMISE_FILTER_LABELS[filter]}»`}</Text>} renderItem={({ item:group }) => <View>
+      {group.items.length>1&&<TouchableOpacity accessibilityRole="button" accessibilityState={{expanded:!!expanded[group.key]}} onPress={()=>setExpanded(value=>({...value,[group.key]:!value[group.key]}))} style={styles.groupHeader}>
+        <Text style={styles.groupText}>{group.items[0].customerName} · {group.items.length} وعود ({group.items[0].currencyCode})</Text>
+        <Text style={styles.groupText}>{expanded[group.key]?'إخفاء الوعود السابقة':'عرض الوعود بتواريخها'} {expanded[group.key]?'⌃':'⌄'}</Text>
+      </TouchableOpacity>}
+      {(expanded[group.key]?group.items:group.items.slice(0,1)).map(item => {
       const bucket = promiseBucket(item, today);
       const late = bucket === 'fulfilled' && promiseSettledLate(item);
-      return <TouchableOpacity style={styles.card} onPress={() => item.customerId && navigation.navigate('Customer360', { id: item.customerId })}>
+      return <TouchableOpacity key={item.id} style={styles.card} onPress={() => item.customerId && navigation.navigate('Customer360', { id: item.customerId })}>
         <View style={styles.icon}><Ionicons name={bucket === 'fulfilled' ? 'checkmark-circle-outline' : bucket === 'cancelled' ? 'close-circle-outline' : 'calendar-outline'} size={20} color={bucket === 'fulfilled' ? colors.success : colors.gold} /></View>
         <View style={styles.main}>
           <Text style={styles.name}>{item.customerName || 'عميل'}</Text>
+          {!!customers[item.customerId]?.externalCustomerCode&&<Text style={styles.date}>كود العميل: {customers[item.customerId].externalCustomerCode}</Text>}
           <Text style={styles.date}>الاستحقاق: {dateLabel(item.dueDate)}</Text>
           <Text style={[styles.status, bucket === 'overdue' && styles.overdue, bucket === 'fulfilled' && styles.fulfilled, bucket === 'cancelled' && styles.cancelled]}>{promiseStatusLabel(item, today)}</Text>
           {bucket !== 'fulfilled' && Number(item.fulfilledAmount ?? 0)>0 && <Text style={styles.date}>المسدّد: {Number(item.fulfilledAmount).toLocaleString('en-US')} · المتبقي: {Math.max(0,Number(item.expectedAmount)-Number(item.fulfilledAmount)).toLocaleString('en-US')} {item.currencyCode}</Text>}
@@ -80,10 +105,10 @@ export default function PromisesListScreen({ navigation, route }: any) {
           {late && !!item.missedDueDate && <Text style={styles.lateNote}>تاريخ التأخر محفوظ: {dateLabel(item.missedDueDate)}</Text>}
         </View>
         <View><Text style={styles.amount}>{Number(item.expectedAmount || 0).toLocaleString('en-US',{maximumFractionDigits:4})}</Text><Text style={styles.currency}>{item.currencyCode}</Text>
-        {!['fulfilled','cancelled'].includes(bucket)&&user?.permissions?.includes('promises.create')&&<TouchableOpacity disabled={!!checking} onPress={event=>{event.stopPropagation();Alert.alert('إكمال الوعد','سيُراجع النظام التحصيلات المعتمدة قبل إثبات الوفاء بالوعد.',[{text:'إلغاء',style:'cancel'},{text:'تحقق من السداد',onPress:async()=>{setChecking(item.id);try{const key=generateIdempotencyKey();const {data}=await(await getClient()).post(`/payment-promises/${item.id}/complete`,{},{headers:{'Idempotency-Key':key}});await triggerSync();await load();Alert.alert(data.completed?'تم الوفاء بالوعد':'الوعد لم يكتمل',data.completed?'تمت مطابقة السداد مع التحصيلات المعتمدة.':`المتبقي: ${Number(data.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`);}catch(error:any){Alert.alert('تعذر التحقق',error?.response?.data?.message||'تحقق من الاتصال وحاول مجددًا');}finally{setChecking(null);}}}]);}} style={{padding:10,borderRadius:10,backgroundColor:colors.primarySoft,marginTop:8}}><Text style={{fontFamily:'TajawalBold',color:colors.primary}}>{checking===item.id?'جارٍ التحقق...':'إكمال الوعد'}</Text></TouchableOpacity>}
+        {!['fulfilled','cancelled'].includes(bucket)&&!String(item.id).startsWith('local:')&&user?.permissions?.includes('promises.create')&&<TouchableOpacity disabled={!!checking} onPress={event=>{event.stopPropagation();void complete(item);}} style={{padding:10,borderRadius:10,backgroundColor:colors.primarySoft,marginTop:8}}><Text style={{fontFamily:'TajawalBold',color:colors.primary}}>{checking===item.id?'جارٍ التحقق...':'إكمال الوعد'}</Text></TouchableOpacity>}
         </View>
       </TouchableOpacity>;
-    }} />
+    })}</View>} />
   </View>;
 }
 const styles = StyleSheet.create({
@@ -99,6 +124,8 @@ const styles = StyleSheet.create({
   hint: { fontFamily: 'TajawalRegular', color: colors.muted, fontSize: 13, textAlign: 'right', paddingHorizontal: 16, paddingBottom: 5 },
   searchCount: { fontFamily: 'TajawalBold', color: colors.primary, textAlign: 'right', paddingHorizontal: 16 },
   list: { padding: 14 },
+  groupHeader:{backgroundColor:colors.primarySoft,padding:12,borderRadius:radius.sm,marginBottom:6,gap:4},
+  groupText:{fontFamily:'TajawalBold',color:colors.primary,fontSize:13,textAlign:'right'},
   card: { backgroundColor: '#fff', borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, padding: 14, marginBottom: 9, flexDirection: 'row-reverse', gap: 10, alignItems: 'center' },
   icon: { width: 42, height: 42, borderRadius: 13, backgroundColor: colors.goldSoft, alignItems: 'center', justifyContent: 'center' },
   main: { flex: 1 }, name: { fontFamily: 'TajawalBold', color: colors.ink, fontSize: 15, fontWeight: '900', textAlign: 'right' },

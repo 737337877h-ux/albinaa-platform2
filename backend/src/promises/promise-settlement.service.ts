@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { orgDateOnly } from '../common/org-time';
 import { oracleReceiptActivity } from '../common/oracle-receipt-activity';
+import { FINANCIAL_COLLECTION_STATUSES } from '../common/financial-collection-status';
 import { PrismaService } from '../prisma/prisma.service';
 import { planPromiseSettlements, SettlementReceipt } from './promise-settlement-plan';
 
@@ -16,6 +17,8 @@ export interface ReconcilePromiseOptions {
   /** Only the trusted scheduler uses this; manual apply must bind to its preview. */
   automatic?: boolean;
   actorId?: string;
+  /** Only the permission-checked completion preview/apply may resolve an overlap. */
+  manualPromiseId?: string;
 }
 
 @Injectable()
@@ -24,6 +27,8 @@ export class PromiseSettlementService {
 
   async reconcileForOrganization(organizationId: string, options: ReconcilePromiseOptions = {}) {
     const dryRun = options.dryRun !== false;
+    if (options.manualPromiseId && (options.automatic || !options.actorId || options.promiseIds?.length !== 1
+      || options.promiseIds[0] !== options.manualPromiseId)) throw new ConflictException('يلزم تحديد وعد واحد ومستخدم مخوّل لمراجعة التداخل');
     if (!dryRun && !options.automatic && !options.expectedPlanHash) {
       throw new ConflictException('اعرض خطة مطابقة الوعود أولًا ثم طبّق بصمة الخطة نفسها');
     }
@@ -44,7 +49,7 @@ export class PromiseSettlementService {
         ...planPromiseSettlements([], [], [], now, options.promiseIds) };
       const actor = { id: options.actorId ?? '', organizationId, permissions: ['customers.read_all'] } as AuthUser;
       const [local, direct, existing] = await Promise.all([
-        tx.collection.findMany({ where: { customer: customerScope, customerId: { in: customerIds }, status: 'recorded', amount: { gt: 0 } },
+        tx.collection.findMany({ where: { customer: customerScope, customerId: { in: customerIds }, status: { in: FINANCIAL_COLLECTION_STATUSES }, amount: { gt: 0 } },
           select: { id: true, customerId: true, currencyCode: true, amount: true, collectedAt: true, referenceNumber: true, receiptNumber: true } }),
         oracleReceiptActivity(tx as any, actor),
         (tx as any).paymentPromiseReceiptAllocation.findMany({
@@ -63,7 +68,7 @@ export class PromiseSettlementService {
             receiptDate, precision: 'day' as const, source: 'oracle_receipt' as const, sourceId: row.referenceNumber };
         }),
       ];
-      const plan = planPromiseSettlements(promises as any, receipts, existing, now, options.promiseIds);
+      const plan = planPromiseSettlements(promises as any, receipts, existing, now, options.promiseIds, options.manualPromiseId);
       if (options.expectedPlanHash && options.expectedPlanHash !== plan.planHash) {
         throw new ConflictException('تغيّرت بيانات المطابقة بعد المعاينة؛ أعد عرض الخطة قبل التطبيق');
       }

@@ -1,9 +1,18 @@
 import { describe, expect, it } from '@jest/globals';
-import { matchesPromiseFilter, promiseBucket, promiseSettledLate, promiseStatusLabel, promiseSummary } from '../src/utils/promises';
+import { groupPromiseRows,matchesPromiseFilter, promiseBucket, promiseSettledLate, promiseStatusLabel, promiseSummary } from '../src/utils/promises';
 
 const today = '2026-10-27';
 
 describe('promise work list and history', () => {
+  it('groups repeated customer/currency cards without merging promises or amounts, keeping independent dates accessible',()=>{
+    const rows=[{id:'p1',customerId:'c',currencyCode:'YER',dueDate:'2026-09-10',expectedAmount:15000},
+      {id:'p2',customerId:'c',currencyCode:'YER',dueDate:'2026-10-08',expectedAmount:15000},
+      {id:'p3',customerId:'c',currencyCode:'SAR',dueDate:'2026-10-08',expectedAmount:15000}];
+    const groups=groupPromiseRows(rows);expect(groups).toHaveLength(2);
+    expect(groups[0].items.map(row=>row.id)).toEqual(['p2','p1']);expect(groups.flatMap(group=>group.items)).toHaveLength(3);
+    expect(rows[0].dueDate).toBe('2026-09-10');expect(groups[0].items[0].expectedAmount).toBe(15000);
+    expect(groupPromiseRows([{id:'local:1'},{id:'local:2'}])).toHaveLength(2);
+  });
   it('counts the actual open promises while keeping approved cancellations out of overdue work', () => {
     const rows = [
       ...Array.from({ length: 2 }, () => ({ status: 'upcoming', dueDate: '2026-11-02' })),

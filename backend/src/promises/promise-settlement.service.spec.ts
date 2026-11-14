@@ -1,5 +1,6 @@
 import { oracleReceiptActivity } from '../common/oracle-receipt-activity';
 import { PromiseSettlementService } from './promise-settlement.service';
+import { FINANCIAL_COLLECTION_STATUSES } from '../common/financial-collection-status';
 
 jest.mock('../common/oracle-receipt-activity', () => ({ oracleReceiptActivity: jest.fn() }));
 const now = new Date('2026-10-28T08:00:00Z');
@@ -22,16 +23,23 @@ function fixture() {
 }
 
 describe('PromiseSettlementService', () => {
-  it('defaults to a write-free preview and reads only recorded positive local receipts', async () => {
+  it('defaults to a write-free preview and includes all approved positive receipt stages', async () => {
     const { service, tx } = fixture();
     const result = await service.reconcileForOrganization('org1', { now });
     expect(result).toMatchObject({ dryRun: true, applied: 0 });
     expect(result.changes).toHaveLength(1);
-    expect(tx.collection.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ status: 'recorded', amount: { gt: 0 } }) }));
+    expect(tx.collection.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ status: {in:FINANCIAL_COLLECTION_STATUSES}, amount: { gt: 0 } }) }));
     expect(tx.paymentPromiseReceiptAllocation.create).not.toHaveBeenCalled();
     expect(tx.paymentPromise.updateMany).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();
     expect(tx.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('allows manual overlap selection only for one named promise and an identified operator',async()=>{
+    const {service}=fixture();
+    await expect(service.reconcileForOrganization('org1',{manualPromiseId:'promise1'})).rejects.toThrow('مخوّل');
+    await expect(service.reconcileForOrganization('org1',{manualPromiseId:'promise1',actorId:'u',promiseIds:['promise1'],automatic:true})).rejects.toThrow('مخوّل');
+    await expect(service.reconcileForOrganization('org1',{manualPromiseId:'promise1',actorId:'u',promiseIds:['other']})).rejects.toThrow('مخوّل');
   });
 
   it('requires an unchanged preview before a manual apply and records the previous missed state', async () => {

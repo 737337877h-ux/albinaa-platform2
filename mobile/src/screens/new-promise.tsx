@@ -10,6 +10,8 @@ import { useSync } from '../store/sync-context';
 import CustomerPicker from '../components/customer-picker';
 import { colors, radius, shadow } from '../theme';
 import { displayDateFromIso, parseFlexibleDate } from '../utils/date-input';
+import { generateIdempotencyKey } from '../utils/constants';
+import { localDateKey } from '../utils/local-date';
 
 export default function NewPromiseScreen({ route, navigation }: any) {
   const presetCustomerId = route.params?.customerId || '';
@@ -24,6 +26,7 @@ export default function NewPromiseScreen({ route, navigation }: any) {
   const [notes, setNotes] = useState('');
   const [customerId, setCustomerId] = useState(presetCustomerId);
   const [customerName, setCustomerName] = useState(presetCustomerName);
+  const operation = React.useRef<{payload:string;id:string}|null>(null);
   const queryClient = useQueryClient();
   const { triggerSync } = useSync();
   const { data: currencies } = useQuery({
@@ -46,21 +49,24 @@ export default function NewPromiseScreen({ route, navigation }: any) {
         expectedAmount: num,
         currencyCode: currency,
         dueDate: parsedDueDate.iso,
+        promiseDate: localDateKey(new Date()),
         notes: notes || undefined,
       };
+      const fingerprint=JSON.stringify(payload);
+      if(operation.current?.payload!==fingerprint)operation.current={payload:fingerprint,id:generateIdempotencyKey()};
+      const opId=operation.current.id;
       let position: Awaited<ReturnType<typeof getCurrentPosition>> | null = null;
       try {
         position = await getCurrentPosition();
       } catch { /* GPS optional */ }
       try {
-        const result = await createPromise(payload);
+        const result = await createPromise(payload,opId);
         if (position && result.data?.id) {
           await saveGpsPoint({ ...position, entityTable: 'payment_promises', entityId: result.data.id });
         }
         return result;
       } catch (err: any) {
         if (!err?.response) {
-          const opId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
           await enqueueMutation(opId, 'POST', '/payment-promises', payload);
           if (position) await saveGpsPoint({ ...position, entityTable: 'payment_promises', entityId: `local:${opId}` });
           return { data: { id: opId, offline: true } };

@@ -55,7 +55,11 @@ const eligibleStatuses = new Set(['upcoming', 'due_today', 'partially_fulfilled'
 export function planPromiseSettlements(
   promises: SettlementPromise[], receipts: SettlementReceipt[], existing: ExistingSettlementAllocation[],
   now = new Date(), selectedPromiseIds?: string[],
+  manualPromiseId?: string,
 ) {
+  if (manualPromiseId && (selectedPromiseIds?.length !== 1 || selectedPromiseIds[0] !== manualPromiseId)) {
+    throw new Error('Manual receipt selection must identify exactly one selected promise');
+  }
   const today = orgDateOnly(now);
   const review: SettlementReview[] = [];
   const blockedGroups = new Set<string>();
@@ -111,23 +115,27 @@ export function planPromiseSettlements(
     // Scope controls which changes may be applied, never which competing promises are considered.
     const candidates = promises.filter(p => groupKey(p) === groupKey(receipt) && eligibleStatuses.has(p.status)
       && day(p.promiseDate) <= receipt.receiptDate
-      && moneyUnits(p.expectedAmount) > (allocatedByPromise.get(p.id) ?? 0n));
+      && moneyUnits(p.expectedAmount) > (allocatedByPromise.get(p.id) ?? 0n)).filter(p => {
+      const createdDay = orgDateOnly(new Date(p.createdAt));
+      if (receipt.receiptDate < createdDay) {
+        review.push({ code: 'receipt_before_promise_creation', promiseIds: [p.id], receiptKey: receipt.key, customerId: p.customerId }); return false;
+      }
+      if (receipt.precision === 'day' && receipt.receiptDate === createdDay) {
+        review.push({ code: 'same_day_receipt_order_unknown', promiseIds: [p.id], receiptKey: receipt.key, customerId: p.customerId }); return false;
+      }
+      return receipt.precision !== 'timestamp' || !!receipt.occurredAt
+        && new Date(receipt.occurredAt).getTime() >= new Date(p.createdAt).getTime()
+        && new Date(receipt.occurredAt).getTime() <= now.getTime();
+    });
     if (!candidates.length) continue;
-    if (candidates.length > 1) {
+    const manual = manualPromiseId ? candidates.find(p => p.id === manualPromiseId) : undefined;
+    if (candidates.length > 1 && !manual) {
       review.push({ code: 'overlapping_promises', promiseIds: candidates.map(p => p.id).sort(), receiptKey: receipt.key, customerId: receipt.customerId }); continue;
     }
-    const promise = candidates[0];
+    const promise = manual ?? candidates[0];
     if (selected && !selected.has(promise.id)) continue;
-    const createdDay = orgDateOnly(new Date(promise.createdAt));
-    if (receipt.receiptDate < createdDay) {
-      review.push({ code: 'receipt_before_promise_creation', promiseIds: [promise.id], receiptKey: receipt.key, customerId: promise.customerId }); continue;
-    }
-    if (receipt.precision === 'day' && receipt.receiptDate === createdDay) {
-      review.push({ code: 'same_day_receipt_order_unknown', promiseIds: [promise.id], receiptKey: receipt.key, customerId: promise.customerId }); continue;
-    }
-    if (receipt.precision === 'timestamp' && (!receipt.occurredAt
-      || new Date(receipt.occurredAt).getTime() < new Date(promise.createdAt).getTime()
-      || new Date(receipt.occurredAt).getTime() > now.getTime())) continue;
+    if (manual && candidates.length > 1) review.push({ code: 'overlap_selected_by_operator',
+      promiseIds: candidates.map(p => p.id).sort(), receiptKey: receipt.key, customerId: promise.customerId });
     const remaining = moneyUnits(promise.expectedAmount) - (allocatedByPromise.get(promise.id) ?? 0n);
     const amount = available < remaining ? available : remaining;
     if (amount <= 0n) continue;

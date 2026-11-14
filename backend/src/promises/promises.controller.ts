@@ -8,6 +8,7 @@ import { Idempotent } from '../common/decorators/idempotent.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { AuthUser } from '../common/guards/jwt-auth.guard';
 import { CreatePromiseDto } from './dto/create-promise.dto';
+import { CompletePromiseDto } from './dto/complete-promise.dto';
 import { PromiseStatusDto } from './dto/promise-status.dto';
 import { QueryPromisesDto } from './dto/query-promises.dto';
 import { UpdatePromiseDto } from './dto/update-promise.dto';
@@ -77,5 +78,8 @@ export class PromisesController {
   }
 
   @Post(':id/complete') @RequirePermissions('promises.create') @Idempotent('user')
-  completeVerified(@CurrentUser() user:AuthUser,@Param('id',ParseUUIDPipe) id:string){return this.promises.completeVerified(user,id);}
+  completeVerified(@CurrentUser() user:AuthUser,@Param('id',ParseUUIDPipe) id:string,@Body() dto:CompletePromiseDto){return this.promises.completeVerified(user,id,dto?.expectedPlanHash);}
+
+  @Get(':id/completion-preview') @RequirePermissions('promises.create')
+  previewCompletion(@CurrentUser() user:AuthUser,@Param('id',ParseUUIDPipe) id:string){return this.promises.previewCompletion(user,id);}
 }

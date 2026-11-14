@@ -240,14 +240,15 @@ export async function createFollowup(data: {
 
 export async function createPromise(data: {
   customerId: string;
+  promiseDate?:string;
   expectedAmount: number;
   currencyCode: string;
   dueDate: string;
   notes?: string;
   collectorId?: string;
-}) {
+}, operationId?:string) {
   const client = await getClient();
-  return client.post('/payment-promises', data);
+  return client.post('/payment-promises', data,operationId?{headers:{'Idempotency-Key':operationId}}:undefined);
 }
 
 export async function createCollection(data: {

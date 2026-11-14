@@ -14,6 +14,7 @@ import { PromiseStatusDto } from './dto/promise-status.dto';
 import { QueryPromisesDto } from './dto/query-promises.dto';
 import { UpdatePromiseDto } from './dto/update-promise.dto';
 import { PromiseSettlementService } from './promise-settlement.service';
+import { moneyText, moneyUnits } from './promise-settlement-plan';
 
 /**
  * حالات الوعد (القائمة الغنية المعتمدة — تغطي Pending/Fulfilled/Broken/Cancelled):
@@ -135,8 +136,16 @@ export class PromisesService {
     });
 
     // البند ثالثًا: الوعد + مهمته في Transaction واحدة — لا وعد بلا مهمة أبدًا
-    const promise = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const today = orgCalendarDayUtc();
+      const promiseDate = dto.promiseDate ? new Date(dto.promiseDate) : today;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`promise-create|${actor.organizationId}|${dto.customerId}`}, 0))::TEXT`;
+      const existing = await tx.paymentPromise.findFirst({ where: {
+        customerId:dto.customerId,collectorId,promiseDate,dueDate,expectedAmount:dto.expectedAmount,
+        currencyCode:dto.currencyCode,expectedMethodId:dto.expectedMethodId??null,notes:dto.notes??null,
+        status:{not:'cancelled_approved'},
+      }});
+      if(existing)return {promise:existing,reused:true};
       await tx.task.updateMany({
         where: { customerId: dto.customerId, assignedTo: collectorId, status: 'open', dueDate: { lte: today } },
         data: { status: 'done' },
@@ -145,7 +154,7 @@ export class PromisesService {
         data: {
           customerId: dto.customerId,
           collectorId,
-          promiseDate: dto.promiseDate ? new Date(dto.promiseDate) : orgCalendarDayUtc(),
+          promiseDate,
           dueDate,
           expectedAmount: dto.expectedAmount,
           currencyCode: dto.currencyCode,
@@ -167,8 +176,10 @@ export class PromisesService {
           sourcePromiseId: created.id,
         },
       });
-      return created;
+      return {promise:created,reused:false};
     });
+    const {promise}=result;
+    if(result.reused)return promise;
     // الإشعار بعد نجاح المعاملة (غير حرج — لا يترك بيانات جزئية)
     if (status === 'due_today') await this.notifications.notifyUser(collector.userId, 'promise_due', {
       promiseId: promise.id, customerId: dto.customerId, customerName: customer.name,
@@ -186,17 +197,51 @@ export class PromisesService {
     return promise;
   }
 
-  async completeVerified(actor:AuthUser,id:string){
+  async previewCompletion(actor:AuthUser,id:string){
+    if(!actor.permissions.includes('promises.create'))throw new ForbiddenException('لا تملك صلاحية إكمال الوعد');
+    const before=await this.findOne(actor,id);
+    if(before.status==='cancelled_approved')throw new BadRequestException('الوعد ملغى؛ لا يمكن إثبات الوفاء به');
+    if(!this.settlement)throw new BadRequestException('خدمة مطابقة التحصيل غير متاحة');
+    const plan=await this.settlement.reconcileForOrganization(actor.organizationId,{customerIds:[before.customerId],
+      promiseIds:[id],actorId:actor.id,maxChanges:1,dryRun:true,manualPromiseId:id});
+    const receipts=plan.allocations.filter(row=>row.promiseId===id);
+    const localIds=receipts.filter(row=>row.source==='local_collection').map(row=>row.sourceId);
+    const local=localIds.length?await this.prisma.collection.findMany({where:{id:{in:localIds},
+      customerId:before.customerId,customer:{organizationId:actor.organizationId}},select:{id:true,receiptNumber:true,referenceNumber:true}}):[];
+    const receiptReferences=new Map(local.map(row=>[row.id,row.receiptNumber??row.referenceNumber??row.id]));
+    const change=plan.changes.find(row=>row.promiseId===id);
+    const paid=moneyUnits(change?.fulfilledAmount??before.fulfilledAmount);
+    const remaining=moneyUnits(before.expectedAmount)-paid;
+    return {planHash:plan.planHash,canApply:receipts.length>0,completed:before.status==='fulfilled',
+      remainingAmount:moneyText(remaining>0n?remaining:0n),willComplete:change?.status==='fulfilled',
+      receipts:receipts.map(row=>({reference:receiptReferences.get(row.sourceId)??row.sourceId,date:row.receiptDate,amount:row.amount,currencyCode:row.currencyCode})),
+      overlappingPromises:Math.max(0,...plan.review.filter(row=>row.code==='overlap_selected_by_operator').map(row=>row.promiseIds.length-1)),
+      reason:receipts.length?'سيُربط السداد بهذا الوعد فقط، ولن يُستخدم المبلغ نفسه لإكمال وعد آخر.':this.completionReason(plan.review.map(row=>row.code)),
+    };
+  }
+
+  private completionReason(codes:string[]){
+    if(codes.includes('overlapping_promises'))return 'توجد وعود متداخلة؛ اعرض السندات واختر الوعد المطلوب قبل تأكيد المطابقة.';
+    if(codes.includes('manual_fulfillment_without_receipt_binding'))return 'يوجد سداد سابق دون ربط بسند؛ يلزم مراجعة الربط قبل احتساب سند جديد.';
+    if(codes.includes('allocated_receipt_missing_or_changed'))return 'تغير سند مرتبط سابقًا أو لم يعد متاحًا؛ يلزم مراجعته قبل الإكمال.';
+    if(codes.includes('same_day_receipt_order_unknown'))return 'السند والوعد في اليوم نفسه ولا يتوفر ترتيب زمني مؤكد؛ يلزم مراجعة السند.';
+    return 'لا يوجد مبلغ تحصيل معتمد متاح بعد إنشاء هذا الوعد؛ الرصيد الصفري وحده لا يثبت الوفاء به.';
+  }
+
+  async completeVerified(actor:AuthUser,id:string,expectedPlanHash?:string){
     if(!actor.permissions.includes('promises.create'))throw new ForbiddenException('لا تملك صلاحية إكمال الوعد');
     const before=await this.findOne(actor,id);
     if(before.status==='fulfilled')return {completed:true,status:before.status,remainingAmount:0};
     if(before.status==='cancelled_approved')throw new BadRequestException('الوعد ملغى؛ لا يمكن إثبات الوفاء به');
     if(!this.settlement)throw new BadRequestException('خدمة مطابقة التحصيل غير متاحة؛ لم تتغير حالة الوعد');
-    const options={customerIds:[before.customerId],promiseIds:[id],actorId:actor.id,maxChanges:1};
+    const options={customerIds:[before.customerId],promiseIds:[id],actorId:actor.id,maxChanges:1,
+      ...(expectedPlanHash?{manualPromiseId:id}:{})};
     const preview=await this.settlement.reconcileForOrganization(actor.organizationId,{...options,dryRun:true});
+    if(expectedPlanHash&&preview.planHash!==expectedPlanHash)throw new ConflictException('تغيرت السندات أو الوعود بعد المعاينة؛ أعد التحقق قبل التأكيد');
     if(preview.changes.length)await this.settlement.reconcileForOrganization(actor.organizationId,{...options,dryRun:false,expectedPlanHash:preview.planHash});
     const after=await this.findOne(actor,id);
-    return {completed:after.status==='fulfilled',status:after.status,remainingAmount:Math.max(0,Number(after.expectedAmount)-Number(after.fulfilledAmount??0))};
+    return {completed:after.status==='fulfilled',status:after.status,remainingAmount:Math.max(0,Number(after.expectedAmount)-Number(after.fulfilledAmount??0)),
+      reason:after.status==='fulfilled'?'تمت مطابقة السداد المعتمد.':this.completionReason(preview.review?.map(row=>row.code)??[])};
   }
 
   async findAll(user: AuthUser, q: QueryPromisesDto) {
