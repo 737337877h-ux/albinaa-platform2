@@ -26,7 +26,7 @@ export class SalesOrderDraftsController {
   @Get('offline')
   @RequirePermissions('sales_order_drafts.read')
   @ApiOperation({ summary: 'Complete compact customer-order mirror for mobile offline storage' })
-  offline(@CurrentUser() actor: AuthUser) { return this.drafts.offline(actor); }
+  offline(@CurrentUser() actor: AuthUser, @Query('snapshotVersion') snapshotVersion?:string) { return this.drafts.offline(actor,snapshotVersion); }
 
   @Post('sync-oracle')
   @RequirePermissions('sales_order_drafts.manage')

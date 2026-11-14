@@ -57,3 +57,13 @@ test('delta application preserves omitted tables and commits revision metadata o
  expect(()=>syncSnapshotBatch({...delta,syncSectionVersions:undefined})).toThrow('غير مكتملة');
  expect(syncSnapshotBatch({...delta,newDebt:null,customerAlerts:null})).toMatchObject({newDebt:null,customerAlerts:null});
 });
+test('order snapshots commit revisions atomically, retain local drafts, and reject another owner',async()=>{
+ jest.resetModules();mockSql=new DatabaseSync(':memory:');const db=require('../src/db/database');await db.ensureDataOwner('org:u');
+ mockSql.prepare('INSERT INTO customer_orders (id,sourceOrderSerial,orderKind,searchText,payload) VALUES (?,?,?,?,?)').run('local:draft','local:draft','cash','local','{}');
+ const row=(name:string)=>({id:'server-order',sourceOrderSerial:'123',sourceCustomerName:name,lines:[{amount:'0.0041'}]});
+ await db.replaceCustomerOrdersSnapshot([row('قديم')],'a'.repeat(64),'org:u');
+ mockSql.exec("CREATE TRIGGER interrupt_orders BEFORE INSERT ON customer_orders WHEN NEW.customerName='جديد' BEGIN SELECT RAISE(ABORT,'interrupted order'); END");
+ await expect(db.replaceCustomerOrdersSnapshot([row('جديد')],'b'.repeat(64),'org:u')).rejects.toThrow('interrupted order');expect(await db.getMeta('customerOrdersSnapshotVersion')).toBe('a'.repeat(64));expect(mockSql.prepare('SELECT customerName FROM customer_orders WHERE id=?').get('server-order').customerName).toBe('قديم');
+ await expect(db.replaceCustomerOrdersSnapshot([],'b'.repeat(64),'other:u')).rejects.toMatchObject({code:'SESSION_CHANGED'});
+ mockSql.exec('DROP TRIGGER interrupt_orders');await db.replaceCustomerOrdersSnapshot([],'b'.repeat(64),'org:u');expect(await db.getMeta('customerOrdersSnapshotVersion')).toBe('b'.repeat(64));expect(mockSql.prepare('SELECT id FROM customer_orders').all()).toEqual([{id:'local:draft'}]);
+});

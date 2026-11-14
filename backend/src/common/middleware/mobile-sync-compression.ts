@@ -7,8 +7,8 @@ export function mobileSyncCompression() {
   return compression({
     threshold: 1024,
     level: 4,
-    filter: (request, response) => request.method === 'POST'
-      && SYNC_PATHS.has(request.path)
+    filter: (request, response) => ((request.method === 'POST' && SYNC_PATHS.has(request.path))
+      || (request.method === 'GET' && request.path === '/sales-order-drafts/offline'))
       && response.statusCode >= 200 && response.statusCode < 300
       && compression.filter(request, response),
   });

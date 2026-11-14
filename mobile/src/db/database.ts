@@ -1186,9 +1186,13 @@ export async function hasInventoryCatalogOffline(): Promise<boolean> {
   return Number(row?.total ?? 0) > 0 && Boolean(marker?.value);
 }
 
-export async function replaceCustomerOrdersSnapshot(items: Record<string, any>[]): Promise<void> {
+export async function replaceCustomerOrdersSnapshot(items: Record<string, any>[],snapshotVersion?:string,expectedOwner?:string): Promise<void> {
   const d = await getDb();
   await d.withExclusiveTransactionAsync(async (tx) => {
+    if(expectedOwner){
+      const identity=await tx.getFirstAsync<{value:string}>("SELECT value FROM sync_metadata WHERE key='dataOwner'");
+      if(identity?.value!==expectedOwner){const error:any=new Error('تغير حساب بيانات الهاتف');error.code='SESSION_CHANGED';throw error;}
+    }
     await tx.runAsync("DELETE FROM customer_orders WHERE sourceOrderSerial NOT LIKE 'local:%'");
     const rows = (items || []).flatMap((item) => {
       const id = String(item.id || '').trim();
@@ -1214,6 +1218,11 @@ export async function replaceCustomerOrdersSnapshot(items: Record<string, any>[]
         ...chunk.flatMap((row) => [row.id, row.sourceOrderSerial, row.sourceOrderNo, row.orderKind,
           row.customerCode, row.customerName, row.orderDate, row.status, row.searchText, row.payload]),
       );
+    }
+    if(snapshotVersion){
+      await tx.runAsync('INSERT OR REPLACE INTO sync_metadata (key,value) VALUES (?,?)','customerOrdersSnapshotVersion',snapshotVersion);
+    }else{
+      await tx.runAsync("DELETE FROM sync_metadata WHERE key='customerOrdersSnapshotVersion'");
     }
   });
 }

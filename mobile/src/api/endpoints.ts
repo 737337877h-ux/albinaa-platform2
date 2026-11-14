@@ -18,6 +18,7 @@ import {
 } from '../db/database';
 import { matchesSmartSearch } from '../utils/search';
 import {parseSyncVersions} from '../utils/sync-snapshot';
+import {assertBusinessSession} from '../utils/business-session';
 
 export interface SyncResponse {
   syncToken: string;
@@ -329,9 +330,20 @@ export async function fetchCreatedOracleRequests() {
 }
 
 export async function fetchCustomerOrdersOfflineSnapshot() {
-  const client = await getClient();
-  const response = await client.get('/sales-order-drafts/offline');
-  await replaceCustomerOrdersSnapshot(response.data?.items || []);
+  const {owner}=await assertBusinessSession();
+  const client = await getClientForOwner(owner);
+  const stored=await getMeta('customerOrdersSnapshotVersion');
+  const version=stored&&/^[a-f0-9]{64}$/.test(stored)?stored:undefined;
+  const response = await client.get('/sales-order-drafts/offline',{params:version?{snapshotVersion:version}:{}});
+  await assertBusinessSession(owner);
+  const received=response.data?.snapshotVersion;
+  if(response.data?.unchanged===true){
+    if(!version||received!==version)throw new Error('تعذر تأكيد لقطة طلبات العملاء؛ بقيت البيانات المحفوظة كما هي');
+    return response;
+  }
+  if(!Array.isArray(response.data?.items))throw new Error('استجابة طلبات العملاء غير مكتملة؛ بقيت البيانات المحفوظة كما هي');
+  await replaceCustomerOrdersSnapshot(response.data.items,
+    typeof received==='string'&&/^[a-f0-9]{64}$/.test(received)?received:undefined,owner);
   return response;
 }
 

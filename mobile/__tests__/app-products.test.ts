@@ -24,8 +24,8 @@ describe('independent application identities', () => {
     process.env.ALRAQI_APP = 'operations';
     jest.spyOn(fs, 'existsSync').mockReturnValue(false);
     const result = factory({ config: configFile.expo });
-    expect(result.version).toBe('1.0.17');
-    expect(result.android).toMatchObject({ package: 'com.alraqi.operations', versionCode: 18 });
+    expect(result.version).toBe('1.0.18');
+    expect(result.android).toMatchObject({ package: 'com.alraqi.operations', versionCode: 19 });
     expect(result.scheme).toBe('alraqi-operations');
     expect(result.extra.operationsPushConfigured).toBe(false);
     expect(result.plugins.find((p: any) => Array.isArray(p) && p[0] === 'expo-notifications')[1].sounds)

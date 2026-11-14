@@ -49,7 +49,10 @@ export class SalesOrderDraftsService {
     return { page, limit, total, totalPages: Math.ceil(total / limit), items };
   }
 
-  async offline(actor: AuthUser) {
+  async offline(actor: AuthUser, previousVersion?: string) {
+    if(previousVersion!==undefined&&(typeof previousVersion!=='string'||!/^[a-f0-9]{64}$/.test(previousVersion))){
+      throw new BadRequestException('إصدار لقطة طلبات العملاء غير صالح');
+    }
     const items = await (this.prisma as any).salesOrderDraft.findMany({
       where: {
         organizationId: actor.organizationId,
@@ -60,9 +63,16 @@ export class SalesOrderDraftsService {
       orderBy: [{ sourceOrderDate: 'desc' }, { sourceOrderSerial: 'desc' }],
       take: 5000,
     });
+    const snapshotVersion=createHash('sha256').update(JSON.stringify([
+      'customer-orders-v1',actor.organizationId,actor.id,[...actor.permissions].sort(),items,
+    ])).digest('hex');
+    if(snapshotVersion===previousVersion)return {
+      sourceSchema:'IAS20261_AND_PLATFORM',generatedAt:new Date().toISOString(),snapshotVersion,unchanged:true,
+    };
     return {
       sourceSchema: 'IAS20261_AND_PLATFORM',
       generatedAt: new Date().toISOString(),
+      snapshotVersion,unchanged:false,
       items,
     };
   }

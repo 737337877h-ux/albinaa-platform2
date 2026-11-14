@@ -6,6 +6,19 @@ const actor = { id: 'user-1', organizationId: 'org-1', role: 'admin', permission
 
 describe('SalesOrderDraftsService', () => {
   const audit = { log: jest.fn() } as any;
+  it('omits only unchanged scoped order snapshots and preserves exact amounts and empty replacements',async()=>{
+    const items:any[]=[{id:'order',lines:[{quantity:'0.0041',unitPrice:'446105.077'}]}];
+    const findMany=jest.fn().mockImplementation(async()=>items);
+    const service=new SalesOrderDraftsService({salesOrderDraft:{findMany}} as any,audit);
+    const first=await service.offline(actor);expect(first.items).toEqual(items);
+    expect((await service.offline(actor,first.snapshotVersion)).unchanged).toBe(true);
+    expect((await service.offline(actor,first.snapshotVersion)).items).toBeUndefined();
+    expect((await service.offline({...actor,id:'other'},first.snapshotVersion)).items).toEqual(items);
+    expect((await service.offline({...actor,permissions:['new-permission']},first.snapshotVersion)).items).toEqual(items);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({where:expect.objectContaining({organizationId:actor.organizationId})}));
+    items.length=0;const empty=await service.offline(actor,first.snapshotVersion);expect(empty.items).toEqual([]);expect(empty.unchanged).toBe(false);
+    await expect(service.offline(actor,'bad-version')).rejects.toBeInstanceOf(BadRequestException);
+  });
 
   it('lists drafts inside the current organization only', async () => {
     const findMany = jest.fn().mockResolvedValue([]);

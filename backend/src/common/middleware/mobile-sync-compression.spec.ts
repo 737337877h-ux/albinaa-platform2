@@ -40,6 +40,11 @@ describe('mobile snapshot transport', () => {
     expect(result.headers['content-encoding']).toBeUndefined();
     expect(JSON.parse(result.body.toString('utf8'))).toEqual(payload);
   });
+  it('compresses full order snapshots without changing decimals, and respects no-transform',async()=>{
+    const result=await read('/sales-order-drafts/offline?snapshotVersion=abc',{'Accept-Encoding':'gzip'},'GET');
+    expect(result.headers['content-encoding']).toBe('gzip');expect(JSON.parse(gunzipSync(result.body).toString('utf8'))).toEqual(payload);
+    const plain=await read('/sales-order-drafts/offline',{'Accept-Encoding':'gzip','x-no-transform':'1'},'GET');expect(plain.headers['content-encoding']).toBeUndefined();
+  });
   it.each([
     ['/auth/login', { 'Accept-Encoding': 'gzip' }, 'POST'],
     ['/mobile/operations-sync', { 'Accept-Encoding': 'gzip', 'x-error': '1' }, 'POST'],
