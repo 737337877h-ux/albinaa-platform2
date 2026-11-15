@@ -170,7 +170,8 @@ export class RiskService {
         select: { customerId: true, currencyCode: true, collectedAt: true },
       }),
       this.prisma.paymentPromise.findMany({
-        where: { customer: customerScope, status: BROKEN_PROMISE_STATUS },
+        where: { customer: customerScope, OR: [{status:BROKEN_PROMISE_STATUS},
+          {status:'closed_settled',missedDueDate:{not:null}}] },
         select: { customerId: true },
       }),
       this.prisma.followup.findMany({

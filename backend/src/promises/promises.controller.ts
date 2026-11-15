@@ -78,7 +78,7 @@ export class PromisesController {
   }
 
   @Post(':id/complete') @RequirePermissions('promises.create') @Idempotent('user')
-  completeVerified(@CurrentUser() user:AuthUser,@Param('id',ParseUUIDPipe) id:string,@Body() dto:CompletePromiseDto){return this.promises.completeVerified(user,id,dto?.expectedPlanHash);}
+  completeVerified(@CurrentUser() user:AuthUser,@Param('id',ParseUUIDPipe) id:string,@Body() dto:CompletePromiseDto){return this.promises.completeVerified(user,id,dto?.expectedPlanHash,dto?.mode);}
 
   @Get(':id/completion-preview') @RequirePermissions('promises.create')
   previewCompletion(@CurrentUser() user:AuthUser,@Param('id',ParseUUIDPipe) id:string){return this.promises.previewCompletion(user,id);}

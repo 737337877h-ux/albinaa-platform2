@@ -118,7 +118,7 @@ export function buildReminderPlan(
   }
 
   const duePromises = promises
-    .filter((promise) => !['fulfilled', 'cancelled','cancelled_approved'].includes(promise.status))
+    .filter((promise) => !['fulfilled', 'cancelled','cancelled_approved','closed_settled'].includes(promise.status))
     .map((promise) => ({ promise, at: dateOnlyAtLocalHour(promise.dueDate, 8) }))
     .filter((entry) => entry.at && entry.at.getTime() >= now.getTime())
     .sort((a, b) => a.at!.getTime() - b.at!.getTime())

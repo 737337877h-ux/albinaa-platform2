@@ -15,6 +15,7 @@ import { QueryPromisesDto } from './dto/query-promises.dto';
 import { UpdatePromiseDto } from './dto/update-promise.dto';
 import { PromiseSettlementService } from './promise-settlement.service';
 import { moneyText, moneyUnits } from './promise-settlement-plan';
+import { CLOSED_SETTLED_PROMISE, PromiseAccountClosureService } from './promise-account-closure.service';
 
 /**
  * حالات الوعد (القائمة الغنية المعتمدة — تغطي Pending/Fulfilled/Broken/Cancelled):
@@ -22,7 +23,7 @@ import { moneyText, moneyUnits } from './promise-settlement-plan';
  */
 const OPEN_STATUSES = ['upcoming', 'due_today', 'partially_fulfilled'];
 /** الحالات النهائية المعتمدة في مراجعة M5: partially_fulfilled ليست نهائية. */
-const FINAL_STATUSES = ['fulfilled', 'unfulfilled', 'cancelled_approved'];
+const FINAL_STATUSES = ['fulfilled', 'unfulfilled', 'cancelled_approved', CLOSED_SETTLED_PROMISE];
 
 /**
  * State Machine المعتمدة (موثقة في README + مختبرة):
@@ -39,6 +40,7 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   fulfilled: [],
   unfulfilled: [],
   cancelled_approved: [],
+  closed_settled: [],
 };
 
 function statusForDueDate(dueDate: Date): 'upcoming' | 'due_today' {
@@ -56,6 +58,7 @@ export class PromisesService {
     private readonly notifications: NotificationsService,
     @Optional() private readonly riskRefresh?: RiskRefreshService,
     @Optional() private readonly settlement?: PromiseSettlementService,
+    @Optional() private readonly accountClosure?: PromiseAccountClosureService,
   ) {}
 
   private async collectorOf(user: AuthUser) {
@@ -200,11 +203,19 @@ export class PromisesService {
   async previewCompletion(actor:AuthUser,id:string){
     if(!actor.permissions.includes('promises.create'))throw new ForbiddenException('لا تملك صلاحية إكمال الوعد');
     const before=await this.findOne(actor,id);
+    if(before.status===CLOSED_SETTLED_PROMISE)return {canApply:false,closed:true,completed:false,receipts:[],reason:'أُغلقت المتابعة بعد تسوية الحساب'};
     if(before.status==='cancelled_approved')throw new BadRequestException('الوعد ملغى؛ لا يمكن إثبات الوفاء به');
     if(!this.settlement)throw new BadRequestException('خدمة مطابقة التحصيل غير متاحة');
     const plan=await this.settlement.reconcileForOrganization(actor.organizationId,{customerIds:[before.customerId],
       promiseIds:[id],actorId:actor.id,maxChanges:1,dryRun:true,manualPromiseId:id});
     const receipts=plan.allocations.filter(row=>row.promiseId===id);
+    if(!receipts.length&&before.status!=='fulfilled'&&this.accountClosure){
+      const closure=await this.accountClosure.preview(actor,id);
+      if(closure.canApply)return {planHash:closure.planHash,canApply:true,closed:false,completed:false,mode:'account_settlement',
+        remainingAmount:'0.0000',willComplete:false,receipts:[],overlappingPromises:0,reason:closure.reason,
+        closingPromises:closure.promises.map(p=>({id:p.id,dueDate:p.dueDate.toISOString().slice(0,10)})),
+        balances:closure.evidence.map(b=>({currencyCode:b.currencyCode,balance:b.balance}))};
+    }
     const localIds=receipts.filter(row=>row.source==='local_collection').map(row=>row.sourceId);
     const local=localIds.length?await this.prisma.collection.findMany({where:{id:{in:localIds},
       customerId:before.customerId,customer:{organizationId:actor.organizationId}},select:{id:true,receiptNumber:true,referenceNumber:true}}):[];
@@ -225,12 +236,17 @@ export class PromisesService {
     if(codes.includes('manual_fulfillment_without_receipt_binding'))return 'يوجد سداد سابق دون ربط بسند؛ يلزم مراجعة الربط قبل احتساب سند جديد.';
     if(codes.includes('allocated_receipt_missing_or_changed'))return 'تغير سند مرتبط سابقًا أو لم يعد متاحًا؛ يلزم مراجعته قبل الإكمال.';
     if(codes.includes('same_day_receipt_order_unknown'))return 'السند والوعد في اليوم نفسه ولا يتوفر ترتيب زمني مؤكد؛ يلزم مراجعة السند.';
-    return 'لا يوجد مبلغ تحصيل معتمد متاح بعد إنشاء هذا الوعد؛ الرصيد الصفري وحده لا يثبت الوفاء به.';
+    return 'لا يوجد مبلغ تحصيل معتمد غير محتسب متاح لربطه بهذا الوعد؛ يلزم مراجعة السداد أو حالة الحساب.';
   }
 
-  async completeVerified(actor:AuthUser,id:string,expectedPlanHash?:string){
+  async completeVerified(actor:AuthUser,id:string,expectedPlanHash?:string,mode?:'receipts'|'account_settlement'){
     if(!actor.permissions.includes('promises.create'))throw new ForbiddenException('لا تملك صلاحية إكمال الوعد');
     const before=await this.findOne(actor,id);
+    if(before.status===CLOSED_SETTLED_PROMISE)return {closed:true,completed:false,status:before.status,reason:'أُغلقت المتابعة بعد تسوية الحساب'};
+    if(mode==='account_settlement'){
+      if(!this.accountClosure||!expectedPlanHash)throw new BadRequestException('اعرض خطة إنهاء المتابعة قبل التأكيد');
+      return this.accountClosure.apply(actor,id,expectedPlanHash);
+    }
     if(before.status==='fulfilled')return {completed:true,status:before.status,remainingAmount:0};
     if(before.status==='cancelled_approved')throw new BadRequestException('الوعد ملغى؛ لا يمكن إثبات الوفاء به');
     if(!this.settlement)throw new BadRequestException('خدمة مطابقة التحصيل غير متاحة؛ لم تتغير حالة الوعد');

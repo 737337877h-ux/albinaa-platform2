@@ -6,6 +6,9 @@ export interface PromiseCompletionPreview {
   owner:string;operationId:string;planHash:string;canApply:boolean;completed:boolean;willComplete:boolean;
   remainingAmount:string;reason:string;overlappingPromises:number;
   receipts:{reference:string;date:string;amount:string;currencyCode:string}[];
+  mode?:'receipts'|'account_settlement';closed?:boolean;
+  closingPromises?:{id:string;dueDate:string}[];
+  balances?:{currencyCode:string;balance:string}[];
 }
 export async function previewPromiseCompletion(id:string):Promise<PromiseCompletionPreview>{
   const {owner}=await assertBusinessSession();
@@ -17,7 +20,7 @@ export async function applyPromiseCompletion(id:string,preview:PromiseCompletion
   await assertBusinessSession(preview.owner);
   if(!preview.canApply||!/^[a-f0-9]{64}$/.test(preview.planHash))throw new Error('أعد معاينة السندات قبل التأكيد');
   const {data}=await(await getClientForOwner(preview.owner)).post(`/payment-promises/${id}/complete`,
-    {expectedPlanHash:preview.planHash},{headers:{'Idempotency-Key':preview.operationId}});
+    {expectedPlanHash:preview.planHash,...(preview.mode?{mode:preview.mode}:{})},{headers:{'Idempotency-Key':preview.operationId}});
   await assertBusinessSession(preview.owner);
   return data;
 }

@@ -42,7 +42,7 @@ export const CCY_AR: Record<string, string> = { YER: 'ريال يمني', SAR: '
 export const PROMISE_STATUS_AR: Record<string, string> = {
   upcoming: 'قادم', due_today: 'مستحق اليوم', fulfilled: 'منفذ',
   partially_fulfilled: 'منفذ جزئيًا', unfulfilled: 'غير منفذ',
-  postponed: 'مؤجل', cancelled_approved: 'ملغى',
+  postponed: 'مؤجل', cancelled_approved: 'ملغى', closed_settled:'أُغلقت المتابعة بعد تسوية الحساب',
 };
 export const COLLECTION_STATUS_AR: Record<string, string> = {
   recorded: 'مسجلة', handed_to_cashier: 'مسلمة للصندوق',

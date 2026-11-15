@@ -15,7 +15,7 @@ test('completed or pending-completion tasks and cancelled promises do not reappe
  const tasks=['completed','done','pending_completion','cancelled'].flatMap((status,i)=>[
   {id:`old-${i}`,status,dueDate:'2026-11-11'}, {id:`future-${i}`,status,dueDate:'2026-11-13'},
  ]);
- const promises=['fulfilled','cancelled','cancelled_approved'].map((status,i)=>({id:String(i),status,dueDate:'2026-11-13'}));
+ const promises=['fulfilled','cancelled','cancelled_approved','closed_settled'].map((status,i)=>({id:String(i),status,dueDate:'2026-11-13'}));
  expect(buildReminderPlan(tasks,promises,now)).toEqual([]);
  expect(buildReminderPlan([{id:'open',status:'open',dueDate:'2026-11-11'}],[],now)[0].id).toContain('overdue-tasks');
 });

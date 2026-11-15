@@ -10,7 +10,7 @@ export class QueryPromisesDto {
     enum: ['upcoming', 'due_today', 'fulfilled', 'partially_fulfilled', 'unfulfilled', 'postponed', 'cancelled_approved'],
   })
   @IsOptional()
-  @IsIn(['upcoming', 'due_today', 'fulfilled', 'partially_fulfilled', 'unfulfilled', 'postponed', 'cancelled_approved'])
+  @IsIn(['upcoming', 'due_today', 'fulfilled', 'partially_fulfilled', 'unfulfilled', 'postponed', 'cancelled_approved', 'closed_settled'])
   status?: string;
 
   @ApiPropertyOptional() @IsOptional() @IsDateString()

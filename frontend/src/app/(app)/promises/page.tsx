@@ -21,14 +21,14 @@ import { Table, TRow, TD } from '@/components/ui/table';
 
 const PROMISE_STATUSES = [
   'upcoming', 'due_today', 'partially_fulfilled',
-  'fulfilled', 'unfulfilled', 'cancelled_approved', 'postponed',
+  'fulfilled', 'unfulfilled', 'cancelled_approved', 'postponed', 'closed_settled',
 ] as const;
 
 type PromiseStatus = typeof PROMISE_STATUSES[number];
 
 const OPEN_STATUSES: PromiseStatus[] = ['upcoming', 'due_today', 'partially_fulfilled'];
 
-const FINAL_STATUSES: PromiseStatus[] = ['fulfilled', 'unfulfilled', 'cancelled_approved'];
+const FINAL_STATUSES: PromiseStatus[] = ['fulfilled', 'unfulfilled', 'cancelled_approved', 'closed_settled'];
 
 interface PromiseItem {
   id: string;
@@ -154,9 +154,20 @@ export default function PromisesPage() {
   const [editItem, setEditItem] = useState<PromiseItem | null>(null);
   const [statusItem, setStatusItem] = useState<PromiseItem | null>(null);
   const completion = useMutation({
-    mutationFn: (id:string) => api<{completed:boolean;remainingAmount:number}>(`/payment-promises/${id}/complete`, {method:'POST',body:'{}',headers:{'Idempotency-Key':createRequestId()}}),
+    mutationFn: async(id:string) => {
+      const plan=await api<{completed:boolean;closed?:boolean;canApply:boolean;planHash:string;mode?:string;reason:string;
+        closingPromises?:{dueDate:string}[];receipts:{reference:string;date:string;amount:string;currencyCode:string}[]}>(`/payment-promises/${id}/completion-preview`);
+      if(plan.completed||plan.closed)return {completed:plan.completed,closed:plan.closed,remainingAmount:0,cancelled:false};
+      if(!plan.canApply)throw new Error(plan.reason);
+      const details=plan.mode==='account_settlement'?`سيتم إنهاء متابعة ${plan.closingPromises?.length??0} وعود قديمة بعد التحقق من تسوية الحساب.`
+        :plan.receipts.map(r=>`سند ${r.reference} · ${fmtDate(r.date)} · ${fmtMoney(Number(r.amount))} ${r.currencyCode}`).join('\n');
+      if(!window.confirm(`${details}\n${plan.reason}`))return {completed:false,remainingAmount:0,cancelled:true};
+      return api<{completed:boolean;closed?:boolean;remainingAmount:number;cancelled?:boolean}>(`/payment-promises/${id}/complete`,
+        {method:'POST',body:JSON.stringify({expectedPlanHash:plan.planHash,mode:plan.mode}),headers:{'Idempotency-Key':createRequestId()}});
+    },
     onSuccess: result => {
-      toast(result.completed?'تمت مطابقة السداد وإكمال الوعد':`لم يكتمل الوعد؛ المتبقي ${fmtMoney(result.remainingAmount)}`,result.completed?'ok':'err');
+      if(result.cancelled)return;
+      toast(result.closed?'أُغلقت المتابعة بعد تسوية الحساب':result.completed?'تمت مطابقة السداد وإكمال الوعد':`لم يكتمل الوعد؛ المتبقي ${fmtMoney(result.remainingAmount)}`,result.completed||result.closed?'ok':'err');
       void qc.invalidateQueries({queryKey:['payment-promises']});
     },
     onError: (error:Error) => toast(error.message,'err'),
@@ -391,7 +402,7 @@ export default function PromisesPage() {
                       {canCreate && (
                         <TD>
                           <div className="flex items-center gap-1">
-                            {!['fulfilled','cancelled_approved'].includes(p.status)&&<Button variant="secondary" disabled={completion.isPending} onClick={()=>{if(window.confirm('سيُراجع النظام التحصيلات المعتمدة قبل إثبات الوفاء بالوعد. هل تريد التحقق؟'))completion.mutate(p.id);}}>إكمال الوعد</Button>}
+                            {!['fulfilled','cancelled_approved','closed_settled'].includes(p.status)&&<Button variant="secondary" disabled={completion.isPending} onClick={()=>completion.mutate(p.id)}>إكمال الوعد</Button>}
                             {isEditable(p.status) && (
                               <button
                                 onClick={() => setEditItem(p)}

@@ -11,9 +11,9 @@ import { colors, radius } from '../theme';
 import { useSync } from '../store/sync-context';
 import { displayDateFromIso } from '../utils/date-input';
 import { localDateKey } from '../utils/local-date';
-import { groupPromiseRows,matchesPromiseFilter, PROMISE_FILTER_LABELS, PromiseFilter, promiseBucket, promiseSettledLate, promiseStatusLabel, promiseSummary } from '../utils/promises';
+import { groupPromiseRows,matchesPromiseFilter, PROMISE_FILTER_LABELS, PromiseFilter, promiseBucket, promisePaymentDetail, promiseSettledLate, promiseStatusLabel, promiseSummary } from '../utils/promises';
 
-const FILTERS: PromiseFilter[] = ['active', 'upcoming', 'today', 'overdue', 'fulfilled', 'cancelled', 'all'];
+const FILTERS: PromiseFilter[] = ['active', 'upcoming', 'today', 'overdue', 'fulfilled', 'closed', 'cancelled', 'all'];
 const filterValue = (value: unknown): PromiseFilter => FILTERS.includes(value as PromiseFilter) ? value as PromiseFilter : 'active';
 const dateLabel = (value: unknown) => value ? displayDateFromIso(String(value).slice(0, 10)) : '—';
 const FILTER_HINTS: Record<PromiseFilter, string> = {
@@ -23,6 +23,7 @@ const FILTER_HINTS: Record<PromiseFilter, string> = {
   overdue: 'وعود تجاوزت موعدها وما زالت تحتاج متابعة، بما فيها السداد الجزئي.',
   fulfilled: 'الوعود التي تم سدادها، مع توضيح السداد بعد الموعد عند وجوده.',
   cancelled: 'وعود أُلغيَت بموافقة؛ لا تدخل في عداد الوعود قيد المتابعة.',
+  closed:'انتهت متابعة هذه الوعود بعد التحقق من تسوية الحساب؛ السداد الفعلي وتاريخ التأخر محفوظان.',
   all: 'السجل الكامل لجميع الحالات محفوظ هنا.',
 };
 
@@ -59,14 +60,17 @@ export default function PromisesListScreen({ navigation, route }: any) {
     setChecking(item.id);
     try{
       const preview=await previewPromiseCompletion(item.id);
+      if(preview.closed){await triggerSync();await load();Alert.alert('أُغلقت المتابعة','هذا الوعد مغلق بعد تسوية الحساب.');return;}
       if(preview.completed){await triggerSync();await load();Alert.alert('تم الوفاء بالوعد','الوعد منفذ بالفعل.');return;}
       if(!preview.canApply){Alert.alert('المطابقة تحتاج مراجعة',`${preview.reason}\nالمتبقي لهذا الوعد: ${Number(preview.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`);return;}
-      const details=preview.receipts.map(receipt=>`سند ${receipt.reference} · ${dateLabel(receipt.date)}\n${Number(receipt.amount).toLocaleString('en-US',{maximumFractionDigits:4})} ${receipt.currencyCode}`).join('\n\n');
-      Alert.alert('تأكيد مطابقة السداد',`${item.customerName}\nاستحقاق الوعد: ${dateLabel(item.dueDate)}\n\n${details}\n\n${preview.overlappingPromises?`توجد ${preview.overlappingPromises} وعود أخرى متداخلة.\n`:''}${preview.reason}\nالمتبقي بعد الربط: ${Number(preview.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`,
-        [{text:'إلغاء',style:'cancel'},{text:'تأكيد الربط',onPress:async()=>{setChecking(item.id);try{
+      const closure=preview.mode==='account_settlement';
+      const details=closure?`الوعود القديمة التي ستنتهي متابعتها: ${preview.closingPromises?.length??0}\n${preview.closingPromises?.map(p=>dateLabel(p.dueDate)).join(' · ')}\n${preview.balances?.map(b=>`الرصيد: ${Number(b.balance).toLocaleString('en-US',{maximumFractionDigits:4})} ${b.currencyCode}`).join('\n')}`
+        :preview.receipts.map(receipt=>`سند ${receipt.reference} · ${dateLabel(receipt.date)}\n${Number(receipt.amount).toLocaleString('en-US',{maximumFractionDigits:4})} ${receipt.currencyCode}`).join('\n\n');
+      Alert.alert(closure?'إنهاء متابعة حساب مسوّى':'تأكيد مطابقة السداد',`${item.customerName}\nاستحقاق الوعد: ${dateLabel(item.dueDate)}\n\n${details}\n\n${preview.overlappingPromises?`توجد ${preview.overlappingPromises} وعود أخرى متداخلة.\n`:''}${preview.reason}${closure?'':`\nالمتبقي بعد الربط: ${Number(preview.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`}`,
+        [{text:'إلغاء',style:'cancel'},{text:closure?'إنهاء المتابعة':'تأكيد الربط',onPress:async()=>{setChecking(item.id);try{
           const data=await applyPromiseCompletion(item.id,preview);
           try{await triggerSync();await load();}catch{/* A committed settlement must not be presented as a failed apply. */}
-          Alert.alert(data.completed?'تم الوفاء بالوعد':'تم تسجيل سداد جزئي',data.completed?'رُبط السداد بهذا الوعد، وحُفظ السجل السابق.':`المتبقي: ${Number(data.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`);
+          Alert.alert(data.closed?'أُغلقت المتابعة':data.completed?'تم الوفاء بالوعد':'تم تسجيل سداد جزئي',data.closed?`انتهت متابعة ${data.closedCount??1} وعود قديمة بعد تسوية الحساب، مع حفظ السداد الفعلي والتاريخ.`:data.completed?'رُبط السداد بهذا الوعد، وحُفظ السجل السابق.':`المتبقي: ${Number(data.remainingAmount).toLocaleString('en-US',{maximumFractionDigits:4})} ${item.currencyCode}`);
         }catch(error){Alert.alert('تعذر تأكيد المطابقة',apiErrorMessage(error,'أعد معاينة السندات وحاول مجددًا'));}finally{setChecking(null);}}}]);
     }catch(error){Alert.alert('تعذر التحقق',apiErrorMessage(error,'تحقق من الاتصال وحاول مجددًا'));}finally{setChecking(null);}
   };
@@ -92,6 +96,7 @@ export default function PromisesListScreen({ navigation, route }: any) {
       </TouchableOpacity>}
       {(expanded[group.key]?group.items:group.items.slice(0,1)).map(item => {
       const bucket = promiseBucket(item, today);
+      const paymentDetail=promisePaymentDetail(item,today);
       const late = bucket === 'fulfilled' && promiseSettledLate(item);
       return <TouchableOpacity key={item.id} style={styles.card} onPress={() => item.customerId && navigation.navigate('Customer360', { id: item.customerId })}>
         <View style={styles.icon}><Ionicons name={bucket === 'fulfilled' ? 'checkmark-circle-outline' : bucket === 'cancelled' ? 'close-circle-outline' : 'calendar-outline'} size={20} color={bucket === 'fulfilled' ? colors.success : colors.gold} /></View>
@@ -100,12 +105,13 @@ export default function PromisesListScreen({ navigation, route }: any) {
           {!!customers[item.customerId]?.externalCustomerCode&&<Text style={styles.date}>كود العميل: {customers[item.customerId].externalCustomerCode}</Text>}
           <Text style={styles.date}>الاستحقاق: {dateLabel(item.dueDate)}</Text>
           <Text style={[styles.status, bucket === 'overdue' && styles.overdue, bucket === 'fulfilled' && styles.fulfilled, bucket === 'cancelled' && styles.cancelled]}>{promiseStatusLabel(item, today)}</Text>
-          {bucket !== 'fulfilled' && Number(item.fulfilledAmount ?? 0)>0 && <Text style={styles.date}>المسدّد: {Number(item.fulfilledAmount).toLocaleString('en-US')} · المتبقي: {Math.max(0,Number(item.expectedAmount)-Number(item.fulfilledAmount)).toLocaleString('en-US')} {item.currencyCode}</Text>}
+          {!!paymentDetail&&<Text style={styles.date}>{paymentDetail}</Text>}
           {bucket === 'fulfilled' && !!item.settlementDate && <Text style={styles.date}>السداد: {dateLabel(item.settlementDate)}</Text>}
           {late && !!item.missedDueDate && <Text style={styles.lateNote}>تاريخ التأخر محفوظ: {dateLabel(item.missedDueDate)}</Text>}
         </View>
         <View><Text style={styles.amount}>{Number(item.expectedAmount || 0).toLocaleString('en-US',{maximumFractionDigits:4})}</Text><Text style={styles.currency}>{item.currencyCode}</Text>
-        {!['fulfilled','cancelled'].includes(bucket)&&!String(item.id).startsWith('local:')&&user?.permissions?.includes('promises.create')&&<TouchableOpacity disabled={!!checking} onPress={event=>{event.stopPropagation();void complete(item);}} style={{padding:10,borderRadius:10,backgroundColor:colors.primarySoft,marginTop:8}}><Text style={{fontFamily:'TajawalBold',color:colors.primary}}>{checking===item.id?'جارٍ التحقق...':'إكمال الوعد'}</Text></TouchableOpacity>}
+        {bucket==='closed'&&<Text style={styles.currency}>الوعد الأصلي</Text>}
+        {!['fulfilled','cancelled','closed'].includes(bucket)&&!String(item.id).startsWith('local:')&&user?.permissions?.includes('promises.create')&&<TouchableOpacity disabled={!!checking} onPress={event=>{event.stopPropagation();void complete(item);}} style={{padding:10,borderRadius:10,backgroundColor:colors.primarySoft,marginTop:8}}><Text style={{fontFamily:'TajawalBold',color:colors.primary}}>{checking===item.id?'جارٍ التحقق...':'إكمال الوعد'}</Text></TouchableOpacity>}
         </View>
       </TouchableOpacity>;
     })}</View>} />

@@ -1,4 +1,4 @@
-export type PromiseFilter = 'active' | 'upcoming' | 'today' | 'overdue' | 'fulfilled' | 'cancelled' | 'all';
+export type PromiseFilter = 'active' | 'upcoming' | 'today' | 'overdue' | 'fulfilled' | 'cancelled' | 'closed' | 'all';
 export type PromiseBucket = Exclude<PromiseFilter, 'active' | 'all'> | 'review';
 
 export interface PromiseState {
@@ -12,7 +12,7 @@ export interface PromiseState {
 
 export const PROMISE_FILTER_LABELS: Record<PromiseFilter, string> = {
   active: 'قيد المتابعة', upcoming: 'القادمة', today: 'اليوم', overdue: 'المتأخرة',
-  fulfilled: 'المنفذة', cancelled: 'الملغاة', all: 'الكل',
+  fulfilled: 'المنفذة', cancelled: 'الملغاة', closed:'أغلقت بعد التسوية', all: 'الكل',
 };
 
 function dateKey(value: unknown): string {
@@ -46,6 +46,7 @@ export function promiseBucket(item: PromiseState, today: string): PromiseBucket 
   const status = normalizedStatus(item.status);
   if (status === 'fulfilled') return 'fulfilled';
   if (status === 'cancelled_approved') return 'cancelled';
+  if (status === 'closed_settled') return 'closed';
   if (status === 'unfulfilled') return 'overdue';
   if (!['upcoming', 'due_today', 'partially_fulfilled', 'pending', ''].includes(status)) return 'review';
   const due = dateKey(item.dueDate);
@@ -58,6 +59,7 @@ export function promiseStatusLabel(item: PromiseState, today: string): string {
   const bucket = promiseBucket(item, today);
   if (bucket === 'fulfilled') return promiseSettledLate(item) ? 'تم السداد بعد الموعد' : 'تم السداد';
   if (bucket === 'cancelled') return String(item.status ?? '').toLowerCase() === 'cancelled_approved' ? 'إلغاء معتمد' : 'ملغي';
+  if (bucket === 'closed') return 'أُغلقت المتابعة — الحساب مسوّى';
   if (status === 'pending') return 'بانتظار المزامنة';
   if (status === 'partially_fulfilled') return bucket === 'overdue' ? 'سداد جزئي · متأخر' : 'سداد جزئي';
   if (status === 'unfulfilled') return Number(item.fulfilledAmount ?? 0)>0 ? 'سداد جزئي · تجاوز الموعد' : 'لم يُوفَ به';
@@ -75,7 +77,7 @@ export function matchesPromiseFilter(item: PromiseState, filter: PromiseFilter, 
 }
 
 export function promiseSummary(rows: PromiseState[], today: string): Record<PromiseFilter, number> {
-  const summary: Record<PromiseFilter, number> = { active: 0, upcoming: 0, today: 0, overdue: 0, fulfilled: 0, cancelled: 0, all: rows.length };
+  const summary: Record<PromiseFilter, number> = { active: 0, upcoming: 0, today: 0, overdue: 0, fulfilled: 0, cancelled: 0, closed:0, all: rows.length };
   for (const row of rows) {
     const bucket = promiseBucket(row, today);
     if (bucket === 'review') continue;
@@ -83,6 +85,14 @@ export function promiseSummary(rows: PromiseState[], today: string): Record<Prom
     if (['upcoming', 'today', 'overdue'].includes(bucket)) summary.active += 1;
   }
   return summary;
+}
+
+export function promisePaymentDetail(item:PromiseState&{expectedAmount?:unknown;currencyCode?:unknown},today:string):string|null{
+  const paid=Number(item.fulfilledAmount??0),bucket=promiseBucket(item,today);
+  if(!Number.isFinite(paid)||paid<=0||bucket==='fulfilled')return null;
+  const format=(value:number)=>value.toLocaleString('en-US',{maximumFractionDigits:4});
+  if(bucket==='closed')return `سداد مرتبط بالوعد: ${format(paid)} ${item.currencyCode??''}`;
+  return `المسدّد: ${format(paid)} · المتبقي: ${format(Math.max(0,Number(item.expectedAmount)-paid))} ${item.currencyCode??''}`;
 }
 
 /** Display grouping never merges promises, amounts, statuses, or receipt allocations. */

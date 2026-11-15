@@ -18,3 +18,8 @@ it('does not apply an incomplete preview or after switching accounts',async()=>{
  mockSession.mockRejectedValueOnce({code:'SESSION_CHANGED'});
  await expect(applyPromiseCompletion('p',plan())).rejects.toMatchObject({code:'SESSION_CHANGED'});expect(mockPost).not.toHaveBeenCalled();
 });
+it('sends administrative closure as a distinct mode using its reviewed plan',async()=>{
+ mockPost.mockResolvedValue({data:{closed:true,completed:false}});
+ await applyPromiseCompletion('p',{...plan(),mode:'account_settlement'});
+ expect(mockPost).toHaveBeenCalledWith('/payment-promises/p/complete',{expectedPlanHash:'a'.repeat(64),mode:'account_settlement'},expect.any(Object));
+});

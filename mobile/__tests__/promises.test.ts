@@ -1,9 +1,17 @@
 import { describe, expect, it } from '@jest/globals';
-import { groupPromiseRows,matchesPromiseFilter, promiseBucket, promiseSettledLate, promiseStatusLabel, promiseSummary } from '../src/utils/promises';
+import { groupPromiseRows,matchesPromiseFilter, promiseBucket, promisePaymentDetail, promiseSettledLate, promiseStatusLabel, promiseSummary } from '../src/utils/promises';
 
 const today = '2026-10-27';
 
 describe('promise work list and history', () => {
+  it('keeps settled-account closure distinct from fulfilled money and overdue work',()=>{
+    const row={status:'closed_settled',dueDate:'2026-09-24',fulfilledAmount:6000};
+    expect(promiseBucket(row,today)).toBe('closed');expect(matchesPromiseFilter(row,'active',today)).toBe(false);
+    expect(promiseSummary([row],today)).toMatchObject({closed:1,fulfilled:0,overdue:0,active:0,all:1});
+    expect(promiseStatusLabel(row,today)).toContain('الحساب مسوّى');expect(row.fulfilledAmount).toBe(6000);
+    expect(promisePaymentDetail({...row,expectedAmount:21000,currencyCode:'YER'},today)).toBe('سداد مرتبط بالوعد: 6,000 YER');
+    expect(promisePaymentDetail({...row,expectedAmount:21000,currencyCode:'YER'},today)).not.toContain('15,000');
+  });
   it('groups repeated customer/currency cards without merging promises or amounts, keeping independent dates accessible',()=>{
     const rows=[{id:'p1',customerId:'c',currencyCode:'YER',dueDate:'2026-09-10',expectedAmount:15000},
       {id:'p2',customerId:'c',currencyCode:'YER',dueDate:'2026-10-08',expectedAmount:15000},
@@ -20,7 +28,7 @@ describe('promise work list and history', () => {
       { status: 'fulfilled', dueDate: '2026-09-24' },
       ...Array.from({ length: 2 }, () => ({ status: 'cancelled_approved', dueDate: '2026-09-24' })),
     ];
-    expect(promiseSummary(rows, today)).toEqual({ active: 62, upcoming: 2, today: 0, overdue: 60, fulfilled: 1, cancelled: 2, all: 65 });
+    expect(promiseSummary(rows, today)).toEqual({ active: 62, upcoming: 2, today: 0, overdue: 60, fulfilled: 1, cancelled: 2, closed:0, all: 65 });
     expect(rows.filter(row => matchesPromiseFilter(row, 'active', today))).toHaveLength(62);
     expect(rows.filter(row => matchesPromiseFilter(row, 'overdue', today))).toHaveLength(60);
   });

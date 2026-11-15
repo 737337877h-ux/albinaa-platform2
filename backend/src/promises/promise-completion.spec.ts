@@ -2,9 +2,9 @@ import {PromisesService} from './promises.service';
 describe('verified promise completion',()=>{
  const actor={id:'u',organizationId:'org',permissions:['promises.create']} as any;
  const before={id:'p1',customerId:'c1',status:'upcoming',expectedAmount:100.125,fulfilledAmount:0};
- function setup(){
+ function setup(accountClosure?:any){
   const reconcileForOrganization=jest.fn().mockResolvedValue({changes:[],planHash:'hash'});
-  const service=new PromisesService({} as any,{} as any,{} as any,undefined,{reconcileForOrganization} as any);
+  const service=new PromisesService({} as any,{} as any,{} as any,undefined,{reconcileForOrganization} as any,accountClosure);
   const find=jest.spyOn(service,'findOne').mockResolvedValue(before as any);
   return {service,find,reconcileForOrganization};
  }
@@ -32,6 +32,14 @@ describe('verified promise completion',()=>{
  it('leaves a cancelled promise unchanged',async()=>{
   const {service,find,reconcileForOrganization}=setup();find.mockResolvedValue({...before,status:'cancelled_approved'} as any);
   await expect(service.completeVerified(actor,'p1')).rejects.toThrow('ملغى');expect(reconcileForOrganization).not.toHaveBeenCalled();
+ });
+ it('requires explicit account-settlement mode and its preview before administrative closure',async()=>{
+  const closure={preview:jest.fn().mockResolvedValue({canApply:true,planHash:'b'.repeat(64),reason:'settled',promises:[{id:'p1',dueDate:new Date('2026-09-24')}],evidence:[{currencyCode:'YER',balance:'0.0000'}]}),apply:jest.fn().mockResolvedValue({closed:true,completed:false})};
+  const {service,reconcileForOrganization}=setup(closure);
+  reconcileForOrganization.mockResolvedValue({allocations:[],changes:[],review:[],planHash:'hash'});
+  expect(await service.previewCompletion(actor,'p1')).toMatchObject({mode:'account_settlement',canApply:true,completed:false});
+  expect(closure.apply).not.toHaveBeenCalled();await service.completeVerified(actor,'p1');expect(closure.apply).not.toHaveBeenCalled();
+  await service.completeVerified(actor,'p1','b'.repeat(64),'account_settlement');expect(closure.apply).toHaveBeenCalledWith(actor,'p1','b'.repeat(64));
  });
 
  it('previews an overlap with receipt evidence but makes no change before confirmation',async()=>{
