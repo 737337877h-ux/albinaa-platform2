@@ -40,6 +40,16 @@ describe('mobile snapshot transport', () => {
     expect(result.headers['content-encoding']).toBeUndefined();
     expect(JSON.parse(result.body.toString('utf8'))).toEqual(payload);
   });
+  it.each(['gzip, br', 'br;q=1, gzip;q=0.8', '*', 'BR, gzip'])('uses Android-compatible compression through a proxy advertising %s', async encoding => {
+    const result = await read('/mobile/collection-sync', { 'Accept-Encoding': encoding });
+    expect(result.headers['content-encoding']).toBe('gzip');
+    expect(JSON.parse(gunzipSync(result.body).toString('utf8'))).toEqual(payload);
+  });
+  it.each(['br', 'br, gzip;q=0, identity', '*;q=0, identity'])('does not force an encoding the client refused: %s', async encoding => {
+    const result = await read('/mobile/collection-sync', { 'Accept-Encoding': encoding });
+    expect(result.headers['content-encoding']).toBeUndefined();
+    expect(JSON.parse(result.body.toString('utf8'))).toEqual(payload);
+  });
   it('compresses full order snapshots without changing decimals, and respects no-transform',async()=>{
     const result=await read('/sales-order-drafts/offline?snapshotVersion=abc',{'Accept-Encoding':'gzip'},'GET');
     expect(result.headers['content-encoding']).toBe('gzip');expect(JSON.parse(gunzipSync(result.body).toString('utf8'))).toEqual(payload);

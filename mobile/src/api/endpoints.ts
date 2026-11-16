@@ -17,7 +17,7 @@ import {
   replaceCustomerOrdersSnapshot,
 } from '../db/database';
 import { matchesSmartSearch } from '../utils/search';
-import {parseSyncVersions} from '../utils/sync-snapshot';
+import {assertSyncResponse,parseSyncVersions} from '../utils/sync-snapshot';
 import {assertBusinessSession} from '../utils/business-session';
 
 export interface SyncResponse {
@@ -96,6 +96,7 @@ export async function fetchSync(lastSyncToken?: string,expectedOwner?:string) {
     console.warn('[SyncHttp] '+JSON.stringify({ms:Date.now()-startedAt,code:error?.code,status:error?.response?.status,readyState:error?.request?.readyState}));
     throw error;
   }
+  assertSyncResponse(response.data);
   console.info('[SyncHttp] received '+(Date.now()-startedAt)+'ms '+response.data.snapshot);
   const key = 'albinaa.device-id';
   let deviceId = await SecureStore.getItemAsync(key);

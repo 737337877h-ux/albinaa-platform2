@@ -936,6 +936,7 @@ async function replaceInventoryCatalog(
  * server page is requested again on the next launch.
  */
 export async function applySyncSnapshot(batch: MobileSyncBatch, syncToken: string,expectedOwner?:string): Promise<void> {
+  if(typeof syncToken!=='string'||!syncToken.trim())throw new Error('رد المزامنة غير مكتمل؛ بقيت البيانات المحفوظة كما هي');
   const previous = ownerTransition;
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });

@@ -29,6 +29,9 @@ test('catalog replacement and revision commit atomically, retaining pending oper
   expect(await database.getMeta('inventoryCatalogVersion')).toBe('revision-a');
   expect(await database.getMeta('syncToken')).toBe('sync-a');
   expect(mockSql.prepare('SELECT operationId FROM mutation_queue').get().operationId).toBe('pending-operation');
+  await expect(database.applySyncSnapshot(batch('New name','revision-b'),undefined as any)).rejects.toThrow('غير مكتمل');
+  expect((await database.getInventoryItemOffline('item-1')).nameAr).toBe('Old name');
+  expect(await database.getMeta('syncToken')).toBe('sync-a');
   mockSql.exec('DROP TRIGGER fail_catalog');
   await database.applySyncSnapshot(batch('New name', 'revision-b'), 'sync-b');
   expect((await database.getInventoryItemOffline('12345')).nameAr).toBe('New name');

@@ -97,7 +97,10 @@ export async function prepareOnlineRoute(timeoutMs = 3500): Promise<OnlineRouteR
     const failures: OnlineRouteResult[] = [];
     candidates.forEach((url, index) => {
       const route = url === PUBLIC_API_URL ? 'public' : url === DEFAULT_PROD_URL ? 'lan' : 'explicit';
-      void pingServer(url, timeoutMs).then(health => {
+      // Public DNS/TLS can take longer on mobile data. Both probes still start
+      // together, so an available office LAN never waits for this budget.
+      const budget = route === 'public' ? Math.max(timeoutMs, 8_000) : timeoutMs;
+      void pingServer(url, budget).then(health => {
         if (settled) return;
         if (revision !== configurationRevision) {
           settled = true; resolve({ok:false,error:'تغيرت إعدادات الاتصال؛ أعد المزامنة.'}); return;
@@ -106,7 +109,13 @@ export async function prepareOnlineRoute(timeoutMs = 3500): Promise<OnlineRouteR
           settled = true; activateRuntimeBaseUrl(url); resolve({ok:true,route,url}); return;
         }
         failures[index] = {ok:false,route,url,error:health.error};
-        if (--remaining === 0) { settled = true; resolve(failures[candidates.length - 1]); }
+        if (--remaining === 0) {
+          settled = true;
+          resolve(candidates.length === 1 ? failures[0] : {
+            ok:false,
+            error:'تعذر الوصول إلى الخادم محليًا وعبر الإنترنت؛ تحقق من اتصال الهاتف ثم أعد المحاولة.',
+          });
+        }
       });
     });
   });
@@ -180,38 +189,50 @@ export async function pingServer(url: string, timeoutMs = 5000): Promise<ServerH
   }
   const t0 = Date.now();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
+  // Android may delay rejecting fetch after abort. Resolve the health check
+  // ourselves, including a stalled body, instead of waiting on native transport.
+  return new Promise(resolve => {
+   let settled = false;
+   const finish = (result: ServerHealth) => {
+     if (settled) return;
+     settled = true;
+     clearTimeout(timeout);
+     resolve(result);
+   };
+   const timeout = setTimeout(() => {
+     finish({ok:false,latencyMs:Date.now()-t0,error:`انتهت المهلة بعد ${timeoutMs} مللي ثانية`});
+     controller.abort();
+   }, timeoutMs);
+   void (async () => { try {
     const res = await fetch(`${trimmed}/health`, {
       method: 'GET',
       signal: controller.signal,
     });
-    const latency = Date.now() - t0;
     if (res.ok) {
       let body: any = {};
       try { body = await res.json(); } catch { /* ignore */ }
-      return {
+      finish({
         ok: true,
         status: res.status,
-        latencyMs: latency,
+        latencyMs: Date.now() - t0,
         version: body.version,
         environment: body.environment,
         uptimeSeconds: body.uptimeSeconds,
         timestamp: body.timestamp,
-      };
+      });
+      return;
     }
-    return {
+    finish({
       ok: false,
       status: res.status,
-      latencyMs: latency,
+      latencyMs: Date.now() - t0,
       error: `HTTP ${res.status} ${res.statusText || ''}`.trim(),
-    };
+    });
   } catch (e: any) {
     const latency = Date.now() - t0;
     let msg = e?.message || 'فشل الاتصال';
     if (e?.name === 'AbortError') msg = `انتهت المهلة بعد ${timeoutMs} مللي ثانية`;
-    return { ok: false, latencyMs: latency, error: msg };
-  } finally {
-    clearTimeout(timeout);
-  }
+    finish({ ok: false, latencyMs: latency, error: msg });
+   } })();
+  });
 }

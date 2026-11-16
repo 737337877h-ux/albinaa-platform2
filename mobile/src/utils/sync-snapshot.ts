@@ -9,6 +9,21 @@ export function validSyncVersions(value:unknown):value is Record<string,string>{
 export function parseSyncVersions(raw:string|null):Record<string,string>{
  try{const value=JSON.parse(raw||'{}');return validSyncVersions(value)?value:{};}catch{return {};}
 }
+/** Reject proxy pages, undecoded/truncated bodies and incomplete snapshots before touching SQLite. */
+export function assertSyncResponse(value:unknown):asserts value is SyncResponse {
+ const data=value as SyncResponse;
+ const business=['customers','tasks','followups','promises','collections','reservations'] as const;
+ const object=(item:unknown)=>!!item&&typeof item==='object'&&!Array.isArray(item);
+ if(!object(data)||!['full','delta'].includes(data.snapshot)||![1,2].includes(data.schemaVersion)
+  ||typeof data.syncToken!=='string'||!data.syncToken.trim()
+  ||typeof data.serverTime!=='string'||!Number.isFinite(Date.parse(data.serverTime))
+  ||!object(data.references)
+  ||business.some(key=>data[key]!==undefined?!Array.isArray(data[key]):data.snapshot==='full')
+  ||Object.values(data.references).some(items=>!Array.isArray(items))
+  ||((data.snapshot==='delta'||data.schemaVersion===2)&&!validSyncVersions(data.syncSectionVersions))){
+  throw new Error('وصل رد مزامنة غير مكتمل أو غير قابل للقراءة؛ بقيت بياناتك وعملياتك المحفوظة كما هي. أعد المحاولة.');
+ }
+}
 /** Omitted delta sections are preserved; an explicitly empty section removes old rows. */
 export function syncSnapshotBatch(data:SyncResponse):MobileSyncBatch{
  const delta=data.snapshot==='delta';

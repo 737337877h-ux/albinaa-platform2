@@ -38,7 +38,7 @@ export default function SettingsScreen() {
   const { user, login, logout } = useAuth();
   const { status, triggerSync, retryPending, retryBlocked, refreshStatus } = useSync();
   const [gpsEnabled, setGpsEnabled] = useState(false);
-  const [lanOnly, setLanOnly] = useState(true);
+  const [lanOnly, setLanOnly] = useState(false);
   const [baseUrl, setBaseUrl] = useState('');
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [biometricEnabled, setBiometric] = useState(false);
@@ -108,6 +108,12 @@ export default function SettingsScreen() {
     setUsernameDraft(user?.username || '');
     refreshStatus().catch(() => undefined);
   }, [refreshStatus, user?.username]);
+
+  useEffect(() => {
+    let current = true;
+    void getBaseUrl().then(url => { if (current) setBaseUrl(url); });
+    return () => { current = false; };
+  }, [status.phase, status.lastSyncAt]);
 
   useEffect(() => {
     getBlockedMutationDiagnostics()
@@ -266,11 +272,13 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>الاتصال المحلي</Text>
+        <Text style={styles.sectionTitle}>الاتصال والمزامنة</Text>
         <InfoRow label="المستخدم الحالي" value={user ? `${user.fullName} (@${user.username})` : '—'} />
-        <SettingRow label="المزامنة عبر الشبكة المحلية فقط" value={lanOnly} onChange={toggleLanOnly} />
+        <SettingRow label="اختيار الاتصال تلقائيًا" value={!lanOnly} onChange={enabled => toggleLanOnly(!enabled)} />
         <Text style={styles.hint}>
-          عند التفعيل لا يرسل التطبيق أي بيانات إلى عنوان خارجي. يعمل تلقائيًا كل {SYNC_INTERVAL_MS / 60_000} دقائق عند توفر الخادم المحلي.
+          {lanOnly
+            ? 'الاتصال مقيد بالشبكة المحلية فقط. فعّل الاختيار التلقائي للعمل داخل المكتب وخارجه.'
+            : `يختار التطبيق الخادم المتاح تلقائيًا داخل المكتب أو عبر الإنترنت، ويزامن في الخلفية كل ${SYNC_INTERVAL_MS / 60_000} دقائق دون تغيير الإعدادات.`}
         </Text>
         <TouchableOpacity style={styles.outlineBtn} onPress={() => setAccountModal(true)}>
           <Text style={styles.outlineBtnText}>تبديل المستخدم أو الخادم</Text>

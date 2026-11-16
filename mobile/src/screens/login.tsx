@@ -290,11 +290,11 @@ export function ServerSettingsModal({ visible, onClose, currentUrl, storedUrl, d
 
         <View style={styles.card}>
           <View style={styles.statusRow}>
-            <Text style={[styles.cardTitle, { flex: 1 }]}>المزامنة عبر الشبكة المحلية فقط</Text>
-            <Switch accessibilityLabel="المزامنة عبر الشبكة المحلية فقط" value={lanOnly ?? true}
-              disabled={lanOnly === null || changingNetwork || saving} onValueChange={changeNetworkMode} />
+            <Text style={[styles.cardTitle, { flex: 1 }]}>اختيار الاتصال تلقائيًا</Text>
+            <Switch accessibilityLabel="اختيار الاتصال تلقائيًا" value={lanOnly !== null && !lanOnly}
+              disabled={lanOnly === null || changingNetwork || saving} onValueChange={enabled => changeNetworkMode(!enabled)} />
           </View>
-          <Text style={styles.note}>فعّله للعمل داخل شبكة المكتب فقط. عطّله للسماح بالاتصال بالخادم المعتمد عبر الإنترنت عند وجودك خارج المكتب.</Text>
+          <Text style={styles.note}>عند تفعيله يختار التطبيق الاتصال المتاح داخل المكتب أو عبر الإنترنت تلقائيًا. عند إيقافه يعمل عبر الشبكة المحلية فقط.</Text>
           <Text style={styles.note}>تغيير هذا الخيار يحفظ بياناتك والعمليات التي تنتظر الإرسال؛ ويظل تسجيل الدخول مطلوبًا.</Text>
         </View>
 

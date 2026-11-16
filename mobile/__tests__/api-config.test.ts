@@ -85,6 +85,20 @@ describe('api config', () => {
     expect(await pending).toMatchObject({ok:false});expect(await getBaseUrl()).toBe('http://other.local:18003');
   });
 
+  it('automatically selects public Internet when mobile TLS takes longer than the LAN timeout',async()=>{
+    jest.useFakeTimers();
+    try {
+      await setStoredBaseUrl(PUBLIC_API_URL);
+      mockFetch.mockImplementation((url:string)=>url.startsWith(PUBLIC_API_URL)
+        ? new Promise(resolve=>setTimeout(()=>resolve({ok:true,status:200,json:async()=>({status:'ok'})}),5_000))
+        : Promise.reject(new Error('No route to host')));
+      const pending=prepareOnlineRoute(3_500);
+      await jest.advanceTimersByTimeAsync(5_001);
+      expect(await pending).toMatchObject({ok:true,route:'public'});
+      expect(await getBaseUrl()).toBe(PUBLIC_API_URL);
+    } finally { jest.useRealTimers(); }
+  });
+
   it('preserves an explicitly selected isolated 18003 endpoint', async () => {
     mockStore['albinaa.api_base_url'] = 'http://192.168.1.5:18003';
     await expect(getStoredBaseUrl()).resolves.toBe('http://192.168.1.5:18003');
@@ -154,6 +168,27 @@ describe('api config', () => {
       const r = await pingServer('http://localhost:3000', 100);
       expect(r.ok).toBe(false);
       expect(r.error).toContain('انتهت المهلة');
+    });
+
+    it('finishes on its deadline even when Android ignores fetch cancellation',async()=>{
+      jest.useFakeTimers();
+      try {
+        mockFetch.mockImplementation(()=>new Promise(()=>undefined));
+        const pending=pingServer(PUBLIC_API_URL,100);
+        await jest.advanceTimersByTimeAsync(100);
+        expect(await pending).toMatchObject({ok:false,error:expect.stringContaining('انتهت المهلة')});
+        expect(mockFetch.mock.calls[0][1].signal.aborted).toBe(true);
+      } finally { jest.useRealTimers(); }
+    });
+
+    it('bounds a stalled health response body as well as the headers',async()=>{
+      jest.useFakeTimers();
+      try {
+        mockFetch.mockResolvedValue({ok:true,status:200,json:()=>new Promise(()=>undefined)});
+        const pending=pingServer(PUBLIC_API_URL,100);
+        await jest.advanceTimersByTimeAsync(100);
+        expect(await pending).toMatchObject({ok:false,error:expect.stringContaining('انتهت المهلة')});
+      } finally { jest.useRealTimers(); }
     });
 
     it('rejects empty url', async () => {

@@ -7,7 +7,7 @@ jest.mock('../src/utils/secure-storage',()=>({getCachedUser:jest.fn()}));
 jest.mock('../src/api/client',()=>({getClient:async()=>({post:mockPost}),getClientForOwner:async()=>({post:mockPost})}));
 jest.mock('../src/db/database',()=>({hasInventoryCatalogOffline:async()=>false,getMeta:async(key:string)=>key==='syncSectionVersions'?JSON.stringify({customers:'a'.repeat(64)}):null}));
 import {fetchSync} from '../src/api/endpoints';
-const response={data:{snapshot:'delta',schemaVersion:2,syncToken:'next',syncSectionVersions:{customers:'a'.repeat(64)},references:{}}};
+const response={data:{snapshot:'delta',schemaVersion:2,syncToken:'next',serverTime:'2026-11-17T00:00:00.000Z',syncSectionVersions:{customers:'a'.repeat(64)},references:{}}};
 beforeEach(()=>{jest.clearAllMocks();mockPost.mockResolvedValue(response);});
 it('sends committed section revisions and bounds the best-effort heartbeat',async()=>{
  expect(await fetchSync('previous','org:u')).toBe(response);
@@ -22,4 +22,9 @@ it('retries only the read-only snapshot in legacy mode after a server rollback',
 it('does not replay a rejected request for unrelated validation errors',async()=>{
  const error={response:{status:400,data:{message:'invalid scope'}}};mockPost.mockRejectedValueOnce(error);
  await expect(fetchSync('previous','org:u')).rejects.toBe(error);expect(mockPost).toHaveBeenCalledTimes(1);
+});
+it.each(['<html>proxy response</html>',null,{...response.data,syncToken:undefined},{...response.data,references:null},{...response.data,collections:{}},{...response.data,snapshot:'full'}])('rejects malformed snapshots before heartbeat or local application',async data=>{
+ mockPost.mockResolvedValueOnce({data});
+ await expect(fetchSync('previous','org:u')).rejects.toThrow('غير مكتمل');
+ expect(mockPost).toHaveBeenCalledTimes(1);
 });
